@@ -263,6 +263,8 @@ public class TagCatalogOperations
             update.Parameters.AddWithValue("$words", confirmed);
             update.ExecuteNonQuery();
         }
+        if (metadataOnly)
+            OriginalFileMutationReceipts.RecordConfirmed(db, transaction, imageId, after);
         transaction.Commit();
         ownMutation.Confirm(newSize, newTicks);
         }
@@ -674,6 +676,9 @@ public class TagCatalogOperations
                     exif.ExecuteNonQuery();
                 }
             }
+            if (ownMutation is not null && oldSize == indexedSize &&
+                oldTicks == indexedTicks && newTicks == oldTicks)
+                OriginalFileMutationReceipts.RecordConfirmed(db, tx, imageId, after);
             tx.Commit();
             ownMutation?.Confirm(newSize, newTicks);
         }

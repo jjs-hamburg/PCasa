@@ -27,7 +27,7 @@ public partial class MainWindow
             _slideshowWindow.Activate();
             return;
         }
-        if (!_browseInitialized || _viewerOpen || _displayedBrowseIndex.Count == 0)
+        if (!_browseInitialized || _displayedBrowseIndex.Count == 0)
             return;
 
         // The focused photo wins; otherwise use the current on-screen image.
@@ -37,8 +37,12 @@ public partial class MainWindow
         bool Available(BrowseThumbnailIndexEntry entry) =>
             !hidden.Contains(entry.PhotoFolderId) &&
             !VideoFormats.IsVideo(entry.FileName);
+        var focusedId = _viewerOpen && _viewerSequence is { } viewed &&
+            _viewerCurrentIndex >= 0 && _viewerCurrentIndex < viewed.Count
+                ? viewed.At(_viewerCurrentIndex).ImageId
+                : _gallerySelection.FocusedId;
         var seed = _displayedBrowseIndex.FirstOrDefault(entry =>
-            entry.ImageId == _gallerySelection.FocusedId && Available(entry));
+            entry.ImageId == focusedId && Available(entry));
         if (seed is null)
         {
             foreach (var (first, last) in BrowseSurface.GetVisibleIndexRanges())
@@ -79,7 +83,7 @@ public partial class MainWindow
         _slideshowWindow.Closed += (_, _) =>
         {
             _slideshowWindow = null;
-            if (!Dispatcher.HasShutdownStarted && !_shutdownStarted)
+            if (!Dispatcher.HasShutdownStarted && !_shutdownStarted && !_viewerOpen)
                 Keyboard.Focus(BrowseSurface);
         };
         _slideshowWindow.Show();

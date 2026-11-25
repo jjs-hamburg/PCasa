@@ -110,7 +110,7 @@ public partial class MainWindow
         _catalogRemovalService = new CatalogRemovalService(_database);
         _backgroundLifetime = new CancellationTokenSource();
         _backgroundFolderMonitor = new BackgroundFolderMonitor(
-            sources: _scheduler.SourceAvailability);
+            sources: _scheduler.SourceAvailability, database: _database);
         _backgroundFolderMonitor.Changed += BackgroundFolderMonitor_Changed;
         BackgroundScanSettings.Changed += BackgroundScanSettings_Changed;
 
@@ -829,7 +829,7 @@ public partial class MainWindow
             var progress = stopping
                 ? UiLanguage.T("Abbruch angefordert")
                 : checkedFiles > 0
-                    ? UiLanguage.Format("{0:N0} geprüft", checkedFiles)
+                    ? UiLanguage.Format("{0:N0} eingelesen", checkedFiles)
                     : "–";
             rows.Add(new AutomaticScanTask(key,
                 UiLanguage.T(AutomaticTaskTitle(task.Kind)), path,
@@ -898,7 +898,7 @@ public partial class MainWindow
                 UiLanguage.T("Erstimport"), directory,
                 stopping
                     ? UiLanguage.T("Abbruch angefordert")
-                    : UiLanguage.Format("{0:N0} geprüft", checkedCount),
+                    : UiLanguage.Format("{0:N0} eingelesen", checkedCount),
                 active ? "Läuft" : "Wartet",
                 (int)SchedulerPriority.ManualAction, _initialScanTaskQueueOrder,
                 CanStop: !stopping));

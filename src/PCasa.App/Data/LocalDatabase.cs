@@ -815,6 +815,18 @@ public sealed class LocalDatabase
                 transaction.Commit();
             }
         }
+        using (var mutations = connection.CreateCommand())
+        {
+            mutations.CommandText = """
+                CREATE TABLE IF NOT EXISTS metadata_write_receipts (
+                    image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+                    file_size INTEGER NOT NULL,
+                    modified_utc_ticks INTEGER NOT NULL,
+                    created_utc_ticks INTEGER NOT NULL,
+                    confirmed_utc_ticks INTEGER NOT NULL);
+                """;
+            mutations.ExecuteNonQuery();
+        }
         ResetAlpha64TaskState(connection);
     }
 

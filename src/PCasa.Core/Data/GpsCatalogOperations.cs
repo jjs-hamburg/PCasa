@@ -189,6 +189,8 @@ public class GpsCatalogOperations(LocalDatabase database,
                 exif.Parameters.AddWithValue("$alt", (object?)verified.GpsAltitude ?? DBNull.Value);
                 exif.ExecuteNonQuery();
             }
+            if (shouldWrite || alreadyApplied)
+                OriginalFileMutationReceipts.RecordConfirmed(db, tx, imageId, after);
             tx.Commit();
             ownMutation?.Confirm(after.Length, after.LastWriteTimeUtc.Ticks);
             PCasaDiagnostics.WriteMessage("GPS.Edit.Timing",
