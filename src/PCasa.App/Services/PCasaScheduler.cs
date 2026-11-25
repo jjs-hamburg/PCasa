@@ -1384,6 +1384,24 @@ public sealed class PCasaScheduler : IAsyncDisposable
         var journal = _durableJournal ?? throw new InvalidOperationException("Kein Paketjournal.");
         var record = journal.Pending().FirstOrDefault(item => item.Key == key);
         if (record is null) return false;
+        if (record.Type == "tag-edit-v2")
+        {
+            // Stop all catalog owners at a safe boundary before removing
+            // these revisions. Another tag job can coalesce pending edits
+            // for the same image; it must not race this transaction.
+            using var hold = await AcquireMaintenancePauseAsync().ConfigureAwait(false);
+            var current = journal.Pending().FirstOrDefault(item => item.Key == key);
+            if (current is null) return false;
+            if (current.State != "paused" &&
+                !await PauseDurableTaskAsync(key).ConfigureAwait(false))
+                return false;
+            var canceled = await Task.Run(() => journal.CancelOwnedTagEdits(key))
+                .ConfigureAwait(false);
+            if (canceled) CompleteTaskPromotion(key);
+            NotifyTaskViewChanged();
+            return canceled;
+        }
+        // Legacy and recovery recipes have no exclusive tag ownership.
         // Tag intents are already mirrored into the displayed catalog.
         // Silently canceling them after the first SQLite step would leave
         // pending_tag_edits and wrong keywords. The existing error/discard
