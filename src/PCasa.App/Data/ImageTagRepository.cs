@@ -303,8 +303,8 @@ public sealed class ImageTagRepository
             using var pending = db.CreateCommand();
             pending.Transaction = tx;
             pending.CommandText = """
-                INSERT INTO pending_tag_edits(image_id,tag,desired_present,updated_utc,owner_key)
-                VALUES($id,$tag,$desired,$now,$owner)
+                INSERT INTO pending_tag_edits(image_id,tag,desired_present,updated_utc,owner_key,base_present)
+                VALUES($id,$tag,$desired,$now,$owner,$base)
                 ON CONFLICT(image_id,tag) DO UPDATE SET
                     desired_present=excluded.desired_present,
                     revision=pending_tag_edits.revision+1,
@@ -316,6 +316,10 @@ public sealed class ImageTagRepository
             pending.Parameters.AddWithValue("$desired", remove ? 0 : 1);
             pending.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
             pending.Parameters.AddWithValue("$owner", (object?)ownerKey ?? DBNull.Value);
+            // A changed projection had the opposite membership before
+            // this first pending edit. On conflict keep the original base:
+            // the superseded optimistic state was not a confirmed write.
+            pending.Parameters.AddWithValue("$base", remove ? 1 : 0);
             pending.ExecuteNonQuery();
             // This committed newer tag intent supersedes any previously
             // parked failure for the image. The current pending revisions
@@ -515,6 +519,16 @@ public sealed class ImageTagRepository
             if (changed || fieldsDiffer)
             {
                 token.ThrowIfCancellationRequested();
+                // A native write can change the original before an error
+                // or interruption is reported. Until its receipt commits,
+                // do not claim a known pre-write baseline for cancellation.
+                using (var uncertain = db.CreateCommand())
+                {
+                    uncertain.CommandText =
+                        "UPDATE pending_tag_edits SET base_present=NULL WHERE image_id=$id;";
+                    uncertain.Parameters.AddWithValue("$id", imageId);
+                    uncertain.ExecuteNonQuery();
+                }
                 if (!JpegMetadataOriginalWriter.TryWriteTags(path, tags,
                         writer, token))
                     writer.Write(path, tags, token,
@@ -550,6 +564,52 @@ public sealed class ImageTagRepository
                     revisionParam.Value = edit.Revision;
                     done.ExecuteNonQuery();
                 }
+            }
+            // The native receipt establishes the actual original keywords.
+            // Rebase newer revisions on that receipt and overlay their
+            // optimistic state without losing external keyword changes.
+            var projected = new HashSet<string>(tags, StringComparer.OrdinalIgnoreCase);
+            var remaining = new List<(string Tag, bool Present)>();
+            using (var pending = db.CreateCommand())
+            {
+                pending.Transaction = tx;
+                pending.CommandText =
+                    "SELECT tag,desired_present FROM pending_tag_edits WHERE image_id=$id;";
+                pending.Parameters.AddWithValue("$id", imageId);
+                using var rows = pending.ExecuteReader();
+                while (rows.Read()) remaining.Add((rows.GetString(0), rows.GetBoolean(1)));
+            }
+            using (var baseline = db.CreateCommand())
+            {
+                baseline.Transaction = tx;
+                baseline.CommandText =
+                    "UPDATE pending_tag_edits SET base_present=$base WHERE image_id=$id AND tag=$tag;";
+                baseline.Parameters.AddWithValue("$id", imageId);
+                var tagParam = baseline.Parameters.Add("$tag", SqliteType.Text);
+                var baseParam = baseline.Parameters.Add("$base", SqliteType.Integer);
+                foreach (var edit in remaining)
+                {
+                    tagParam.Value = edit.Tag;
+                    baseParam.Value = target.Contains(edit.Tag) ? 1 : 0;
+                    baseline.ExecuteNonQuery();
+                    if (edit.Present) projected.Add(edit.Tag);
+                    else projected.Remove(edit.Tag);
+                }
+            }
+            using (var projection = db.CreateCommand())
+            {
+                projection.Transaction = tx;
+                projection.CommandText = """
+                    INSERT INTO image_tags(image_id,keywords,source_modified_utc_ticks)
+                    VALUES($id,$words,$ticks)
+                    ON CONFLICT(image_id) DO UPDATE SET
+                        keywords=excluded.keywords,
+                        source_modified_utc_ticks=excluded.source_modified_utc_ticks;
+                    """;
+                projection.Parameters.AddWithValue("$id", imageId);
+                projection.Parameters.AddWithValue("$words", string.Join("\n", projected));
+                projection.Parameters.AddWithValue("$ticks", newTicks);
+                projection.ExecuteNonQuery();
             }
             // A keyword-only edit preserves the original timestamp. Update
             // the cached byte length so scans do not rebuild pixel caches.
