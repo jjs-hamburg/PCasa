@@ -555,6 +555,28 @@ public sealed class DurablePackageJournal
         return migrated;
     }
 
+    // Lightweight control-plane snapshot: never load recipe JSON merely
+    // to arbitrate the rank of a job which is still being constructed.
+    public IReadOnlyList<(string Key, SchedulerPriority Priority, long Order)> RunnablePlacements()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT p.package_key,COALESCE(o.priority_override,p.priority),
+                   COALESCE(o.dispatch_order,p.queue_order,
+                       CASE WHEN p.priority=0 THEN -p.sequence ELSE p.sequence END)
+              FROM scheduler_packages p
+              LEFT JOIN scheduler_task_order o ON o.task_key=p.package_key
+             WHERE p.state IN ('queued','running');
+            """;
+        using var reader = cmd.ExecuteReader();
+        var result = new List<(string, SchedulerPriority, long)>();
+        while (reader.Read())
+            result.Add((reader.GetString(0), (SchedulerPriority)reader.GetInt32(1),
+                reader.GetInt64(2)));
+        return result;
+    }
+
     // Only runnable packages may prevent the continuous inventory review.
     // Deferred packages retain their identity and journal position, but
     // cannot block an unrelated reachable source while awaiting retry.
