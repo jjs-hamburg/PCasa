@@ -55,6 +55,10 @@
     <Compile Include="../PCasa.App/Services/FolderExclusionService.cs" Link="Services/FolderExclusionService.cs" />
     <Compile Include="../PCasa.App/Services/ExternalCopyNames.cs" Link="Services/ExternalCopyNames.cs" />
     <Compile Include="../PCasa.App/Data/GpsSourceIntegrityAudit.cs" Link="Data/GpsSourceIntegrityAudit.cs" />
+    <Compile Include="../PCasa.App/Services/DatabaseMaintenance.cs" Link="Services/DatabaseMaintenance.cs" />
+    <Compile Include="../PCasa.App/Services/FolderScanStatusTracker.cs" Link="Services/FolderScanStatusTracker.cs" />
+    <Compile Include="../PCasa.App/Services/GalleryCatalogReader.cs" Link="Services/GalleryCatalogReader.cs" />
+    <Compile Include="../PCasa.App/Services/ForegroundReadService.cs" Link="Services/ForegroundReadService.cs" />
   </ItemGroup>
   <Import Project="../../PCasa.Version.props" />
 </Project>

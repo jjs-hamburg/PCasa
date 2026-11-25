@@ -460,8 +460,7 @@ public sealed class DatabaseMaintenance
             .Select(f =>
             {
                 var choice = requested[f.Id];
-                var target = Path.GetFullPath(choice.TargetPath).TrimEnd('\\');
-                if (target.Length == 2 && target[1] == ':') target += "\\";
+                var target = Path.TrimEndingDirectorySeparator(Path.GetFullPath(choice.TargetPath));
                 if (!Path.IsPathFullyQualified(target))
                     throw new InvalidDataException("Ungültiger Zielpfad: " + target);
                 // Preserve canonical UNC identity for unchanged, possibly
@@ -626,7 +625,7 @@ public sealed class DatabaseMaintenance
             StringComparison.OrdinalIgnoreCase);
         var relative = index >= 0
             ? normalized[(index + marker.Length)..]
-            : Path.GetFileName(normalized);
+            : normalized[(normalized.LastIndexOf('\\') + 1)..];
         // Also accept paths originally stored relative to thumbnails/.
         if (index < 0 && normalized.StartsWith("thumbnails\\",
                 StringComparison.OrdinalIgnoreCase))
@@ -638,7 +637,8 @@ public sealed class DatabaseMaintenance
             throw new InvalidDataException(
                 "Ungültiger Vorschaudateipfad in der Sicherung: " + originalPath);
         var fullRoot = Path.GetFullPath(localCache);
-        var fullPath = Path.GetFullPath(Path.Combine(fullRoot, relative));
+        var fullPath = Path.GetFullPath(Path.Combine(fullRoot,
+            relative.Replace('\\', Path.DirectorySeparatorChar)));
         if (!PathIsUnder(fullPath, fullRoot))
             throw new InvalidDataException(
                 "Vorschaudateipfad liegt außerhalb des PCasa-Caches.");
@@ -657,8 +657,11 @@ public sealed class DatabaseMaintenance
         if (match is null) return path;
         var prefix = canonical ? match.OldCanonical : match.OldLocal;
         var target = canonical ? match.TargetCanonical : match.TargetLocal;
-        var tail = path.Substring(prefix.TrimEnd('\\').Length);
-        return target.TrimEnd('\\') + tail;
+        var tail = path.Substring(prefix.TrimEnd('\\', '/').Length)
+            .TrimStart('\\', '/');
+        if (tail.Length == 0) return target;
+        return Path.Combine(target, tail.Replace('\\', Path.DirectorySeparatorChar)
+            .Replace('/', Path.DirectorySeparatorChar));
     }
 
     private static void Checkpoint(string file)

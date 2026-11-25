@@ -190,12 +190,12 @@ public sealed class FolderScanStatusTracker
     };
 
     private static string Normalize(string path) =>
-        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path))
-            .Replace('/', '\\');
+        CatalogPathPolicy.NormalizeSeparators(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)));
 
     private static bool IsAtOrBelow(string path, string root) =>
         path.Equals(root, StringComparison.OrdinalIgnoreCase) ||
         path.StartsWith(
-            Path.EndsInDirectorySeparator(root) ? root : root + "\\",
+            Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar,
             StringComparison.OrdinalIgnoreCase);
 }

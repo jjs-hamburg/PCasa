@@ -195,6 +195,32 @@ try
         File.Exists(moveSource) || File.ReadAllText(moveTarget) != "original")
         throw new Exception("Same-volume move did not use native rename.");
 
+    // Manual backup and restore use the same catalog/archive implementation
+    // on both platforms, including hash-bucket thumbnail relocation.
+    var maintenanceRoot = Path.Combine(directory, "maintenance-source");
+    Directory.CreateDirectory(maintenanceRoot);
+    var maintenanceDb = new LocalDatabase(Path.Combine(maintenanceRoot, "pcasa.db"));
+    maintenanceDb.Initialize();
+    new FolderRepository(maintenanceDb).Add(renamed);
+    var cacheBucket = Path.Combine(maintenanceRoot, "thumbnails", "ab");
+    Directory.CreateDirectory(cacheBucket);
+    File.WriteAllBytes(Path.Combine(cacheBucket, "thumb.jpg"), new byte[] { 1, 2, 3 });
+    var maintenance = new DatabaseMaintenance(maintenanceRoot);
+    var archive = Path.Combine(directory, "manual-backup.zip");
+    maintenance.Backup(archive);
+    var backupRoot = maintenance.InspectBackup(archive).Single();
+    var restoreRoot = Path.Combine(directory, "maintenance-restored");
+    var restored = new DatabaseMaintenance(restoreRoot);
+    restored.Restore(archive, new[] { new DatabaseMaintenance.FolderChoice(
+        backupRoot.Id, backupRoot.LocalPath, backupRoot.CanonicalPath, renamed, true) });
+    if (restored.ReadSummary().Roots != 1 ||
+        !File.ReadAllBytes(Path.Combine(restoreRoot, "thumbnails", "ab", "thumb.jpg"))
+            .SequenceEqual(new byte[] { 1, 2, 3 }) ||
+        DatabaseMaintenance.RehomeThumbnailPath(@"C:\old\thumbnails\ab\thumb.jpg",
+            Path.Combine(restoreRoot, "thumbnails")) !=
+            Path.Combine(restoreRoot, "thumbnails", "ab", "thumb.jpg"))
+        throw new Exception("Portable backup/restore failed.");
+
     // Test the real video cache lifecycle with a codec-independent adapter.
     var video = Path.Combine(directory, "clip.mp4");
     File.WriteAllBytes(video, new byte[] { 1, 2, 3 });
@@ -275,6 +301,8 @@ try
         typeof(GpsCatalogOperations).Assembly != assembly ||
         typeof(CatalogRenameService).Assembly != assembly ||
         typeof(ServerSideFileMover).Assembly != assembly ||
+        typeof(DatabaseMaintenance).Assembly != assembly ||
+        typeof(FolderScanStatusTracker).Assembly != assembly ||
         typeof(DurablePackageJournal).Assembly != assembly ||
         typeof(SchedulerTaskOrderStore).Assembly != assembly ||
         typeof(DurableGalleryTransferJournal).Assembly != assembly ||
