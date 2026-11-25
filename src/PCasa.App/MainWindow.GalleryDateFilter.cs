@@ -198,36 +198,60 @@ internal sealed class GalleryDateFilterWindow : Window
         }
         else
         {
-            var century = value.Year / 100 * 100;
-            var decade = value.Year / 10 * 10;
-            void DrawYears()
+            // A decade is navigation only. The two grids are never shown
+            // together, and no choice depends on the catalog or photo dates.
+            panel.Width = 360;
+            var page = (value.Year + 100) / 200;
+            void DrawDecades()
+            {
+                panel.Children.Clear();
+                var first = Math.Max(0, page * 200 - 100);
+                var last = Math.Min(9999, page * 200 + 99);
+                var header = new DockPanel { LastChildFill = true };
+                var prev = Choice("‹", () => { page--; DrawDecades(); });
+                var next = Choice("›", () => { page++; DrawDecades(); });
+                prev.IsEnabled = page > 0;
+                next.IsEnabled = page < 50;
+                DockPanel.SetDock(prev, Dock.Left);
+                DockPanel.SetDock(next, Dock.Right);
+                prev.Width = next.Width = 28;
+                header.Children.Add(prev);
+                header.Children.Add(next);
+                header.Children.Add(new TextBlock { Text = Math.Max(1, first) + " – " + last,
+                    TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+                panel.Children.Add(header);
+                var decades = new UniformGrid { Columns = 4 };
+                for (int i = first; i <= last; i += 10)
+                {
+                    var decade = i;
+                    decades.Children.Add(Choice(
+                        Math.Max(1, decade) + "–" + (decade + 9),
+                        () => DrawYears(decade), value.Year / 10 * 10 == decade));
+                }
+                panel.Children.Add(decades);
+            }
+
+            void DrawYears(int decade)
             {
                 panel.Children.Clear();
                 var header = new DockPanel { LastChildFill = true };
-                var prev = Choice("‹", () => { century = Math.Max(0, century-100); decade = century; DrawYears(); });
-                var next = Choice("›", () => { century = Math.Min(9900, century+100); decade = century; DrawYears(); });
-                DockPanel.SetDock(prev, Dock.Left); DockPanel.SetDock(next, Dock.Right);
-                prev.Width = next.Width = 28;
-                header.Children.Add(prev); header.Children.Add(next);
-                header.Children.Add(new TextBlock { Text = century + " – " + (century+99),
+                var back = Choice("‹", DrawDecades);
+                back.Width = 28;
+                DockPanel.SetDock(back, Dock.Left);
+                header.Children.Add(back);
+                header.Children.Add(new TextBlock { Text = Math.Max(1, decade) + " – " + (decade + 9),
                     TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
                 panel.Children.Add(header);
-                var decades = new UniformGrid { Columns = 5 };
-                for (int i = 0; i < 10; i++)
-                {
-                    var d = century + i*10;
-                    decades.Children.Add(Choice(d.ToString(), () => { decade = d; DrawYears(); }, decade == d));
-                }
-                panel.Children.Add(decades);
                 var years = new UniformGrid { Columns = 5 };
-                for (int i = Math.Max(1, decade); i <= Math.Min(9999, decade+9); i++)
+                for (int i = Math.Max(1, decade); i <= decade + 9; i++)
                 {
                     var year = i;
-                    years.Children.Add(Choice(year.ToString(), () => Pick(value.WithYear(year)), value.Year == year));
+                    years.Children.Add(Choice(year.ToString(_culture),
+                        () => Pick(value.WithYear(year)), value.Year == year));
                 }
                 panel.Children.Add(years);
             }
-            DrawYears();
+            DrawDecades();
         }
         popup.IsOpen = true;
     }

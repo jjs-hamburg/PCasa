@@ -190,6 +190,7 @@ public sealed class FolderScanner
                 $"Der einzulesende Ordner ist nicht erreichbar: {scanRoot}");
         }
 
+        var preparationClock = Stopwatch.StartNew();
         var progressClock = Stopwatch.StartNew();
         var catalogCountClock = Stopwatch.StartNew();
         int? catalogIndexed = progress is null ? null :
@@ -264,11 +265,16 @@ public sealed class FolderScanner
         var catalogImport = catalogOwnedProgress && preferFirstPass && specificFile is null;
         var persistentScan = catalogImport || (!catalogOwnedProgress &&
             (durableInitialImport || durableScanKey is not null));
-        var directoryState = catalogImport
+        // Only legacy scopes need a root-wide directory snapshot.
+        var savedFrontier = catalogImport && resume?.Enumerator is null
+            ? _folderRepository.GetImportFrontier(folder.Id, generation, scanRoot) : null;
+        var directoryState = catalogImport && savedFrontier is null &&
+            resume?.CompletedInitialDirectories is null
             ? _folderRepository.GetDirectoryFirstPass(folder.Id, generation, scanRoot)
             : null;
         var completedDirectories = catalogImport
-            ? resume?.CompletedInitialDirectories ?? directoryState!.Completed
+            ? resume?.CompletedInitialDirectories ?? directoryState?.Completed ??
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : !persistentScan ? null : durableInitialImport
             ? resume?.CompletedInitialDirectories ??
                 _folderRepository.GetCompletedInitialScanDirectories(
@@ -279,7 +285,8 @@ public sealed class FolderScanner
         if (persistentScan && resume is not null)
             resume.CompletedInitialDirectories = completedDirectories;
         var fileCursors = catalogImport
-            ? resume?.InitialFileCursors ?? directoryState!.Cursors
+            ? resume?.InitialFileCursors ?? directoryState?.Cursors ??
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : !persistentScan ? null : durableInitialImport
             ? resume?.InitialFileCursors ??
                 _folderRepository.GetInitialScanFileCursors(folder.Id, generation, scanEpoch)
@@ -313,7 +320,7 @@ public sealed class FolderScanner
         // already-indexed originals never go through metadata/decode again.
         // P4 full verification deliberately does not use this shortcut.
         HashSet<string>? indexedFirstPassPaths = null;
-        if (persistentScan && preferFirstPass && specificFile is null)
+        if (!catalogImport && persistentScan && preferFirstPass && specificFile is null)
         {
             indexedFirstPassPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             using var snapshotDb = _catalog.Database.OpenConnection();
@@ -415,7 +422,12 @@ public sealed class FolderScanner
         // ExifTool is reused throughout this scan, not restarted per file.
         using var exifReader = _exifReaderFactory();
         var enumerator = resume?.Enumerator ??
-            (specificFile is null
+            (catalogImport
+                ? EnumerateFirstImportFiles(folder, generation, scanRoot, recursive,
+                    exclusions, inclusions, completedDirectories!, fileCursors!,
+                    resume is null ? DirectoryCompleted :
+                        directory => resume.DirectoryCompletionHandler?.Invoke(directory))
+                : specificFile is null
                 ? EnumerateIncludedFiles(
                     scanRoot, recursive, exclusions, inclusions, CancellationToken.None,
                     completedDirectories,
@@ -430,6 +442,10 @@ public sealed class FolderScanner
                 : new[] { specificFile }).GetEnumerator();
         if (resume is not null) resume.Enumerator = enumerator;
         var enumerationComplete = resume?.EnumerationComplete ?? false;
+        var firstFileReported = false;
+        if (specificFile is null)
+            PCasaDiagnostics.WriteMessage("Scan.Preparation",
+                $"Root={scanRoot}; FirstImport={catalogImport}; BeforeEnumerationMs={preparationClock.ElapsedMilliseconds}");
         try
         {
             while (!enumerationComplete)
@@ -442,12 +458,24 @@ public sealed class FolderScanner
                 }
                 else
                 {
-                    if (!enumerator.MoveNext())
+                    try
                     {
-                        enumerationComplete = true;
-                        break;
+                        if (!enumerator.MoveNext())
+                        {
+                            enumerationComplete = true;
+                            break;
+                        }
+                    }
+                    catch (OperationCanceledException) when (catalogImport && resume is not null)
+                    {
+                        enumerator.Dispose();
+                        resume.Enumerator = null;
+                        throw;
                     }
                     localPath = enumerator.Current;
+                    // A traversal checkpoint returns to the current scheduler
+                    // token even when no new image has been found.
+                    if (localPath.Length == 0) continue;
                     if (resume is not null) resume.CurrentFile = localPath;
                 }
 
@@ -458,6 +486,12 @@ public sealed class FolderScanner
                     continue;
                 }
 
+                if (!firstFileReported && specificFile is null)
+                {
+                    firstFileReported = true;
+                    PCasaDiagnostics.WriteMessage("Scan.FirstFile",
+                        $"Root={scanRoot}; File={localPath}; ElapsedMs={preparationClock.ElapsedMilliseconds}");
+                }
                 long? discoveredFolderId = null;
                 string? discoveredFolderPath = null;
                 // Only local cache paths belong in the progress preview.
@@ -918,7 +952,8 @@ public sealed class FolderScanner
             }
 
             progressClock.Restart();
-            if (progress is not null && (catalogCountClock.ElapsedMilliseconds >= 1000 || currentFile is null))
+            if (progress is not null && (catalogCountClock.ElapsedMilliseconds >= 1000 ||
+                (force && currentFile is null && verifiedDirectoryPath is null)))
             {
                 catalogIndexed = _catalog.CountIndexedImages(folder.Id, scanRoot, recursive);
                 catalogCountClock.Restart();
@@ -938,6 +973,84 @@ public sealed class FolderScanner
                 verifiedDirectoryPath,
                 readingNew,
                 previewCommitted, catalogImport ? catalogIndexed : null));
+        }
+    }
+
+    private IEnumerable<string> EnumerateFirstImportFiles(
+        MonitoredFolder folder, long generation, string scanRoot, bool recursive,
+        IReadOnlyCollection<string> exclusions, IReadOnlyCollection<string> inclusions,
+        IReadOnlySet<string> completed, IReadOnlyDictionary<string,string> cursors,
+        Action<string> onDirectoryComplete)
+    {
+        var saved = recursive ? _folderRepository.GetImportFrontier(
+            folder.Id, generation, scanRoot) : null;
+        // Legacy upgrade: start in a known partial directory, then discover
+        // missing siblings from the old state. Future jobs use saved traversal.
+        var pending = new LinkedList<string>((IEnumerable<string>?)saved ??
+            cursors.Keys.Where(path => !string.Equals(path, scanRoot,
+                StringComparison.OrdinalIgnoreCase)).Append(scanRoot));
+        void Persist()
+        {
+            if (recursive && !_folderRepository.SaveImportFrontier(
+                folder.Id, generation, scanRoot, pending.ToArray()))
+                throw new OperationCanceledException("Import frontier superseded.");
+        }
+        if (saved is null) Persist();
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = false, IgnoreInaccessible = false,
+            ReturnSpecialDirectories = false,
+            AttributesToSkip = FileAttributes.System | FileAttributes.ReparsePoint
+        };
+        while (pending.First is { } node)
+        {
+            yield return string.Empty;
+            var directory = node.Value;
+            var excluded = FolderExclusionRules.IsExcluded(directory, exclusions, inclusions);
+            if (excluded && !FolderExclusionRules.MayContainIncludedDescendant(directory, inclusions))
+            {
+                pending.RemoveFirst();
+                Persist();
+                continue;
+            }
+            var wasComplete = completed.Contains(directory) ||
+                _folderRepository.IsFirstPassDirectoryComplete(folder.Id, generation, directory);
+            if (!excluded && !wasComplete)
+            {
+                var knownPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                using (var connection = _catalog.Database.OpenConnection())
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = """
+                        SELECT i.local_path FROM images i
+                        JOIN photo_folders f ON f.id=i.photo_folder_id
+                        WHERE i.folder_id=$id AND f.local_path=$path COLLATE NOCASE;
+                        """;
+                    cmd.Parameters.AddWithValue("$id", folder.Id);
+                    cmd.Parameters.AddWithValue("$path", directory);
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read()) knownPaths.Add(reader.GetString(0));
+                }
+                foreach (var file in Directory.EnumerateFiles(directory, "*", options))
+                    yield return knownPaths.Contains(file) ? string.Empty : file;
+            }
+            var children = new List<string>();
+            if (recursive)
+                foreach (var child in Directory.EnumerateDirectories(directory, "*", options))
+                {
+                    if (!FolderExclusionRules.IsExcluded(child, exclusions, inclusions) ||
+                        FolderExclusionRules.MayContainIncludedDescendant(child, inclusions))
+                        children.Add(child);
+                    yield return string.Empty;
+                }
+            // A crash before saving the new frontier can only repeat listing,
+            // never lose a discovered descendant or a committed image.
+            if (!wasComplete && !excluded) onDirectoryComplete(directory);
+            pending.RemoveFirst();
+            for (var i = children.Count - 1; i >= 0; i--)
+                if (!pending.Contains(children[i], StringComparer.OrdinalIgnoreCase))
+                    pending.AddFirst(children[i]);
+            Persist();
         }
     }
 
@@ -969,6 +1082,7 @@ public sealed class FolderScanner
         {
             token.ThrowIfCancellationRequested();
             var directory = pending.Pop();
+            yield return string.Empty;
             var directoryExcluded = FolderExclusionRules.IsExcluded(
                 directory, exclusions, inclusions);
             if (directoryExcluded &&
@@ -991,8 +1105,7 @@ public sealed class FolderScanner
                 foreach (var file in files)
                 {
                     token.ThrowIfCancellationRequested();
-                    if (!alreadyIndexedPaths.Contains(file))
-                        yield return file;
+                    yield return alreadyIndexedPaths.Contains(file) ? string.Empty : file;
                 }
             }
             else if (!directoryExcluded && !previouslyCompleted)
@@ -1023,12 +1136,10 @@ public sealed class FolderScanner
                         // in the committed LOCAL index is proof of an existing
                         // import. Never stat or decode those files. An unknown
                         // earlier filename is not silently skipped.
-                        if (catalogImport && alreadyIndexedPaths?.Contains(file) == true)
-                            continue;
+                        if (catalogImport && alreadyIndexedPaths?.Contains(file) == true) { yield return string.Empty; continue; }
                         if (!catalogImport && last is not null &&
                             StringComparer.OrdinalIgnoreCase.Compare(
-                                Path.GetFileName(file), last) <= 0)
-                            continue;
+                                Path.GetFileName(file), last) <= 0) { yield return string.Empty; continue; }
                         yield return file;
                     }
                 }

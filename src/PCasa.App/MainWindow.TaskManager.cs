@@ -231,7 +231,7 @@ public partial class MainWindow
             moveGlobalTask: MoveGlobalTaskAsync,
             deleteDurableTask: async key =>
             {
-                var canceled = await _scheduler.DeleteDurableTaskAsync(key);
+                var canceled = await Task.Run(() => _scheduler.DeleteDurableTaskAsync(key));
                 if (canceled && key.StartsWith("tags:", StringComparison.Ordinal))
                 {
                     await RefreshTagSidebarAsync();

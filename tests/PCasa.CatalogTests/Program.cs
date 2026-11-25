@@ -105,6 +105,8 @@ internal static class Program
             RegularScanRestartSafe, failures);
         Run("Manual scans retain a first-pass cursor per directory across separate jobs while background checks changes",
             FirstPassDirectorySurvivesJobs, failures);
+        Run("First import continues at the saved pending directory after deleting the job",
+            ImportFrontierSurvivesIndependentJobs, failures);
         Run("Catalog-owned import reconciles changed and missing files across job identities",
             CatalogOwnedDirectoryReconciliation, failures);
         Run("Database maintenance drains catalog work without enqueuing a job",
@@ -2112,6 +2114,55 @@ internal static class Program
             throw new Exception("Unchanged images were reimported or folder count reset.");
     }
 
+    private static void ImportFrontierSurvivesIndependentJobs()
+    {
+        using var sandbox = new Sandbox();
+        var dirs = new[] { Path.Combine(sandbox.Images, "A"), Path.Combine(sandbox.Images, "B") };
+        foreach (var dir in dirs)
+        {
+            Directory.CreateDirectory(dir);
+            WriteJpeg(Path.Combine(dir, "photo.jpg"));
+        }
+        var (db, root, scanner) = sandbox.Prepare();
+        var repository = new FolderRepository(db);
+        var generation = repository.GetSourceState(root.CanonicalPath)!.Value.Generation;
+        using var stop = new CancellationTokenSource();
+        string? done = null;
+        var progress = new InlineProgress<ScanProgress>(p =>
+        {
+            if (p.VerifiedDirectoryPath is string path && dirs.Contains(path,
+                    StringComparer.OrdinalIgnoreCase))
+            {
+                done = path;
+                stop.Cancel();
+            }
+        });
+        try
+        {
+            scanner.ScanDirectory(root, root.LocalPath, true, progress, stop.Token,
+                durableScanKey: "frontier:test:one", preferFirstPass: true,
+                catalogOwnedProgress: true);
+            throw new Exception("Expected interrupted import.");
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        if (done is null) throw new Exception("No completed directory was reported.");
+        var remaining = dirs.Single(dir => !string.Equals(dir, done, StringComparison.OrdinalIgnoreCase));
+        var saved = repository.GetImportFrontier(root.Id, generation, root.LocalPath);
+        if (saved is null || !saved.SequenceEqual(new[] { remaining }, StringComparer.OrdinalIgnoreCase))
+            throw new Exception("Pending frontier did not retain the exact next directory.");
+        Directory.Move(done, done + "-moved");
+        repository.DeletePendingFirstImport(root.Id);
+        var fresh = new FolderScanner(new ImageCatalogRepository(db),
+            new ThumbnailCache(), new FolderRepository(db),
+            new BrowseThumbnailProfileRepository(db));
+        var resumed = fresh.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: "frontier:test:two", preferFirstPass: true,
+            catalogOwnedProgress: true);
+        if (resumed.ImageFilesSeen != 1 || new ImageCatalogRepository(db).CountAll() != 2 ||
+            repository.GetImportFrontier(root.Id, generation, root.LocalPath) is not { Length: 0 })
+            throw new Exception("Independent job did not resume the saved directory frontier.");
+    }
+
     private static void FirstPassDirectorySurvivesJobs()
     {
         using var sandbox = new Sandbox();
@@ -2155,6 +2206,9 @@ internal static class Program
             !folders.GetDirectoryFirstPass(root.Id, generation, root.LocalPath)
                 .Completed.Contains(interruptedDirectory))
             throw new Exception("Actual import path revisited a confirmed file or lost directory state.");
+        var frontier = folders.GetImportFrontier(root.Id, generation, interruptedDirectory);
+        if (frontier is not { Length: 0 })
+            throw new Exception("Completed import scope did not persist an empty traversal.");
         var noRepeat = scanner.ScanDirectory(root, interruptedDirectory, true,
             durableScanKey: "manual:alpha65:new-job", preferFirstPass: true,
             catalogOwnedProgress: true);

@@ -448,6 +448,15 @@ public sealed class LocalDatabase
                 );
                 CREATE INDEX IF NOT EXISTS idx_scan_directory_first_pass_generation
                     ON scan_directory_first_pass(monitored_folder_id,source_generation);
+                CREATE TABLE IF NOT EXISTS scan_import_frontier (
+                    monitored_folder_id INTEGER NOT NULL,
+                    scan_root TEXT NOT NULL COLLATE NOCASE,
+                    source_generation INTEGER NOT NULL,
+                    pending_json TEXT NOT NULL,
+                    PRIMARY KEY (monitored_folder_id,scan_root),
+                    FOREIGN KEY(monitored_folder_id)
+                        REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
                 """;
             firstPass.ExecuteNonQuery();
         }

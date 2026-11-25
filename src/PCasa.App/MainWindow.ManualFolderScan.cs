@@ -388,6 +388,7 @@ public partial class MainWindow
     {
         private readonly FolderScanner.ScanResumeState _resume = new();
         private bool _manualGenerationStarted;
+        private bool? _firstImport;
         private long? _manualScanEpoch;
         private long? _initialSourceGeneration;
         private string? _sourceCanonicalPath;
@@ -424,6 +425,13 @@ public partial class MainWindow
                  owner._folderRepository.GetIncludedPaths(folder.Id)))
                 throw new InvalidOperationException(
                     "Dieser Ordner ist im Ordnermanager ausgeschlossen.");
+            // A deleted task does not change the incomplete import state.
+            _firstImport ??= requirePendingInitialImport ||
+                (owner._folderRepository.HasIncompleteImport(folder.Id) &&
+                 owner._folderRepository.GetImportFrontier(folder.Id,
+                    currentSource.Value.Generation, Path.GetFullPath(directory)
+                        .Replace('/', '\\')) is not { Length: 0 });
+            token.ThrowIfCancellationRequested();
             if (!owner._scheduler.SourceAvailability.CanAccess(directory, token))
                 throw new DurablePackageRetryException(
                     "Quelle vorübergehend offline; später erneut prüfen: " +
@@ -478,7 +486,7 @@ public partial class MainWindow
                     folder, directory, recursive: true, progress, token, _resume,
                     durableInitialImport: requirePendingInitialImport,
                     durableScanKey: requirePendingInitialImport ? null : durableScanKey,
-                    preferFirstPass: true, catalogOwnedProgress: true,
+                    preferFirstPass: _firstImport == true, catalogOwnedProgress: true,
                     retryFailedFiles: false);
                 owner._scheduler.SourceAvailability.ConfirmAvailable(directory);
             }

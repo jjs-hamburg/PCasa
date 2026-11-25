@@ -121,6 +121,73 @@ internal static class Program
                     "_startupGalleryPresented", startupFlags)!.GetValue(window) is not true)
                 throw new Exception("First gallery frame was not presented.");
             Alpha58WindowSmoke.Run(window);
+            // Use the real WPF popup and actual Click handlers. Decade
+            // navigation must not masquerade as selectable year buttons.
+            {
+                const System.Reflection.BindingFlags privateInstance =
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic;
+                var mainType = typeof(PCasa.App.MainWindow);
+                var dateType = mainType.Assembly.GetType("PCasa.App.GalleryDateFilterWindow")!;
+                var initial = mainType.GetField("_galleryDateStartParts", privateInstance)!
+                    .GetValue(window)!;
+                var dateField = mainType.GetField("_galleryDateField", privateInstance)!
+                    .GetValue(window)!;
+                var dateFilterDialog = (Window)Activator.CreateInstance(dateType,
+                    [dateField, initial, null])!;
+                dateFilterDialog.Owner = window;
+                try
+                {
+                    dateFilterDialog.Show();
+                    Flush(dateFilterDialog);
+                    var buttons = (Button[])dateType.GetField("_startButtons", privateInstance)!
+                        .GetValue(dateFilterDialog)!;
+                    var yearButton = buttons[2];
+                    var selectedYear = int.Parse(yearButton.Content.ToString()!);
+                    yearButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Flush(dateFilterDialog);
+                    Popup CurrentPopup() => (Popup)dateType.GetField("_popup", privateInstance)!
+                        .GetValue(dateFilterDialog)!;
+                    StackPanel CurrentPanel() => (StackPanel)((Border)CurrentPopup().Child).Child;
+                    Button[] Years() => ((UniformGrid)CurrentPanel().Children[1])
+                        .Children.Cast<Button>().ToArray();
+                    var decades = Years();
+                    var starts = decades.Select(button =>
+                        int.Parse(button.Content.ToString()!.Split('–')[0])).ToArray();
+                    if (CurrentPanel().Children.Count != 2 ||
+                        !starts.SequenceEqual(starts.OrderBy(year => year)) ||
+                        !starts.Contains(selectedYear / 10 * 10) ||
+                        !starts.Contains(1900) || !starts.Contains(2090))
+                        throw new Exception("Decade popup must present an ascending grid independent of the catalog.");
+                    var opened = CurrentPopup();
+                    decades.Single(button => button.Content.ToString() == "1980–1989")
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    if (!opened.IsOpen || yearButton.Content.ToString() != selectedYear.ToString())
+                        throw new Exception("Selecting a decade must navigate, not change the date or close the popup.");
+                    var years = Years();
+                    if (CurrentPanel().Children.Count != 2 ||
+                        !years.Select(button => int.Parse(button.Content.ToString()!))
+                            .SequenceEqual(Enumerable.Range(1980, 10)))
+                        throw new Exception("The decade grid must be replaced by ten ascending years.");
+                    ((Button)((DockPanel)CurrentPanel().Children[0]).Children[0])
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    if (!Years().Any(button => button.Content.ToString() == "1980–1989"))
+                        throw new Exception("Year dateFilterDialog back button must restore the decade grid.");
+                    Years().Single(button => button.Content.ToString() == "1980–1989")
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Years().Single(button => button.Content.ToString() == "1985")
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Flush(dateFilterDialog);
+                    if (opened.IsOpen || yearButton.Content.ToString() != "1985")
+                        throw new Exception("A year click must immediately commit and close its popup.");
+                    yearButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Flush(dateFilterDialog);
+                    if (!Years().Any(button => button.Content.ToString() == "1980–1989"))
+                        throw new Exception("Reopening the year popup must show the decade grid.");
+                }
+                finally { dateFilterDialog.Close(); }
+                Console.WriteLine("PASS: Ascending decade and year grids are separate, catalog-independent, and commit on one year click.");
+            }
             var deferredSurface = new BrowseGallerySurface();
             deferredSurface.DeferViewportPageRequests(true);
             deferredSurface.SetViewport(1000, 600);
