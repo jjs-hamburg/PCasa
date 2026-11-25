@@ -37,6 +37,9 @@ try
     await using (var scheduler = new PCasaScheduler())
     {
         scheduler.EnableDurablePackages(database);
+        // The durable API requires the original reconstructable recipe type.
+        scheduler.RegisterDurablePackageType("manual-folder-scan-v1",
+            (key, _) => new SchedulerTaskPackage(key));
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var attempts = 0;
         var older = new SchedulerTaskPackage("portable:older");
