@@ -39,6 +39,6 @@ public partial class MainWindow
                             path, BackgroundFolderChangeKind.ScanFile, false,
                             ForceExifRefresh: true))));
             }
-        });
+        }, title, path, Math.Max(1, work.TotalSteps));
     }
 }

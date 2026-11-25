@@ -790,6 +790,7 @@
   "Tag": "Day",
   "Monat": "Month",
   "Jahr": "Year",
+  "Dateiaktion": "File operation",
   "Datum": "Date",
   "Datumsfilter": "Date filter",
   "Aufnahmedatum aus Dateinamen übernehmen": "Set capture date from filenames",

@@ -315,6 +315,29 @@ public sealed class SchedulerTaskView
                         false, false, false, false, job.WorkKind));
                 }
 
+                // Accepted single-image writes have the same real queue rank
+                // and lifecycle as other user work. No separate direct slot.
+                foreach (var job in latest.Values.Where(job => job.SessionWrite &&
+                    (job.State is SchedulerJobState.Queued or SchedulerJobState.Running
+                        or SchedulerJobState.YieldRequested or SchedulerJobState.Failed ||
+                     (showCompleted && job.State == SchedulerJobState.Completed))))
+                {
+                    if (rows.Any(row => row.Key == job.Key)) continue;
+                    var status = job.State switch
+                    {
+                        SchedulerJobState.Running => "Läuft",
+                        SchedulerJobState.Failed => "Fehler",
+                        SchedulerJobState.Completed => "Abgeschlossen",
+                        _ => "Wartet"
+                    };
+                    rows.Add(new SchedulerTaskViewItem(job.Key,
+                        UiLanguage.T(job.Phase ?? "Dateiaktion"),
+                        CurrentDirectory(job.CurrentPath),
+                        job.Total > 0 ? $"{job.Processed:N0}/{job.Total:N0}" : "–",
+                        status, job.Error, (int)job.Priority, job.QueueOrder,
+                        false, false, false, false, job.WorkKind));
+                }
+
                 // Actual running work first, then the scheduler's effective
                 // pending priority/order. This is a single scheduler-owned
                 // projection, not a second dispatch queue. Reordering still

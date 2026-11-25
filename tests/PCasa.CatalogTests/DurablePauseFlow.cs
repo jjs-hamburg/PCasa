@@ -15,6 +15,7 @@ internal static class DurablePauseFlow
         {
             ExercisePauseAndRestart(dir).GetAwaiter().GetResult();
             ExercisePersistentMultiWrite(dir).GetAwaiter().GetResult();
+            ExerciseQueuedSessionWrites(dir).GetAwaiter().GetResult();
             ExerciseAutomaticControlPersistence(dir).GetAwaiter().GetResult();
             ExerciseInitialImportStartupRelease(dir);
             ExerciseImageEditFailureLifecycle(dir).GetAwaiter().GetResult();
@@ -37,6 +38,51 @@ internal static class DurablePauseFlow
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    private static async Task ExerciseQueuedSessionWrites(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "alpha66-session-write.db"));
+        database.Initialize();
+        await using var scheduler = new PCasaScheduler();
+        scheduler.EnableDurablePackages(database);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        var first = scheduler.EnqueueSessionWriteAsync("session:first", async token =>
+        {
+            entered.TrySetResult();
+            await release.Task;
+            token.ThrowIfCancellationRequested();
+            order.Enqueue(1);
+        }, "Bildbearbeitung speichern", "first.jpg", 1);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            var second = scheduler.EnqueueSessionWriteAsync("session:second", _ =>
+            {
+                order.Enqueue(2);
+                return Task.CompletedTask;
+            }, "Bildbearbeitung speichern", "second.jpg", 1);
+            var third = scheduler.EnqueueSessionWriteAsync("session:third", _ =>
+            {
+                order.Enqueue(3);
+                return Task.CompletedTask;
+            }, "Bildbearbeitung speichern", "third.jpg", 1);
+            var queued = scheduler.Snapshot().Where(x => x.SessionWrite &&
+                x.State == SchedulerJobState.Queued).OrderBy(x => x.QueueOrder).ToArray();
+            if (queued.Length != 2 || queued[0].Key != "session:third" ||
+                queued[1].Key != "session:second")
+                throw new Exception("Accepted single-image writes did not share the LIFO scheduler queue.");
+            var shutdown = scheduler.PrepareGracefulShutdownAsync();
+            release.TrySetResult();
+            await shutdown.WaitAsync(TimeSpan.FromSeconds(8));
+            await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(8));
+            if (!order.SequenceEqual(new[] { 1, 3, 2 }) || scheduler.HasSessionWrites)
+                throw new Exception("Closing lost accepted writes or interrupted the current file.");
+        }
+        finally { release.TrySetResult(); }
+        Console.WriteLine("PASS: Queued single-image writes complete safely in LIFO order on shutdown.");
     }
 
     private static async Task ExercisePersistentMultiWrite(string dir)

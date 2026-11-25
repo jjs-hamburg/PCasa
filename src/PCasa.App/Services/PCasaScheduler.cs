@@ -22,6 +22,8 @@ public sealed record SchedulerJobSnapshot(
     public int Processed { get; init; }
     public int Total { get; init; }
     public string? CurrentPath { get; init; }
+    public bool SessionWrite { get; init; }
+    public long QueueOrder { get; init; }
     // A priority alone is not proof of a write: interactive catalog reads
     // must never force shutdown to wait for a blocked network source.
     public SchedulerWorkKind WorkKind { get; init; } = SchedulerWorkKind.Catalog;
@@ -49,6 +51,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private const int ExecutorGalleryRead = 7;
     private readonly object _gate = new();
     private DurablePackageJournal? _durableJournal;
+    private LocalDatabase? _sessionAcceptanceDatabase;
     private SchedulerTaskOrderStore? _taskOrderStore;
     private readonly Dictionary<string,long> _userDispatchOrder =
         new(StringComparer.Ordinal);
@@ -121,9 +124,24 @@ public sealed class PCasaScheduler : IAsyncDisposable
         get { lock (_gate) return _pending.Concat(_runningWork).Any(item => item.SessionWrite); }
     }
 
-    public Task EnqueueSessionWriteAsync(string key, Func<CancellationToken, Task> operation)
-        => EnqueueAsync(key, SchedulerPriority.ManualAction, operation,
-            workKind: SchedulerWorkKind.Catalog, sessionWrite: true);
+    public Task EnqueueSessionWriteAsync(string key, Func<CancellationToken, Task> operation,
+        string? title = null, string? path = null, int total = 0)
+    {
+        // Share the acceptance sequence with durable jobs and first imports.
+        // A session write is not intrinsically ahead of every durable recipe:
+        // a newly accepted manual job wins, regardless of recipe lifetime.
+        long? order = null;
+        if (_sessionAcceptanceDatabase is { } database)
+        {
+            using var connection = database.OpenConnection();
+            using var tx = connection.BeginTransaction();
+            order = -LocalDatabase.NextSchedulerAcceptanceSequence(connection, tx);
+            tx.Commit();
+        }
+        return EnqueueAsync(key, SchedulerPriority.ManualAction, operation,
+            workKind: SchedulerWorkKind.Catalog, queueOrder: order,
+            sessionWrite: true, sessionTitle: title, sessionPath: path, sessionTotal: total);
+    }
 
     // Freeze new dispatch before waiting for already-running file mutations.
     // Never cancel an original-file writer while its atomic write is in flight.
@@ -315,6 +333,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (_durableJournal is not null)
             throw new InvalidOperationException("Paketjournal bereits aktiviert.");
         _durableJournal = new DurablePackageJournal(database);
+        _sessionAcceptanceDatabase = database;
         _durableJournal.NormalizeLegacyJobPriorities();
         _retireFileJobsOnSessionEnd = retireFileJobsOnSessionEnd;
         if (_retireFileJobsOnSessionEnd)
@@ -1578,7 +1597,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         CancellationToken cancellationToken = default,
         SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
         long? queueOrder = null, string? parentKey = null,
-        bool durableJob = false, bool sessionWrite = false)
+        bool durableJob = false, bool sessionWrite = false,
+        string? sessionTitle = null, string? sessionPath = null, int sessionTotal = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(operation);
@@ -1635,7 +1655,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 _pending.Add(item);
                 _history.Add(new SchedulerJobSnapshot(item.Id, key, priority,
                     SchedulerJobState.Queued, DateTimeOffset.UtcNow, null)
-                { WorkKind = workKind });
+                { WorkKind = workKind, SessionWrite = sessionWrite, QueueOrder = item.QueueOrder,
+                    Phase = sessionTitle, CurrentPath = sessionPath, Total = sessionTotal });
                 TrimHistoryUnsafe();
                 SignalController();
                 completion = item.Completion.Task;
@@ -1916,16 +1937,16 @@ public sealed class PCasaScheduler : IAsyncDisposable
         var now = DateTimeOffset.UtcNow;
         _history[index] = _history[index] with
         {
-            State = state, Priority = item.Priority, Error = error,
+            State = state, Priority = item.Priority, Error = error, QueueOrder = item.QueueOrder,
             StartedAt = state == SchedulerJobState.Running
                 ? _history[index].StartedAt ?? now : _history[index].StartedAt,
             FinishedAt = state is SchedulerJobState.Completed or
                 SchedulerJobState.Failed or SchedulerJobState.Canceled ? now : null,
             // A yielded package must not claim that it is STILL writing the
             // last file when it re-enters the queue or starts a new attempt.
-            CurrentPath = state is SchedulerJobState.Queued or SchedulerJobState.Running
+            CurrentPath = !item.SessionWrite && state is (SchedulerJobState.Queued or SchedulerJobState.Running)
                 ? null : _history[index].CurrentPath,
-            Phase = state is SchedulerJobState.Queued or SchedulerJobState.Running
+            Phase = !item.SessionWrite && state is (SchedulerJobState.Queued or SchedulerJobState.Running)
                 ? null : _history[index].Phase
         };
         TrimHistoryUnsafe();
