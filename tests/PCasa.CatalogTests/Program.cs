@@ -2153,7 +2153,8 @@ internal static class Program
         Directory.Move(done, done + "-moved");
         repository.DeletePendingFirstImport(root.Id);
         var fresh = new FolderScanner(new ImageCatalogRepository(db),
-            new ThumbnailCache(), new FolderRepository(db));
+            new ThumbnailCache(), new FolderRepository(db),
+            new BrowseThumbnailProfileRepository(db));
         var resumed = fresh.ScanDirectory(root, root.LocalPath, true,
             durableScanKey: "frontier:test:two", preferFirstPass: true,
             catalogOwnedProgress: true);
