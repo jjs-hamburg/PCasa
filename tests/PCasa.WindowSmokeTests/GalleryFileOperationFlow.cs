@@ -666,9 +666,8 @@ internal static class GalleryFileOperationFlow
             var uncachedDestination = Path.Combine(third, "physical-first.jpg");
             WriteJpeg(uncachedSource);
             SchedulerJobSnapshot? DirectProgress() =>
-                (SchedulerJobSnapshot?)typeof(PCasa.App.MainWindow)
-                    .GetField("_directImageWriteProgress", BindingFlags.NonPublic | BindingFlags.Instance)!
-                    .GetValue(window);
+                scheduler.Snapshot().LastOrDefault(job => job.SessionWrite &&
+                    job.State == SchedulerJobState.Running);
             Task deferredIndexing;
             lock (SourceFileLocks.ForPath(uncachedDestination))
             {

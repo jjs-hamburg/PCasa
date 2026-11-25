@@ -7,7 +7,7 @@ namespace PCasa.App.Services;
 /// <summary>Metadata-only write. Existing thumbnail packs and tag source revisions
 /// remain valid because the pixel data and original file timestamps are unchanged.
 /// A replay after native write but before catalog commit reconciles verified EXIF.</summary>
-public sealed class FilenameCaptureDateWriter(LocalDatabase database)
+public sealed class FilenameCaptureDateWriter(LocalDatabase database, UndoOptions? undoOptions = null)
 {
     public static bool HasCaptureDate(string json)
     {
@@ -61,7 +61,7 @@ public sealed class FilenameCaptureDateWriter(LocalDatabase database)
         if (!applied)
         {
             token.ThrowIfCancellationRequested();
-            new UndoHistoryService(UndoOptions.Load()).CaptureBeforeSave(path, token);
+            new UndoHistoryService(undoOptions ?? UndoOptions.Load()).CaptureBeforeSave(path, token);
             using var writer = new ExifToolKeywordWriter.Session();
             writer.WriteExactExifDates(path, new Dictionary<string, string?>
             {

@@ -2335,8 +2335,8 @@ internal static class TagFlow
             Console.WriteLine(
                 "PASS: One Tag draft survives folder/selection changes, Cancel discards it, one OK writes distinct originals.");
 
-            // Single-image confirmation uses the same metadata writer but
-            // neither inserts a scheduler row nor creates a durable recipe.
+            // Single-image confirmation uses the same metadata writer and
+            // the one scheduler, but does not persist a replay recipe.
             Until(window, () => !activeScheduler.Snapshot().Any(job =>
                 job.Key.StartsWith("tags:package:", StringComparison.Ordinal) &&
                 job.State is SchedulerJobState.Queued or SchedulerJobState.Running or
@@ -2349,19 +2349,18 @@ internal static class TagFlow
             var beforeDirect = activeScheduler.Snapshot().Count(job =>
                 job.Key.StartsWith("tags:package:", StringComparison.Ordinal));
             tagOk.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagOk));
-            var directTaskField = typeof(PCasa.App.MainWindow).GetField(
-                "_directImageWriteTask", System.Reflection.BindingFlags.Instance |
-                System.Reflection.BindingFlags.NonPublic)!;
-            Until(window, () => directTaskField.GetValue(window) is Task { IsCompleted: true } &&
+            Until(window, () => activeScheduler.Snapshot().Any(job => job.SessionWrite &&
+                job.Key.StartsWith("direct:tags:", StringComparison.Ordinal) &&
+                job.State == SchedulerJobState.Completed) &&
                 (ImageTagRepository.ReadKeywords(otherImagePath) ?? "").Contains(directTag),
-                "Single Tag edit did not finish in the original.");
+                "Single Tag edit did not finish through the scheduler.");
             if (activeScheduler.Snapshot().Count(job =>
                     job.Key.StartsWith("tags:package:", StringComparison.Ordinal)) != beforeDirect ||
-                activeScheduler.Snapshot().Any(job =>
-                    job.Key.StartsWith("direct:tags:", StringComparison.Ordinal)) ||
+                activeScheduler.Snapshot().Count(job => job.SessionWrite &&
+                    job.Key.StartsWith("direct:tags:", StringComparison.Ordinal)) != 1 ||
                 !(new ImageTagRepository(db).GetKeywords(otherImageId) ?? "").Contains(directTag))
-                throw new Exception("Single-image Tag edit did not use the direct catalog/original path.");
-            Console.WriteLine("PASS: Single Tag edit commits directly without a scheduler job.");
+                throw new Exception("Single-image Tag edit did not use one session-bound scheduler job.");
+            Console.WriteLine("PASS: Single Tag edit uses the shared scheduler without a durable replay recipe.");
 
             SelectTagImages(editorIds);
             tagInput.Text = editableTag;

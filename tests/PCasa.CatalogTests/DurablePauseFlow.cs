@@ -78,6 +78,8 @@ internal static class DurablePauseFlow
             release.TrySetResult();
             await shutdown.WaitAsync(TimeSpan.FromSeconds(8));
             await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(8));
+            var until = DateTime.UtcNow.AddSeconds(2);
+            while (scheduler.HasSessionWrites && DateTime.UtcNow < until) await Task.Delay(10);
             if (!order.SequenceEqual(new[] { 1, 3, 2 }) || scheduler.HasSessionWrites)
                 throw new Exception("Closing lost accepted writes or interrupted the current file.");
         }
