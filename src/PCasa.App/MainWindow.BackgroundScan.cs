@@ -1016,7 +1016,13 @@ public partial class MainWindow
     {
         if (task.Revision is not null)
         {
-            _folderRepository.RetireAutomaticChange(AutomaticTaskKey(task), task.Revision);
+            var key = AutomaticTaskKey(task);
+            var retired = _folderRepository.RetireAutomaticChange(key, task.Revision);
+            // A newer accepted revision is still the same logical task.
+            // Preserve its user placement even if its publication to the
+            // Dispatcher has not happened yet.
+            if (retired && !_backgroundPending.ContainsKey(key))
+                _scheduler.CompleteTaskPromotion(key);
             // Discard monitor snapshots made before this acknowledgement.
             _automaticDeletionVersion++;
         }
@@ -1380,94 +1386,73 @@ public partial class MainWindow
 
                 if (request.Kind == BackgroundFolderChangeKind.RemovePath)
                 {
-                    if (!_scheduler.SourceAvailability.CanAccess(folder.LocalPath,
-                            _backgroundLifetime.Token)) continue;
-                    // A disconnected SMB share must NEVER be interpreted
-                    // as a user deleting its entire photo library.
-                    if (IsPathKnownOffline(folder.LocalPath))
-                    {
-                        continue;
-                    }
-
-                    var rootReachable = await _scheduler.RunAsync(
-                        $"background:root-reachable:{folder.Id}:{Guid.NewGuid():N}",
-                        SchedulerPriority.Background,
-                        token =>
-                        {
-                            token.ThrowIfCancellationRequested();
-                            var exists = Directory.Exists(folder.LocalPath);
-                            if (!exists)
-                                _scheduler.SourceAvailability.CheckAfterSourceError(
-                                    folder.LocalPath, token);
-                            return exists;
-                        },
-                        cancellationToken: _backgroundLifetime.Token,
-                        workKind: SchedulerWorkKind.SourceProbe);
-                    if (!rootReachable)
-                        continue;
-
-                    // SMB watcher notifications can arrive late. Never prune
-                    // an image that has reappeared, or when the parent cannot
-                    // be reached reliably enough to verify the deletion.
-                    var verifiedGone = await _scheduler.RunAsync(
-                        $"background:confirm-missing:{Guid.NewGuid():N}",
-                        SchedulerPriority.Background,
-                        token =>
-                        {
-                            token.ThrowIfCancellationRequested();
-                            var parent = Path.GetDirectoryName(request.Path);
-                            return !string.IsNullOrWhiteSpace(parent) &&
-                                   Directory.Exists(parent) &&
-                                   !File.Exists(request.Path) &&
-                                   !Directory.Exists(request.Path);
-                        }, cancellationToken: _backgroundLifetime.Token,
-                        workKind: SchedulerWorkKind.SourceProbe);
-                    if (!verifiedGone)
-                    {
-                        // Reappeared paths retire the obsolete removal;
-                        // unreachable parents keep their accepted request.
-                        if (File.Exists(request.Path) || Directory.Exists(request.Path))
-                            CompleteAutomaticChange(request);
-                        continue;
-                    }
-
-                    // Deletion and scanning must share the same scheduler lane.
-                    // Recheck the path at execution time: a delayed watcher
-                    // event must not delete a file that has since returned.
+                    // All reachability checks, confirmation and removal run
+                    // under the accepted watcher identity and its effective
+                    // priority. No unranked preflight and no SMB on WPF.
                     var deletionSource = _folderRepository.GetSourceState(folder.CanonicalPath);
                     if (deletionSource is not { DesiredPresent: true })
                         continue;
+                    using var removalCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                        _backgroundLifetime.Token);
+                    _backgroundCurrentScanCancellation = removalCancellation;
+                    _backgroundLiveTaskKey = taskKey;
                     var removed = 0;
-                    await _scheduler.EnqueueAsync(
-                        taskKey,
-                        SchedulerPriority.Background,
-                        token =>
-                        {
-                            token.ThrowIfCancellationRequested();
-                            var parent = Path.GetDirectoryName(request.Path);
-                            if (!string.IsNullOrWhiteSpace(parent) &&
-                                Directory.Exists(folder.LocalPath) &&
-                                Directory.Exists(parent) &&
-                                !File.Exists(request.Path) &&
-                                !Directory.Exists(request.Path))
+                    var verified = false;
+                    try
+                    {
+                        await _scheduler.EnqueueAsync(
+                            taskKey, SchedulerPriority.Background,
+                            token =>
                             {
-                                removed = _catalogRemovalService.RemovePath(
-                                    folder.Id, request.Path, cancellationToken: token,
-                                    sourceCanonicalPath: folder.CanonicalPath,
-                                    expectedGeneration: deletionSource.Value.Generation,
-                                    deferCleanup: true);
-                            }
-                            return Task.CompletedTask;
-                        },
-                        () => _folderRepository.IsCurrentSourceGeneration(
-                            folder.CanonicalPath, deletionSource.Value.Generation, true),
-                        _backgroundLifetime.Token,
-                        workKind: SchedulerWorkKind.CatalogScan,
-                        queueOrder: request.QueueOrder == long.MaxValue
-                            ? null : request.QueueOrder);
-                    CompleteAutomaticChange(request);
-                    if (!_backgroundPending.ContainsKey(taskKey))
-                        _scheduler.CompleteTaskPromotion(taskKey);
+                                token.ThrowIfCancellationRequested();
+                                if (!_scheduler.SourceAvailability.CanAccess(folder.LocalPath, token))
+                                    return Task.CompletedTask;
+                                var parent = Path.GetDirectoryName(request.Path);
+                                if (string.IsNullOrWhiteSpace(parent) ||
+                                    !Directory.Exists(folder.LocalPath) ||
+                                    !Directory.Exists(parent))
+                                {
+                                    _scheduler.SourceAvailability.CheckAfterSourceError(
+                                        folder.LocalPath, token);
+                                    return Task.CompletedTask;
+                                }
+                                token.ThrowIfCancellationRequested();
+                                if (!File.Exists(request.Path) && !Directory.Exists(request.Path))
+                                    removed = _catalogRemovalService.RemovePath(
+                                        folder.Id, request.Path, cancellationToken: token,
+                                        sourceCanonicalPath: folder.CanonicalPath,
+                                        expectedGeneration: deletionSource.Value.Generation,
+                                        deferCleanup: true);
+                                // Either a verified removal or a reappeared
+                                // path acknowledges this revision, never an
+                                // unreachable source.
+                                verified = true;
+                                return Task.CompletedTask;
+                            },
+                            () => _folderRepository.IsCurrentSourceGeneration(
+                                folder.CanonicalPath, deletionSource.Value.Generation, true),
+                            removalCancellation.Token,
+                            workKind: SchedulerWorkKind.CatalogScan,
+                            queueOrder: request.QueueOrder == long.MaxValue
+                                ? null : request.QueueOrder);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        if (_backgroundSuppressed.Contains(taskKey)) continue;
+                        if (_backgroundOrderChanged || _externalEditPauseActive ||
+                            _folderRemovalPending || _backgroundLifetime.IsCancellationRequested)
+                            throw;
+                        RequeueBackgroundRequest(request, null, null);
+                        continue;
+                    }
+                    finally
+                    {
+                        if (ReferenceEquals(_backgroundCurrentScanCancellation, removalCancellation))
+                            _backgroundCurrentScanCancellation = null;
+                        _backgroundLiveTaskKey = null;
+                    }
+                    if (verified)
+                        CompleteAutomaticChange(request);
                     catalogChanged |= removed > 0;
                     if (removed > 0)
                     {
@@ -1714,8 +1699,7 @@ public partial class MainWindow
                             QueueBackgroundChange(accepted.Change, persisted: accepted);
                     }
                     CompleteAutomaticChange(request);
-                    if (!_backgroundPending.ContainsKey(taskKey))
-                        _scheduler.CompleteTaskPromotion(taskKey);
+
                     scanResume.Dispose();
                     scanResume = null;
                     request = request with
