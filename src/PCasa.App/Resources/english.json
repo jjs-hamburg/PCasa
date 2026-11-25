@@ -179,6 +179,7 @@
   "Datenbanksicherung erfolgreich abgeschlossen.": "Database backup completed successfully.",
   "Datenbanksicherung fehlgeschlagen.": "Database backup failed.",
   "Datenbankverwaltung": "Database management",
+  "Datenbankverwaltung läuft.": "Database management is in progress.",
   "Datenbankverwaltung...": "Database management...",
   "Datenbankwartung abgeschlossen": "Database maintenance completed",
   "Datenbankwartung abgeschlossen – PCasa wird gestartet": "Database maintenance completed – restarting PCasa",
