@@ -402,7 +402,8 @@ public partial class BrowseCacheProgressWindow : Window
             CountText.Text = $"{processed:N0} / {progress.Total:N0}";
         }
         else
-            CountText.Text = UiLanguage.Format("{0:N0} geprüft", processed);
+            CountText.Text = UiLanguage.Format(progress.Phase == "Bilder einlesen"
+                ? "{0:N0} eingelesen" : "{0:N0} geprüft", processed);
 
         // A yielded scan still has a last filename, but it is no longer
         // processing that file. Waiting views show the immutable recipe's

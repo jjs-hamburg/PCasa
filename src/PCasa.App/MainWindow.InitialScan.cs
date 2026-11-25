@@ -235,7 +235,7 @@ public partial class MainWindow
                 shownWindow.UpdateScan(scan,
                     showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation(),
                     scanOwner: scanOwner,
-                    phaseOverride: "Erstimport – Dateien einlesen");
+                    phaseOverride: "Bilder einlesen");
                 ShowScannedPhotoFolder(scan);
                 // While a queued Tag series shares this presenter, the
                 // dialog itself owns the status-bar text as well.

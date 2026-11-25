@@ -478,8 +478,8 @@ public partial class MainWindow
                     folder, directory, recursive: true, progress, token, _resume,
                     durableInitialImport: requirePendingInitialImport,
                     durableScanKey: requirePendingInitialImport ? null : durableScanKey,
-                    catalogOwnedProgress: true,
-                    retryFailedFiles: !requirePendingInitialImport);
+                    preferFirstPass: true, catalogOwnedProgress: true,
+                    retryFailedFiles: false);
                 owner._scheduler.SourceAvailability.ConfirmAvailable(directory);
             }
             catch (IOException)
@@ -499,22 +499,6 @@ public partial class MainWindow
                 owner._folderRepository.CompleteInitialScan(
                     folder.Id, expectedGeneration, scanEpoch);
             }
-            if (Result.Failed == 0 && !requirePendingInitialImport)
-            {
-                var noLongerExisting = owner._folderRepository
-                    .PruneMissingCreatedDirectories(folder.Id, directory, token);
-                if (noLongerExisting.Count > 0 && !owner.Dispatcher.HasShutdownStarted)
-                {
-                    // Tree changes are a projection of the scanner's confirmed
-                    // physical inventory, not a second filesystem job.
-                    _ = owner.Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        foreach (var path in noLongerExisting)
-                            owner._createdEmptyFolderPaths.Remove(path);
-                        owner.RefreshFolderTree(preserveGalleryAnchor: true);
-                    }));
-                }
-            }
             return Task.CompletedTask;
         }
 
@@ -529,7 +513,7 @@ public partial class MainWindow
     {
         public void Report(ScanProgress value)
         {
-            scheduler.ReportProgress(key, "Bilder einlesen",
+            scheduler.ReportProgress(key, value.CatalogIndexed.HasValue ? "Bilder einlesen" : "Bestand überprüfen",
                 value.CatalogIndexed ?? value.ImageFilesSeen, 0, value.CurrentFile);
             display?.Report(value);
         }

@@ -258,9 +258,18 @@ public sealed class FolderScanner
         // Re-enumerate every current directory entry; previous filename
         // frontiers cannot establish that a file is unchanged or still exists.
         // Existing valid rows skip expensive import work by file identity.
-        var persistentScan = !catalogOwnedProgress &&
-            (durableInitialImport || durableScanKey is not null);
-        var completedDirectories = !persistentScan ? null : durableInitialImport
+        // Catalog-owned progress and directory-owned import frontiers are
+        // independent of a job's checked counter. P4 reconciliation never
+        // uses the import shortcut.
+        var catalogImport = catalogOwnedProgress && preferFirstPass && specificFile is null;
+        var persistentScan = catalogImport || (!catalogOwnedProgress &&
+            (durableInitialImport || durableScanKey is not null));
+        var directoryState = catalogImport
+            ? _folderRepository.GetDirectoryFirstPass(folder.Id, generation, scanRoot)
+            : null;
+        var completedDirectories = catalogImport
+            ? resume?.CompletedInitialDirectories ?? directoryState!.Completed
+            : !persistentScan ? null : durableInitialImport
             ? resume?.CompletedInitialDirectories ??
                 _folderRepository.GetCompletedInitialScanDirectories(
                     folder.Id, generation, scanEpoch)
@@ -269,7 +278,9 @@ public sealed class FolderScanner
                 : null;
         if (persistentScan && resume is not null)
             resume.CompletedInitialDirectories = completedDirectories;
-        var fileCursors = !persistentScan ? null : durableInitialImport
+        var fileCursors = catalogImport
+            ? resume?.InitialFileCursors ?? directoryState!.Cursors
+            : !persistentScan ? null : durableInitialImport
             ? resume?.InitialFileCursors ??
                 _folderRepository.GetInitialScanFileCursors(folder.Id, generation, scanEpoch)
             : durableScanKey is not null
@@ -283,7 +294,7 @@ public sealed class FolderScanner
         // Upgrade the old package's existing receipts before they are deleted
         // on completion. Background verification deliberately ignores this
         // directory frontier, so new/modified/deleted photos are checked later.
-        if (persistentScan && preferFirstPass && durableScanKey is not null)
+        if (!catalogImport && persistentScan && preferFirstPass && durableScanKey is not null)
         {
             _folderRepository.ImportFirstPassFromRegularScans(
                 folder.Id, generation);
@@ -352,7 +363,7 @@ public sealed class FolderScanner
                 StringComparer.OrdinalIgnoreCase);
             // A restarted partial directory did not revisit earlier files.
             // Its observed set is incomplete and must NEVER authorize deletes.
-            if (restartedPartialDirectories?.Contains(directory) != true &&
+            if (!catalogImport && restartedPartialDirectories?.Contains(directory) != true &&
                 !failedDirectories.Contains(directory))
             {
                 // A file read/decode failed: its path may not have reached
@@ -366,14 +377,16 @@ public sealed class FolderScanner
                     expectedGeneration: generation, expectedScanEpoch: scanEpoch);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            var committed = durableInitialImport
+            var committed = catalogImport
+                ? _folderRepository.SaveDirectoryFirstPass(folder.Id, generation, directory, null, completed: true)
+                : durableInitialImport
                 ? _folderRepository.CompleteInitialScanDirectory(
                     folder.Id, directory, generation, scanEpoch)
                 : _folderRepository.CompleteRegularScanDirectory(
                     durableScanKey!, directory, imageFilesSeen, generation, scanEpoch);
             if (!committed)
                 throw new OperationCanceledException("Directory checkpoint superseded.");
-            if ((durableInitialImport || preferFirstPass) &&
+            if (!catalogImport && (durableInitialImport || preferFirstPass) &&
                 !_folderRepository.SaveDirectoryFirstPass(
                     folder.Id, generation, directory, null, completed: true))
                 throw new OperationCanceledException(
@@ -408,6 +421,7 @@ public sealed class FolderScanner
                     completedDirectories,
                     fileCursors,
                     indexedFirstPassPaths,
+                    catalogImport,
                     persistentScan
                         ? resume is null
                             ? DirectoryCompleted
@@ -773,7 +787,9 @@ public sealed class FolderScanner
                         (!fileCursors.TryGetValue(directory, out var previous) ||
                          StringComparer.OrdinalIgnoreCase.Compare(fileName, previous) > 0))
                     {
-                        var committed = durableInitialImport
+                        var committed = catalogImport
+                            ? _folderRepository.SaveDirectoryFirstPass(folder.Id, generation, directory, fileName, completed: false)
+                            : durableInitialImport
                             ? _folderRepository.SaveInitialScanFileCursor(
                                 folder.Id, directory, fileName, generation, scanEpoch)
                             : _folderRepository.SaveRegularScanFile(
@@ -782,7 +798,7 @@ public sealed class FolderScanner
                         if (!committed)
                             throw new OperationCanceledException(
                                 "Scan source or checkpoint superseded.");
-                        if ((durableInitialImport || preferFirstPass) &&
+                        if (!catalogImport && (durableInitialImport || preferFirstPass) &&
                             !_folderRepository.SaveDirectoryFirstPass(
                                 folder.Id, generation, directory, fileName,
                                 completed: false))
@@ -921,7 +937,7 @@ public sealed class FolderScanner
                 localPreviewPath,
                 verifiedDirectoryPath,
                 readingNew,
-                previewCommitted, catalogIndexed));
+                previewCommitted, catalogImport ? catalogIndexed : null));
         }
     }
 
@@ -934,6 +950,7 @@ public sealed class FolderScanner
         IReadOnlySet<string>? completedDirectories = null,
         IReadOnlyDictionary<string, string>? fileCursors = null,
         IReadOnlySet<string>? alreadyIndexedPaths = null,
+        bool catalogImport = false,
         Action<string>? onDirectoryComplete = null)
     {
         var pending = new Stack<string>();
@@ -959,7 +976,7 @@ public sealed class FolderScanner
                 continue;
 
             var previouslyCompleted = completedDirectories?.Contains(directory) == true;
-            if (!directoryExcluded && previouslyCompleted && alreadyIndexedPaths is not null)
+            if (!directoryExcluded && previouslyCompleted && alreadyIndexedPaths is not null && !catalogImport)
             {
                 // Completion means the expensive first import finished here;
                 // not that future new files should be invisible to P0.
@@ -1002,7 +1019,13 @@ public sealed class FolderScanner
                     foreach (var file in files)
                     {
                         token.ThrowIfCancellationRequested();
-                        if (last is not null &&
+                        // For old catalogs without a reliable frontier, membership
+                        // in the committed LOCAL index is proof of an existing
+                        // import. Never stat or decode those files. An unknown
+                        // earlier filename is not silently skipped.
+                        if (catalogImport && alreadyIndexedPaths?.Contains(file) == true)
+                            continue;
+                        if (!catalogImport && last is not null &&
                             StringComparer.OrdinalIgnoreCase.Compare(
                                 Path.GetFileName(file), last) <= 0)
                             continue;

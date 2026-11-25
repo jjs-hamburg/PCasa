@@ -2138,6 +2138,31 @@ internal static class Program
         if (!first.Completed.Contains(a) || !first.Completed.Contains(b))
             throw new Exception("Completed directories lost their stable first-pass receipt.");
 
+        // New job using the actual application flags must not revisit
+        // catalogued files, even when the old job no longer exists.
+        var interruptedDirectory = Path.Combine(sandbox.Images, "Partial");
+        Directory.CreateDirectory(interruptedDirectory);
+        var existingFile = Path.Combine(interruptedDirectory, "b.jpg");
+        WriteJpeg(existingFile);
+        scanner.ScanFile(root, existingFile);
+        WriteJpeg(Path.Combine(interruptedDirectory, "a.jpg"));
+        var continued = scanner.ScanDirectory(root, interruptedDirectory, true,
+            durableScanKey: "manual:alpha65:continue", preferFirstPass: true,
+            catalogOwnedProgress: true);
+        if (continued.ImageFilesSeen != 1 || continued.Updated != 1 ||
+            continued.Removed != 0 ||
+            !folders.GetDirectoryFirstPass(root.Id, generation, root.LocalPath)
+                .Completed.Contains(interruptedDirectory))
+            throw new Exception("Actual import path revisited a confirmed file or lost directory state.");
+        var noRepeat = scanner.ScanDirectory(root, interruptedDirectory, true,
+            durableScanKey: "manual:alpha65:new-job", preferFirstPass: true,
+            catalogOwnedProgress: true);
+        if (noRepeat.ImageFilesSeen != 0)
+            throw new Exception("New job reopened a completed first-pass directory.");
+        // Isolate the original legacy-mode fixture from the extra files.
+        Directory.Delete(interruptedDirectory, true);
+        new CatalogRemovalService(db).RemovePath(root.Id, interruptedDirectory);
+
         // New photographs, changed photographs, and missing-file cleanup are
         // deliberately lower priority than finishing the already indexed
         // directory frontier. A new child directory is still traversed.
