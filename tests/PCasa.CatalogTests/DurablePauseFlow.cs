@@ -23,6 +23,7 @@ internal static class DurablePauseFlow
             ExerciseSharedUserAcceptanceOrder(dir);
             ExerciseLegacyFirstImportOrder(dir);
             ExerciseNewImportPreemptsOlderManualScan(dir).GetAwaiter().GetResult();
+            ExerciseAcceptedRecipeReservesRank(dir).GetAwaiter().GetResult();
             Console.WriteLine("DURABLE / AUTOMATIC PAUSE, RESUME, PRIORITY PASS");
             return 0;
         }
@@ -35,6 +36,66 @@ internal static class DurablePauseFlow
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    private static async Task ExerciseAcceptedRecipeReservesRank(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "preparing-recipe-rank.db"));
+        database.Initialize();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var yielded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var preparing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFactory = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var attempts = 0;
+        SchedulerTaskPackage Build(string key, string payload)
+        {
+            if (key == "recipe:newer")
+            {
+                preparing.TrySetResult();
+                releaseFactory.Task.GetAwaiter().GetResult();
+            }
+            var package = new SchedulerTaskPackage(key);
+            package.AddStep(async token =>
+            {
+                if (key == "recipe:older" && Interlocked.Increment(ref attempts) == 1)
+                {
+                    entered.TrySetResult();
+                    using var registration = token.Register(() => yielded.TrySetResult());
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                events.Enqueue(key);
+            });
+            return package;
+        }
+        await using var scheduler = new PCasaScheduler();
+        scheduler.EnableDurablePackages(database);
+        scheduler.RegisterDurablePackageType("manual-folder-scan-v1", Build);
+        var older = scheduler.EnqueueDurableRecipeAsync("recipe:older",
+            "manual-folder-scan-v1", "{}", SchedulerPriority.ManualAction,
+            SchedulerWorkKind.CatalogScan);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var newer = scheduler.EnqueueDurableRecipeAsync("recipe:newer",
+            "manual-folder-scan-v1", "{}", SchedulerPriority.ManualAction,
+            SchedulerWorkKind.CatalogScan);
+        try
+        {
+            await preparing.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await yielded.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            // The older job must stay yielded while the newer recipe is
+            // accepted but not yet executable. Independent UI reads still run.
+            await scheduler.EnqueueAsync("recipe:gallery",
+                SchedulerPriority.Interactive, _ => Task.CompletedTask,
+                workKind: SchedulerWorkKind.BrowseRead).WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.Delay(350);
+            if (older.IsCompleted || Volatile.Read(ref attempts) != 1)
+                throw new Exception("Older job overtook a newer accepted recipe.");
+        }
+        finally { releaseFactory.TrySetResult(); }
+        await Task.WhenAll(older, newer).WaitAsync(TimeSpan.FromSeconds(8));
+        if (!events.SequenceEqual(new[] { "recipe:newer", "recipe:older" }))
+            throw new Exception("Recipe preparation changed the global accepted order.");
+        Console.WriteLine("PASS: Accepted recipes reserve their rank before construction.");
     }
 
     private static async Task ExerciseNewImportPreemptsOlderManualScan(string dir)
