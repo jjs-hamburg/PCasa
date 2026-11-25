@@ -111,11 +111,11 @@ public sealed class SchedulerTaskView
                     var isWaiting = status == "Wartet";
                     var movable = isWaiting;
                     var retryable = status == "Fehler" && record.State == "deferred";
-                    // Tag write intents may already be staged in SQLite. The
-                    // scheduler must protect them against accidental deletion;
-                    // an unmanageable active task is not shown as actionable.
+                    // Current tag packages can cancel their own staged revisions.
+                    // Legacy recovery recipes have no exclusive ownership.
                     var deletable = record.State is "queued" or "deferred" or "running" or "paused" &&
-                        !(record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
+                        !(record.Type != "tag-edit-v2" &&
+                            record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
                             (record.CompletedSteps > 0 || record.State == "running" ||
                              record.Type.StartsWith("tag-recovery-", StringComparison.Ordinal)));
                     // Running but protected GPS/tag writes are STILL jobs.
