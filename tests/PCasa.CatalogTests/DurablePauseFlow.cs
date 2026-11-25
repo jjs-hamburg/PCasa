@@ -185,7 +185,20 @@ internal static class DurablePauseFlow
         await using var scheduler = new PCasaScheduler();
         scheduler.EnableDurablePackages(database, retireFileJobsOnSessionEnd: true);
         var tags = new ImageTagRepository(database);
-        tags.QueueTagEdit(new[] { imageId }, "unfinished", false);
+        void Stage(string owner, string keyword, bool remove)
+            => tags.QueueTagEdits(new[]
+            {
+                (ImageId: imageId, Edits: (IReadOnlyList<(string Tag, bool Remove)>)
+                    new[] { (Tag: keyword, Remove: remove) })
+            }, owner);
+        Stage("shutdown:staged-tags", "unfinished", false);
+        Stage("shutdown:older-tags", "shared", false);
+        Stage("shutdown:newer-tags", "shared", true);
+        database.Initialize();
+        if (tags.PendingImageIdsOwnedBy("shutdown:older-tags").Count != 0 ||
+            !tags.PendingImageIdsOwnedBy("shutdown:newer-tags").SequenceEqual(new[] { imageId }) ||
+            !tags.PendingImageIdsOwnedBy("shutdown:staged-tags").SequenceEqual(new[] { imageId }))
+            throw new Exception("Tag revision ownership did not survive overlapping edits and database reopen.");
         journal.Put("shutdown:staged-tags", "tag-edit-v2", "{}",
             SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
         journal.SetState("shutdown:staged-tags", "running", 1);
@@ -204,7 +217,7 @@ internal static class DurablePauseFlow
             if (read.IsCompleted || journal.Pending().Any(row => row.Key == "shutdown:staged-tags") ||
                 !new OriginalWriteFailureRepository(database).IsParked(
                     OriginalWriteFailureRepository.Tags, imageId) ||
-                tags.PendingEditsForImage(imageId).Count != 1)
+                tags.PendingEditsForImage(imageId).Count != 2)
                 throw new Exception("Shutdown did not park staged tag intents before blocked read disposal.");
         }
         finally { release.TrySetResult(); }
