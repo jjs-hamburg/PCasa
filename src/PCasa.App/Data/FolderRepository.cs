@@ -243,8 +243,8 @@ public sealed class FolderRepository
         if (string.IsNullOrWhiteSpace(directory) ||
             !Path.IsPathFullyQualified(directory)) return 0;
         var prefix = Path.TrimEndingDirectorySeparator(
-            Path.GetFullPath(directory).Replace('/', '\\'));
-        if (!prefix.EndsWith('\\')) prefix += "\\";
+            CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(directory)));
+        if (!prefix.EndsWith(Path.DirectorySeparatorChar)) prefix += Path.DirectorySeparatorChar;
         using var db = _database.OpenConnection();
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
@@ -575,7 +575,7 @@ public sealed class FolderRepository
                 change.Kind is not (BackgroundFolderChangeKind.ScanFile or
                     BackgroundFolderChangeKind.ScanDirectory or BackgroundFolderChangeKind.RemovePath))
                 throw new ArgumentException("Invalid inventory change.", nameof(changes));
-            var path = Path.GetFullPath(change.Path).Replace('/', '\\');
+            var path = CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(change.Path));
             var normalized = change with { Path = path };
             accepted.Add(AcceptAutomaticChange(db, tx,
                 $"automatic:{folderId}:{change.Kind}:{path}", normalized));

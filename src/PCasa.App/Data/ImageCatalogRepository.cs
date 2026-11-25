@@ -614,9 +614,9 @@ public sealed class CatalogScanSession : IDisposable
             ?? throw new ArgumentException("Destination has no parent directory.",
                 nameof(destinationPath));
         var canonicalDirectory =
-            FolderScanner.ResolveCanonicalFullPath(targetRoot, directory);
+            CatalogPathPolicy.ResolveCanonicalFullPath(targetRoot, directory);
         var canonicalDestination =
-            FolderScanner.ResolveCanonicalFullPath(targetRoot, destinationPath);
+            CatalogPathPolicy.ResolveCanonicalFullPath(targetRoot, destinationPath);
         // Check the source before creating any target directory catalog row.
         long? oldPhotoFolderId;
         using (var source = _connection.CreateCommand())

@@ -40,16 +40,6 @@ public sealed record ScanResult(
 
 public sealed class FolderScanner
 {
-    private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".gif",
-        ".webp", ".heic", ".heif", ".avif", ".jxl", ".psd",
-        ".arw", ".nef", ".nrw", ".cr2", ".cr3", ".dng",
-        ".raf", ".rw2", ".orf", ".pef", ".srw", ".crw"
-    };
-
-    static FolderScanner() => SupportedExtensions.UnionWith(VideoFormats.SupportedExtensions);
-
     /// <summary>
     /// Durable-for-this-session enumeration cursor. Scanner yields may restart
     /// the worker delegate, but never restart already traversed NAS folders.
@@ -120,7 +110,7 @@ public sealed class FolderScanner
     }
 
     public static bool IsSupportedImagePath(string path)
-        => SupportedExtensions.Contains(Path.GetExtension(path));
+        => CatalogMediaFormats.IsSupported(path);
 
     public ScanResult Scan(
         MonitoredFolder folder,
@@ -441,7 +431,7 @@ public sealed class FolderScanner
                 }
 
                 var extension = Path.GetExtension(localPath);
-                if (!SupportedExtensions.Contains(extension))
+                if (!CatalogMediaFormats.IsSupported(localPath))
                 {
                     if (resume is not null) resume.CurrentFile = null;
                     continue;
@@ -1092,26 +1082,6 @@ public sealed class FolderScanner
         }
     }
 
-    internal static string ResolveCanonicalFullPath(
-        MonitoredFolder folder,
-        string fullLocalPath)
-    {
-        var normalizedLocal = Path.GetFullPath(fullLocalPath);
-
-        if (string.Equals(
-            folder.LocalPath,
-            folder.CanonicalPath,
-            StringComparison.OrdinalIgnoreCase))
-        {
-            return normalizedLocal.Replace('/', '\\');
-        }
-
-        var suffix = Path.GetRelativePath(folder.LocalPath, normalizedLocal);
-        if (suffix == ".")
-        {
-            return folder.CanonicalPath.Replace('/', '\\');
-        }
-
-        return Path.Combine(folder.CanonicalPath, suffix).Replace('/', '\\');
-    }
+    internal static string ResolveCanonicalFullPath(MonitoredFolder folder, string fullLocalPath)
+        => CatalogPathPolicy.ResolveCanonicalFullPath(folder, fullLocalPath);
 }

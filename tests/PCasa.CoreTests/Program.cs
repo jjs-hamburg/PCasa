@@ -67,6 +67,31 @@ try
             throw new Exception("Portable scheduler did not preserve LIFO and durable completion.");
     }
 
+    // The inventory must recognize images without loading a decoder.
+    var media = Path.Combine(directory, "photos");
+    Directory.CreateDirectory(media);
+    var jpg = Path.Combine(media, "sample.jpg");
+    File.WriteAllText(jpg, "not a decoded image");
+    File.WriteAllText(Path.Combine(media, "ignore.txt"), "ignored");
+    var folders = new FolderRepository(database);
+    folders.Add(media);
+    var root = folders.GetAll().Single();
+    var check = new CatalogInventoryCheck(database).Check(root,
+        Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None);
+    if (check.CheckedFiles != 1 || check.Changes.Count != 1 ||
+        check.Changes[0].Path != jpg ||
+        check.Changes[0].Kind != BackgroundFolderChangeKind.ScanFile ||
+        !FolderExclusionRules.IsAtOrBelow(jpg, media) ||
+        FolderExclusionRules.IsAtOrBelow(media + "-other", media))
+        throw new Exception("Portable inventory or path boundary failed.");
+    if (CatalogPathPolicy.ResolveCanonicalFullPath(root, jpg) != jpg)
+        throw new Exception("Canonical path changed native directory separators.");
+    if (typeof(FolderRepository).Assembly != typeof(LocalDatabase).Assembly ||
+        typeof(ImageCatalogRepository).Assembly != typeof(LocalDatabase).Assembly ||
+        typeof(CatalogInventoryCheck).Assembly != typeof(LocalDatabase).Assembly ||
+        typeof(BackgroundFolderMonitor).Assembly != typeof(LocalDatabase).Assembly)
+        throw new Exception("Catalog or inventory still depends on the Windows host.");
+
     // These types must be delivered from the same WPF-free core assembly.
     var assembly = typeof(LocalDatabase).Assembly;
     if (assembly.GetName().Name != "PCasa.Core" ||

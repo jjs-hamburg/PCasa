@@ -23,6 +23,29 @@
     <Compile Include="../PCasa.App/Services/DurablePackageJournal.cs" Link="Services/DurablePackageJournal.cs" />
     <Compile Include="../PCasa.App/Services/SchedulerTaskOrderStore.cs" Link="Services/SchedulerTaskOrderStore.cs" />
     <Compile Include="../PCasa.App/Services/DurableGalleryTransferJournal.cs" Link="Services/DurableGalleryTransferJournal.cs" />
+    <Compile Include="../PCasa.App/Data/FolderRepository.cs" Link="Data/FolderRepository.cs" />
+    <Compile Include="../PCasa.App/Data/FolderManagerSelection.cs" Link="Data/FolderManagerSelection.cs" />
+    <Compile Include="../PCasa.App/Data/FolderManagerSelectionService.cs" Link="Data/FolderManagerSelectionService.cs" />
+    <Compile Include="../PCasa.App/Data/ImageCatalogRepository.cs" Link="Data/ImageCatalogRepository.cs" />
+    <Compile Include="../PCasa.App/Data/CatalogChanges.cs" Link="Data/CatalogChanges.cs" />
+    <Compile Include="../PCasa.App/Data/BrowseCacheRepository.cs" Link="Data/BrowseCacheRepository.cs" />
+    <Compile Include="../PCasa.App/Data/BrowseThumbnailProfileRepository.cs" Link="Data/BrowseThumbnailProfileRepository.cs" />
+    <Compile Include="../PCasa.App/Data/ImageViewerRepository.cs" Link="Data/ImageViewerRepository.cs" />
+    <Compile Include="../PCasa.App/Models/MonitoredFolder.cs" Link="Models/MonitoredFolder.cs" />
+    <Compile Include="../PCasa.App/Models/CatalogImage.cs" Link="Models/CatalogImage.cs" />
+    <Compile Include="../PCasa.App/Models/BrowseThumbnail.cs" Link="Models/BrowseThumbnail.cs" />
+    <Compile Include="../PCasa.App/Services/FolderExclusionRules.cs" Link="Services/FolderExclusionRules.cs" />
+    <Compile Include="../PCasa.App/Services/CatalogInventoryCheck.cs" Link="Services/CatalogInventoryCheck.cs" />
+    <Compile Include="../PCasa.App/Services/BackgroundFolderMonitor.cs" Link="Services/BackgroundFolderMonitor.cs" />
+    <Compile Include="../PCasa.App/Services/VideoFormats.cs" Link="Services/VideoFormats.cs" />
+    <Compile Include="../PCasa.App/Services/PathClassifier.cs" Link="Services/PathClassifier.cs" />
+    <Compile Include="../PCasa.App/Services/SourceFilePresence.cs" Link="Services/SourceFilePresence.cs" />
+    <Compile Include="../PCasa.App/Services/SourceFileLocks.cs" Link="Services/SourceFileLocks.cs" />
+    <Compile Include="../PCasa.App/Services/OriginalFileMutationReceipts.cs" Link="Services/OriginalFileMutationReceipts.cs" />
+    <Compile Include="../PCasa.App/Services/CatalogRemovalService.cs" Link="Services/CatalogRemovalService.cs" />
+    <Compile Include="../PCasa.App/Services/BackgroundScanSettings.cs" Link="Services/BackgroundScanSettings.cs" />
+    <Compile Include="../PCasa.App/Services/ImageExifReader.cs" Link="Services/ImageExifReader.cs" />
+    <Compile Include="../PCasa.App/Services/ExifToolProcessRegistry.cs" Link="Services/ExifToolProcessRegistry.cs" />
   </ItemGroup>
   <Import Project="../../PCasa.Version.props" />
 </Project>

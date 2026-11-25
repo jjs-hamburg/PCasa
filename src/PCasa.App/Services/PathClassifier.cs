@@ -19,6 +19,11 @@ public static class PathClassifier
 
         var normalizedInput = NormalizeLocalPath(path);
 
+        // Mounted Unix volumes already expose native absolute paths.
+        // Windows UNC resolution must never call mpr.dll on another host.
+        if (!OperatingSystem.IsWindows())
+            return new PathClassification(normalizedInput, normalizedInput, false);
+
         if (normalizedInput.StartsWith(@"\\", StringComparison.Ordinal))
         {
             return new PathClassification(normalizedInput, NormalizeUncPath(normalizedInput), true);

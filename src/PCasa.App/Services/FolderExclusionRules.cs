@@ -13,14 +13,14 @@ public static class FolderExclusionRules
 {
     public static string Normalize(string path)
         => Path.TrimEndingDirectorySeparator(
-            Path.GetFullPath(path).Replace('/', '\\'));
+            CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(path)));
 
     public static bool IsAtOrBelow(string path, string root)
     {
         var p = Normalize(path);
         var r = Normalize(root);
         return string.Equals(p, r, StringComparison.OrdinalIgnoreCase) ||
-            p.StartsWith(r.EndsWith('\\') ? r : r + "\\",
+            p.StartsWith(r.EndsWith(Path.DirectorySeparatorChar) ? r : r + Path.DirectorySeparatorChar,
                 StringComparison.OrdinalIgnoreCase);
     }
 

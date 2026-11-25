@@ -62,7 +62,7 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
             foreach (var file in directory.EnumerateFiles("*", options))
             {
                 token.ThrowIfCancellationRequested();
-                if (!FolderScanner.IsSupportedImagePath(file.FullName)) continue;
+                if (!CatalogMediaFormats.IsSupported(file.FullName)) continue;
                 count++;
                 var found = known.Remove(file.FullName, out var old);
                 // Local creation stamps can detect same-size replacements.
