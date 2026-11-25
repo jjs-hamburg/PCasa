@@ -198,32 +198,40 @@ internal sealed class GalleryDateFilterWindow : Window
         }
         else
         {
-            var century = value.Year / 100 * 100;
-            var decade = value.Year / 10 * 10;
+            const int pageSize = 20;
+            // Open at the selected year, with recent years first. There is
+            // only one grid: every numeric button is a real year selection.
+            var latest = Math.Max(DateTime.Today.Year, value.Year);
+            var pageTop = latest - (latest - value.Year) / pageSize * pageSize;
             void DrawYears()
             {
                 panel.Children.Clear();
+                var pageBottom = Math.Max(1, pageTop - pageSize + 1);
                 var header = new DockPanel { LastChildFill = true };
-                var prev = Choice("‹", () => { century = Math.Max(0, century-100); decade = century; DrawYears(); });
-                var next = Choice("›", () => { century = Math.Min(9900, century+100); decade = century; DrawYears(); });
+                var prev = Choice("‹", () =>
+                {
+                    pageTop = pageBottom - 1;
+                    DrawYears();
+                });
+                var next = Choice("›", () =>
+                {
+                    pageTop = Math.Min(9999, pageTop + pageSize);
+                    DrawYears();
+                });
+                prev.IsEnabled = pageBottom > 1;
+                next.IsEnabled = pageTop < 9999;
                 DockPanel.SetDock(prev, Dock.Left); DockPanel.SetDock(next, Dock.Right);
                 prev.Width = next.Width = 28;
                 header.Children.Add(prev); header.Children.Add(next);
-                header.Children.Add(new TextBlock { Text = century + " – " + (century+99),
+                header.Children.Add(new TextBlock { Text = pageBottom + " – " + pageTop,
                     TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
                 panel.Children.Add(header);
-                var decades = new UniformGrid { Columns = 5 };
-                for (int i = 0; i < 10; i++)
-                {
-                    var d = century + i*10;
-                    decades.Children.Add(Choice(d.ToString(), () => { decade = d; DrawYears(); }, decade == d));
-                }
-                panel.Children.Add(decades);
                 var years = new UniformGrid { Columns = 5 };
-                for (int i = Math.Max(1, decade); i <= Math.Min(9999, decade+9); i++)
+                for (int i = pageTop; i >= pageBottom; i--)
                 {
                     var year = i;
-                    years.Children.Add(Choice(year.ToString(), () => Pick(value.WithYear(year)), value.Year == year));
+                    years.Children.Add(Choice(year.ToString(_culture),
+                        () => Pick(value.WithYear(year)), value.Year == year));
                 }
                 panel.Children.Add(years);
             }

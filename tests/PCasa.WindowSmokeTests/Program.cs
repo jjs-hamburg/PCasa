@@ -121,6 +121,62 @@ internal static class Program
                     "_startupGalleryPresented", startupFlags)!.GetValue(window) is not true)
                 throw new Exception("First gallery frame was not presented.");
             Alpha58WindowSmoke.Run(window);
+            // Use the real WPF popup and actual Click handlers. Decade
+            // navigation must not masquerade as selectable year buttons.
+            {
+                const System.Reflection.BindingFlags privateInstance =
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic;
+                var mainType = typeof(PCasa.App.MainWindow);
+                var dateType = mainType.Assembly.GetType("PCasa.App.GalleryDateFilterWindow")!;
+                var initial = mainType.GetField("_galleryDateStartParts", privateInstance)!
+                    .GetValue(window)!;
+                var dateField = mainType.GetField("_galleryDateField", privateInstance)!
+                    .GetValue(window)!;
+                var picker = (Window)Activator.CreateInstance(dateType,
+                    [dateField, initial, null])!;
+                picker.Owner = window;
+                try
+                {
+                    picker.Show();
+                    Flush(picker);
+                    var buttons = (Button[])dateType.GetField("_startButtons", privateInstance)!
+                        .GetValue(picker)!;
+                    var yearButton = buttons[2];
+                    var selectedYear = int.Parse(yearButton.Content.ToString()!);
+                    yearButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Flush(picker);
+                    Popup CurrentPopup() => (Popup)dateType.GetField("_popup", privateInstance)!
+                        .GetValue(picker)!;
+                    StackPanel CurrentPanel() => (StackPanel)((Border)CurrentPopup().Child).Child;
+                    Button[] Years() => ((UniformGrid)CurrentPanel().Children[1])
+                        .Children.Cast<Button>().ToArray();
+                    var years = Years();
+                    var values = years.Select(button => int.Parse(button.Content.ToString()!)).ToArray();
+                    if (CurrentPanel().Children.Count != 2 || values.Length != 20 ||
+                        !values.SequenceEqual(Enumerable.Range(values[^1], 20).Reverse()) ||
+                        !values.Contains(selectedYear))
+                        throw new Exception("Year popup must open at the selected year with one descending chronological grid.");
+                    var firstPageBottom = values[^1];
+                    ((Button)((DockPanel)CurrentPanel().Children[0]).Children[0])
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    if (int.Parse(Years()[0].Content.ToString()!) != firstPageBottom - 1)
+                        throw new Exception("Older year page is not contiguous.");
+                    var chosen = Years()[3];
+                    var expected = chosen.Content.ToString();
+                    var opened = CurrentPopup();
+                    chosen.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Flush(picker);
+                    if (opened.IsOpen || yearButton.Content.ToString() != expected)
+                        throw new Exception("A year click must immediately commit and close its popup.");
+                    yearButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Flush(picker);
+                    if (!Years().Any(button => button.Content.ToString() == expected))
+                        throw new Exception("Reopening the year popup must show the selected year.");
+                }
+                finally { picker.Close(); }
+                Console.WriteLine("PASS: Year picker has one chronological grid, contiguous navigation and one-click commit.");
+            }
             var deferredSurface = new BrowseGallerySurface();
             deferredSurface.DeferViewportPageRequests(true);
             deferredSurface.SetViewport(1000, 600);
