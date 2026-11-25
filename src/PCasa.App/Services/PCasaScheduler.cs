@@ -1127,7 +1127,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         item.Kind == SchedulerWorkKind.DatabaseBackup ||
         (item.Priority == SchedulerPriority.ManualAction &&
          item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan
-             or SchedulerWorkKind.SourceProbe);
+             or SchedulerWorkKind.InitialImport or SchedulerWorkKind.SourceProbe);
 
     private bool HasManualSourceProbeUnsafe()
         => _runningWork.Any(item => item.ExecutionClass == ExecutorManualSourceProbe) ||
