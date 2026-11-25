@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../PCasa.Core/PCasa.Core.csproj" />
+    <PackageReference Include="NetVips" />
+    <Compile Include="../PCasa.App/Services/PackedThumbnailStore.cs" Link="Services/PackedThumbnailStore.cs" />
+  </ItemGroup>
+  <Import Project="../../PCasa.Version.props" />
+</Project>

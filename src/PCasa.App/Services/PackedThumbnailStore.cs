@@ -87,7 +87,7 @@ public sealed class PackedThumbnailStore : IImportThumbnailStore
         // source and subsequent tiers can then fail. Instead, decode the source once
         // to the largest required browse size and materialize that small image in RAM.
         var largestTier = tiers[^1];
-        using var largestPipeline = RawImageSource.LoadDisplayThumbnail(
+        using var largestPipeline = VipsImageSource.LoadDisplayThumbnail(
             sourcePath, originalSourcePath, largestTier, largestTier,
             cancellationToken);
         largestPipeline.SetProgress(new Progress<int>(_ => { }), cancellationToken);

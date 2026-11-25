@@ -107,6 +107,35 @@ try
     if (unchanged.Unchanged != 1 || unchanged.Updated != 0 || importMedia.Decodes != 1)
         throw new Exception("Portable scanner decoded an unchanged image again.");
 
+    // Real packed-cache append and offsets are platform-independent, even
+    // without an installed native decoder. Exercise the actual store.
+    var packRoot = Path.Combine(directory, "packs");
+    using (IImportThumbnailStore packStore = new PackedThumbnailStore(packRoot))
+    {
+        var firstBytes = new byte[] { 10, 20, 30 };
+        var secondBytes = new byte[] { 40, 50 };
+        var first = packStore.AppendPrepared(new[] {
+            new ImportThumbnailTier(96, firstBytes, 32, 24) }).Single();
+        var second = packStore.AppendPrepared(new[] {
+            new ImportThumbnailTier(96, secondBytes, 32, 24) }).Single();
+        if (first.PackFile != second.PackFile || first.ByteOffset != 0 ||
+            second.ByteOffset != firstBytes.Length ||
+            !File.ReadAllBytes(Path.Combine(packRoot, first.PackFile))
+                .SequenceEqual(firstBytes.Concat(secondBytes)))
+            throw new Exception("Portable pack append did not preserve offsets or bytes.");
+    }
+    var imaging = typeof(VipsImageSource).Assembly;
+    if (imaging.GetName().Name != "PCasa.Imaging" ||
+        typeof(VipsThumbnailCache).Assembly != imaging ||
+        typeof(PackedThumbnailStore).Assembly != imaging ||
+        typeof(NativeImageCachePolicy).Assembly != imaging ||
+        imaging.GetReferencedAssemblies().Any(reference =>
+            reference.Name is "PresentationFramework" or "PresentationCore" or
+                "WindowsBase" or "PCasa.App") ||
+        !VipsImageSource.IsRawPath("test.ARW") ||
+        VipsImageSource.Resolve(jpg) != jpg)
+        throw new Exception("Image processing still depends on the Windows host.");
+
     // These types must be delivered from the same WPF-free core assembly.
     var assembly = typeof(LocalDatabase).Assembly;
     if (assembly.GetName().Name != "PCasa.Core" ||

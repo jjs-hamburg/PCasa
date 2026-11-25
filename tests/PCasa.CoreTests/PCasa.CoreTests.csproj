@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/PCasa.Core/PCasa.Core.csproj" />
+    <ProjectReference Include="../../src/PCasa.Imaging/PCasa.Imaging.csproj" />
   </ItemGroup>
 </Project>

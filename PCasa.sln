@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PCasa.App", "src\PCasa.App\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PCasa.Core", "src\PCasa.Core\PCasa.Core.csproj", "{5EB00A36-57D7-4D64-B301-114A13F8CF8D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PCasa.Imaging", "src\PCasa.Imaging\PCasa.Imaging.csproj", "{3B2A29A2-97FD-4B6F-BD06-5F3B0B38466E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -20,5 +22,9 @@ Global
 		{5EB00A36-57D7-4D64-B301-114A13F8CF8D}.Debug|x64.Build.0 = Debug|Any CPU
 		{5EB00A36-57D7-4D64-B301-114A13F8CF8D}.Release|x64.ActiveCfg = Release|Any CPU
 		{5EB00A36-57D7-4D64-B301-114A13F8CF8D}.Release|x64.Build.0 = Release|Any CPU
+		{3B2A29A2-97FD-4B6F-BD06-5F3B0B38466E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{3B2A29A2-97FD-4B6F-BD06-5F3B0B38466E}.Debug|x64.Build.0 = Debug|Any CPU
+		{3B2A29A2-97FD-4B6F-BD06-5F3B0B38466E}.Release|x64.ActiveCfg = Release|Any CPU
+		{3B2A29A2-97FD-4B6F-BD06-5F3B0B38466E}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
