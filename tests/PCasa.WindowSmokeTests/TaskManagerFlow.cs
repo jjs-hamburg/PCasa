@@ -718,7 +718,7 @@ internal static class TaskManagerFlow
                             StringComparison.OrdinalIgnoreCase) ||
                         phase.Contains(UiLanguage.T("pausiert"),
                             StringComparison.OrdinalIgnoreCase) ||
-                        count != UiLanguage.Format("{0:N0} geprüft", 14975) ||
+                        count != UiLanguage.Format("{0:N0} eingelesen", 14975) ||
                         current != Path.GetFileName(preservedScanRoot) ||
                         parent != Path.GetDirectoryName(preservedScanRoot) ||
                         ((System.Windows.Controls.Image)progressWindow.FindName(
@@ -732,7 +732,7 @@ internal static class TaskManagerFlow
                         Processed = 14976
                     }, "Ordner aktualisieren", preservedScanRoot, 14975);
                 if (((TextBlock)progressWindow.FindName("CountText")).Text !=
-                        UiLanguage.Format("{0:N0} geprüft", 14976))
+                        UiLanguage.Format("{0:N0} eingelesen", 14976))
                     throw new Exception("Running scan did not advance from the confirmed restart cursor.");
             }
             finally
