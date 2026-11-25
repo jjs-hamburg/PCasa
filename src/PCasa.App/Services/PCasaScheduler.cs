@@ -87,7 +87,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // The controller owns deferred activation. A passive probe only reports
     // source readiness; it never starts, ranks, or resumes a package.
     private Task<(HashSet<string> Ready, HashSet<string> Reconnected)>? _deferredProbe;
-    private DateTimeOffset _nextDeferredProbe = DateTimeOffset.MinValue;
+    private long _nextDeferredProbeTick;
     private bool _deferredRecoveryReady;
     private Action<string, Task>? _durableRestoreObserver;
     private readonly Dictionary<string, Func<string, string, SchedulerTaskPackage>> _packageFactories = new(StringComparer.Ordinal);
@@ -649,7 +649,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         lock (_gate)
         {
             _deferredRecoveryReady = true;
-            _nextDeferredProbe = DateTimeOffset.MinValue;
+            Volatile.Write(ref _nextDeferredProbeTick, 0);
             SignalController();
         }
         return unresolved;
@@ -687,13 +687,25 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             PCasaDiagnostics.Write("Scheduler.DeferredReconcile", ex);
                         }
                     }
-                    if (_deferredProbe is null &&
-                        DateTimeOffset.UtcNow >= _nextDeferredProbe)
+                    if (Environment.TickCount64 >= Volatile.Read(ref _nextDeferredProbeTick))
                     {
-                        _nextDeferredProbe = DateTimeOffset.UtcNow.AddSeconds(2);
-                        // Never block priority arbitration on offline SMB I/O.
-                        // Probe merely reports due/reconnected identities.
-                        _deferredProbe = Task.Run(ProbeDeferredPackages);
+                        Volatile.Write(ref _nextDeferredProbeTick, Environment.TickCount64 + 2000);
+                        // Due retries are a local journal decision. A blocked
+                        // reconnect probe for an unrelated source must not
+                        // indefinitely prevent their activation.
+                        try
+                        {
+                            if (_durableJournal is { } retryJournal)
+                                ActivateDeferredPackages((
+                                    retryJournal.DueDeferredKeys().ToHashSet(StringComparer.Ordinal),
+                                    new HashSet<string>(StringComparer.Ordinal)));
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            PCasaDiagnostics.Write("Scheduler.DueRetry", ex);
+                        }
+                        if (_deferredProbe is null)
+                            _deferredProbe = Task.Run(ProbeDeferredPackages);
                     }
                 }
                 var durable = _durableJournal;
@@ -830,7 +842,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
         var journal = _durableJournal;
         if (journal is null || _shutdown.IsCancellationRequested)
             return (ready, reconnected);
-        ready.UnionWith(journal.DueDeferredKeys());
         foreach (var pending in journal.Pending())
         {
             _shutdown.Token.ThrowIfCancellationRequested();
