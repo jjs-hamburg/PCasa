@@ -2348,8 +2348,11 @@ internal static class TagFlow
             addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
             var beforeDirect = activeScheduler.Snapshot().Count(job =>
                 job.Key.StartsWith("tags:package:", StringComparison.Ordinal));
+            var previousSessionKeys = activeScheduler.Snapshot().Where(job => job.SessionWrite)
+                .Select(job => job.Key).ToHashSet(StringComparer.Ordinal);
             tagOk.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagOk));
             Until(window, () => activeScheduler.Snapshot().Any(job => job.SessionWrite &&
+                !previousSessionKeys.Contains(job.Key) &&
                 job.Key.StartsWith("direct:tags:", StringComparison.Ordinal) &&
                 job.State == SchedulerJobState.Completed) &&
                 (ImageTagRepository.ReadKeywords(otherImagePath) ?? "").Contains(directTag),
@@ -2357,6 +2360,7 @@ internal static class TagFlow
             if (activeScheduler.Snapshot().Count(job =>
                     job.Key.StartsWith("tags:package:", StringComparison.Ordinal)) != beforeDirect ||
                 activeScheduler.Snapshot().Count(job => job.SessionWrite &&
+                    !previousSessionKeys.Contains(job.Key) &&
                     job.Key.StartsWith("direct:tags:", StringComparison.Ordinal)) != 1 ||
                 !(new ImageTagRepository(db).GetKeywords(otherImageId) ?? "").Contains(directTag))
                 throw new Exception("Single-image Tag edit did not use one session-bound scheduler job.");
