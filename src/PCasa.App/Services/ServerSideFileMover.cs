@@ -26,10 +26,64 @@ public static class ServerSideFileMover
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool MoveFileEx(string source, string destination, uint flags);
 
+    // Unix rename APIs must NOT silently fall back to a copy (as File.Move
+    // may do). No-replace is atomic and fails closed on unsupported filesystems.
+    private const int UnixCrossDevice = 18;
+    private const int LinuxAtFdcwd = -100;
+    private const uint LinuxRenameNoReplace = 1;
+    private const uint MacRenameExclusive = 0x00000004;
+
+    [DllImport("libc", EntryPoint = "rename", SetLastError = true)]
+    private static extern int LinuxRename(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string source,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string destination);
+
+    [DllImport("libc", EntryPoint = "renameat2", SetLastError = true)]
+    private static extern int LinuxRenameAt2(int oldDirectory,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string source, int newDirectory,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string destination, uint flags);
+
+    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "renamex_np", SetLastError = true)]
+    private static extern int MacRename(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string source,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string destination, uint flags);
+
+    private static int TryUnixRename(string source, string destination, bool replace)
+    {
+        int result;
+        try
+        {
+            if (OperatingSystem.IsLinux())
+                result = replace ? LinuxRename(source, destination) :
+                    LinuxRenameAt2(LinuxAtFdcwd, source, LinuxAtFdcwd,
+                        destination, LinuxRenameNoReplace);
+            else if (OperatingSystem.IsMacOS())
+                result = MacRename(source, destination, replace ? 0 : MacRenameExclusive);
+            else
+                throw new PlatformNotSupportedException("Atomic file rename is unavailable.");
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            throw new PlatformNotSupportedException("Atomic file rename is unavailable.", ex);
+        }
+        return result == 0 ? 0 : Marshal.GetLastPInvokeError();
+    }
+
+    private static IOException UnixRenameError(int error)
+        => new IOException($"Datei konnte nicht serverseitig verschoben werden ({error}).");
+
     public static MoveMethod Move(string source, string destination,
         bool replace = false, string? stagingPath = null,
         CancellationToken cancellationToken = default)
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var error = TryUnixRename(source, destination, replace);
+            if (error == 0) return MoveMethod.Rename;
+            if (error != UnixCrossDevice) throw UnixRenameError(error);
+            return TransferAcrossVolumes(source, destination, replace, stagingPath, cancellationToken);
+        }
         var flags = replace ? MoveFileReplaceExisting : 0;
         // A newly created destination can be briefly opened by a scanner
         // or native image reader without FILE_SHARE_DELETE. MoveFileEx may
@@ -57,6 +111,12 @@ public static class ServerSideFileMover
                 unchecked((int)(0x80070000u | (uint)error)));
         }
 
+        return TransferAcrossVolumes(source, destination, replace, stagingPath, cancellationToken);
+    }
+
+    private static MoveMethod TransferAcrossVolumes(string source, string destination,
+        bool replace, string? stagingPath, CancellationToken cancellationToken)
+    {
         // Different volumes require physical transfer. Stage the entire file
         // on the destination volume, verify size, then rename there. Never
         // touch the original until the staged destination is complete.
@@ -72,7 +132,13 @@ public static class ServerSideFileMover
             if (new FileInfo(source).Length != new FileInfo(stage).Length)
                 throw new IOException("Kopiervorgang unvollständig; Quelldatei bleibt erhalten.");
             cancellationToken.ThrowIfCancellationRequested();
-            File.Move(stage, destination, overwrite: replace);
+            if (OperatingSystem.IsWindows())
+                File.Move(stage, destination, overwrite: replace);
+            else
+            {
+                var error = TryUnixRename(stage, destination, replace);
+                if (error != 0) throw UnixRenameError(error);
+            }
             File.Delete(source);
             return MoveMethod.CrossVolumeCopy;
         }

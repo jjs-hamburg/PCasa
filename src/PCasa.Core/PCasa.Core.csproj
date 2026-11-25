@@ -50,6 +50,11 @@
     <Compile Include="../PCasa.App/Services/FolderScanner.cs" Link="Services/FolderScanner.cs" />
     <Compile Include="../PCasa.App/Services/ExifToolKeywordWriter.cs" Link="Services/ExifToolKeywordWriter.cs" />
     <Compile Include="../PCasa.App/Services/AdaptiveMetadataWriteTimeout.cs" Link="Services/AdaptiveMetadataWriteTimeout.cs" />
+    <Compile Include="../PCasa.App/Services/ServerSideFileMover.cs" Link="Services/ServerSideFileMover.cs" />
+    <Compile Include="../PCasa.App/Services/CatalogRenameService.cs" Link="Services/CatalogRenameService.cs" />
+    <Compile Include="../PCasa.App/Services/FolderExclusionService.cs" Link="Services/FolderExclusionService.cs" />
+    <Compile Include="../PCasa.App/Services/ExternalCopyNames.cs" Link="Services/ExternalCopyNames.cs" />
+    <Compile Include="../PCasa.App/Data/GpsSourceIntegrityAudit.cs" Link="Data/GpsSourceIntegrityAudit.cs" />
   </ItemGroup>
   <Import Project="../../PCasa.Version.props" />
 </Project>

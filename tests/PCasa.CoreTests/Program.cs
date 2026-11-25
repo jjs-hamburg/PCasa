@@ -144,6 +144,57 @@ try
         Directory.EnumerateFiles(media).Any(path => Path.GetExtension(path) == ".xmp"))
         throw new Exception("RAW GPS unexpectedly modified the original or created a sidecar.");
 
+    // The actual folder-rename transaction retains identities, including
+    // child images, and uses the native path separator instead of backslash.
+    var renamed = Path.Combine(directory, "renamed-photos");
+    var renameService = new CatalogRenameService(database);
+    var renameId = Guid.NewGuid().ToString("N");
+    renameService.PrepareDirectoryRename(renameId, media, renamed, media, renamed);
+    Directory.Move(media, renamed);
+    renameService.RebaseDirectory(media, renamed, media, renamed, renameId);
+    if (catalog.GetImageId(Path.Combine(renamed, "sample.jpg")) != photoId ||
+        catalog.GetImageId(Path.Combine(renamed, "portable.arw")) != rawId ||
+        catalog.GetImageId(jpg) is not null ||
+        !renameService.PendingRenames().Single().CatalogApplied)
+        throw new Exception("Folder rename changed catalog identities or failed to rebase paths.");
+    renameService.CompleteDirectoryRename(renameId);
+    if (renameService.PendingRenames().Count != 0)
+        throw new Exception("Folder rename receipt was not completed.");
+
+    // Test the physical rename separately from the catalog. Existing targets
+    // must survive conflicts; cancelled operations must leave both paths alone.
+    var moveSource = Path.Combine(directory, "move-source.jpg");
+    var moveTarget = Path.Combine(directory, "move-target.jpg");
+    File.WriteAllText(moveSource, "original");
+    File.WriteAllText(moveTarget, "existing");
+    try
+    {
+        ServerSideFileMover.Move(moveSource, moveTarget);
+        throw new Exception("No-replace move overwrote an existing destination.");
+    }
+    catch (IOException) { }
+    if (File.ReadAllText(moveSource) != "original" ||
+        File.ReadAllText(moveTarget) != "existing")
+        throw new Exception("Conflicting move damaged source or target.");
+    using (var cancelledMove = new CancellationTokenSource())
+    {
+        cancelledMove.Cancel();
+        try
+        {
+            ServerSideFileMover.Move(moveSource, moveTarget, replace: true,
+                cancellationToken: cancelledMove.Token);
+            throw new Exception("Move ignored cancellation.");
+        }
+        catch (OperationCanceledException) { }
+    }
+    if (File.ReadAllText(moveSource) != "original" ||
+        File.ReadAllText(moveTarget) != "existing")
+        throw new Exception("Cancelled move damaged source or target.");
+    File.Delete(moveTarget);
+    if (ServerSideFileMover.Move(moveSource, moveTarget) != ServerSideFileMover.MoveMethod.Rename ||
+        File.Exists(moveSource) || File.ReadAllText(moveTarget) != "original")
+        throw new Exception("Same-volume move did not use native rename.");
+
     // Test the real video cache lifecycle with a codec-independent adapter.
     var video = Path.Combine(directory, "clip.mp4");
     File.WriteAllBytes(video, new byte[] { 1, 2, 3 });
@@ -210,7 +261,7 @@ try
             reference.Name is "PresentationFramework" or "PresentationCore" or
                 "WindowsBase" or "PCasa.App") ||
         !VipsImageSource.IsRawPath("test.ARW") ||
-        VipsImageSource.Resolve(jpg) != jpg)
+        VipsImageSource.Resolve(Path.Combine(renamed, "sample.jpg")) != Path.Combine(renamed, "sample.jpg"))
         throw new Exception("Image processing still depends on the Windows host.");
 
     // These types must be delivered from the same WPF-free core assembly.
@@ -222,6 +273,8 @@ try
         typeof(FolderScanner).Assembly != assembly ||
         typeof(TagCatalogOperations).Assembly != assembly ||
         typeof(GpsCatalogOperations).Assembly != assembly ||
+        typeof(CatalogRenameService).Assembly != assembly ||
+        typeof(ServerSideFileMover).Assembly != assembly ||
         typeof(DurablePackageJournal).Assembly != assembly ||
         typeof(SchedulerTaskOrderStore).Assembly != assembly ||
         typeof(DurableGalleryTransferJournal).Assembly != assembly ||
