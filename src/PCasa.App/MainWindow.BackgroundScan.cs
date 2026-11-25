@@ -747,6 +747,7 @@ public partial class MainWindow
             !Enum.TryParse<BackgroundFolderChangeKind>(parts[2], out var kind) ||
             kind is not (BackgroundFolderChangeKind.ScanFile or
                 BackgroundFolderChangeKind.ScanDirectory or
+                BackgroundFolderChangeKind.RemovePath or
                 BackgroundFolderChangeKind.RescanRoot) ||
             string.IsNullOrWhiteSpace(parts[3]))
             return null;
