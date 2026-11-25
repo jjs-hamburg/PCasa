@@ -789,9 +789,8 @@ public partial class MainWindow
 
         void Add(PendingBackgroundScan task, bool current)
         {
-            // Cache rebuilds and catalogue-only removals have no scanner
-            // cursor and are not directly interruptible. They are not
-            // actionable scan tasks and must not be misleading UI rows.
+            // Cache rebuilds are technical work; watcher removals are
+            // actionable catalog jobs with their own cancellation token.
             if (task.Kind is BackgroundFolderChangeKind.RecoverCache or
                 BackgroundFolderChangeKind.RescanRoot) return;
             var key = AutomaticTaskKey(task);
@@ -860,7 +859,7 @@ public partial class MainWindow
         // One permanent review row, even if no root is reachable.
         var review = snapshots.LastOrDefault(job =>
             job.Key == PCasaScheduler.ContinuousReviewKey);
-        var reviewing = review?.State == SchedulerJobState.Running;
+        var reviewing = review?.State is SchedulerJobState.Running or SchedulerJobState.YieldRequested;
         var pausedReview = _scheduler.IsExternalTaskPaused(
             PCasaScheduler.ContinuousReviewKey);
         rows.Add(new AutomaticScanTask(PCasaScheduler.ContinuousReviewKey,
@@ -1308,6 +1307,36 @@ public partial class MainWindow
                         "Taskmanager changed the pending root-review order.");
                 var request = requests[nextRequestIndex];
                 var taskKey = AutomaticTaskKey(request);
+                // A newly accepted/promoted watcher job must not wait
+                // behind the remainder of an older in-flight array.
+                var placement = _scheduler.EffectiveTaskPlacement(taskKey,
+                    (SchedulerPriority)AutomaticTaskPriority(request.Kind), request.QueueOrder);
+                if (_backgroundPending.Values.Where(IsRunnableBackgroundRequest)
+                    .Select(pending => _scheduler.EffectiveTaskPlacement(
+                        AutomaticTaskKey(pending),
+                        (SchedulerPriority)AutomaticTaskPriority(pending.Kind), pending.QueueOrder))
+                    .Any(other => other.Priority < placement.Priority ||
+                        (other.Priority == placement.Priority &&
+                         other.QueueOrder < placement.QueueOrder)))
+                {
+                    _backgroundOrderChanged = true;
+                    throw new OperationCanceledException();
+                }
+                // A newer revision may have arrived while this request was
+                // waiting in the array. Do not execute an obsolete receipt.
+                if (request.Revision is not null)
+                {
+                    var latestReceipt = _folderRepository.GetPendingAutomaticChange(taskKey);
+                    if (latestReceipt?.Revision != request.Revision)
+                    {
+                        RequeueBackgroundRequest(request, request.Resume, request.ResumeGeneration);
+                        requests[nextRequestIndex] = request with
+                        {
+                            Resume = null, ResumeGeneration = null
+                        };
+                        continue;
+                    }
+                }
                 if (request.Kind == BackgroundFolderChangeKind.RescanRoot &&
                     _scheduler.IsExternalTaskPaused(PCasaScheduler.ContinuousReviewKey))
                 {
