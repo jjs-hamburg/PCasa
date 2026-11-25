@@ -1539,20 +1539,12 @@ internal static class Program
                 !ReferenceEquals(notToggle.Parent, searchGroup) ||
                 !ReferenceEquals(searchField.Parent, searchGroup.Children[^1]))
                 throw new Exception("Sort and search must retain their original separate group frames.");
-            var dateFrame = window.FindName("GalleryDateFilterFrame") as Border
-                ?? throw new Exception("Date filter frame missing.");
-            var fromDate = window.FindName("GalleryDateFromButton") as Button
-                ?? throw new Exception("From date missing.");
-            var untilDate = window.FindName("GalleryDateUntilButton") as Button
-                ?? throw new Exception("Until date missing.");
-            var untilCheck = window.FindName("GalleryDateUntilCheck") as CheckBox
-                ?? throw new Exception("Optional until checkbox missing.");
-            if (untilDate.Visibility != Visibility.Collapsed || untilCheck.IsChecked == true ||
-                !fromDate.IsEnabled)
-                throw new Exception("Date filter must initially show only the start date.");
+            if (window.FindName("GalleryDateFilterFrame") is not null ||
+                window.FindName("GalleryAttributeDateMenu") is not MenuItem { Tag: "Date" })
+                throw new Exception("Date filter must be inside the existing filter dropdown.");
             if (!searchRow.Children.Cast<UIElement>().SequenceEqual(
-                    new UIElement[] { invertFrame, attributeFrame, dateFrame, sortFrame, searchFrame }))
-                throw new Exception("Filter must be inserted before the unchanged sort/search order.");
+                    new UIElement[] { invertFrame, attributeFrame, sortFrame, searchFrame }))
+                throw new Exception("Date filter changed the original toolbar width/order.");
             if (Math.Abs(sortFrame.ActualHeight - searchFrame.ActualHeight) > .5 ||
                 !Equals(sortFrame.BorderBrush, searchFrame.BorderBrush))
                 throw new Exception("Group frames differ in height or border brightness.");

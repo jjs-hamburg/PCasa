@@ -204,6 +204,7 @@ public sealed class ImageExifReader : IImportExifReader
             if (obj.TryGetProperty(prefix + name, out var val))
                 return AsText(val);
         }
+        if (obj.TryGetProperty(name, out var ungrouped)) return AsText(ungrouped);
         foreach (var prop in obj.EnumerateObject())
             if (prop.Name.EndsWith(":" + name, StringComparison.Ordinal) ||
                 prop.Name.EndsWith("]" + name, StringComparison.Ordinal))

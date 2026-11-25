@@ -233,14 +233,14 @@ public partial class MainWindow
         // The compact property selector is an additional AND criterion
         // of this ONE gallery projection; its inversion complements only
         // that property, not the independent WAS/WO/NOT search.
-        if (AttributeFilterActive)
+        if (DateFilterActive)
+            scope = GalleryFolderOrdering.FilterDateRange(scope, _galleryDateField,
+                _galleryDateFrom!.Value, _galleryDateUntil,
+                _appearance.GalleryAttributeFilterInverted);
+        else if (AttributeFilterActive)
             scope = scope.Where(image => AttributeFilterMatches(
                 image, CurrentAttributeFilter,
                 _appearance.GalleryAttributeFilterInverted)).ToArray();
-
-        if (DateFilterActive)
-            scope = scope.Where(image => GalleryFolderOrdering.MatchesCaptureDate(
-                image, _galleryDateFrom, _galleryDateUntil)).ToArray();
 
         // GPS bounds are one criterion of the existing gallery filter,
         // not an independent list, renderer or thumbnail ownership.

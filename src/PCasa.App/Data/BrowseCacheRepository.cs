@@ -1,3 +1,4 @@
+using PCasa.App.Services;
 using Microsoft.Data.Sqlite;
 using PCasa.App.Models;
 
@@ -138,7 +139,10 @@ public sealed class BrowseCacheRepository
                 i.file_size,
                 i.modified_utc_ticks,
                 i.created_utc_ticks,
-                x.date_time_original,
+                COALESCE(NULLIF(TRIM(x.date_time_original),''), CASE WHEN json_valid(x.exif_json) THEN
+                    COALESCE(json_extract(x.exif_json,'$."ExifIFD:DateTimeOriginal"'),
+                             json_extract(x.exif_json,'$."EXIF:DateTimeOriginal"'),
+                             json_extract(x.exif_json,'$.DateTimeOriginal')) END),
                 i.width,
                 i.height,
                 -- Legacy JPEG fallbacks are unsafe for PSD: they may
@@ -195,35 +199,16 @@ public sealed class BrowseCacheRepository
                 reader.GetInt64(13),
                 reader.IsDBNull(14) ? null : reader.GetInt64(14),
                 reader.IsDBNull(15)
-                    ? null : ParseCaptureTime(reader.GetString(15)),
+                    ? null : GalleryFolderOrdering.ParseCaptureDateTicks(reader.GetString(15)),
                 reader.GetInt32(16),
                 reader.GetInt32(17),
                 reader.IsDBNull(18) ? null : reader.GetString(18),
-                HasImportError: reader.GetInt32(19) != 0));
+                HasImportError: reader.GetInt32(19) != 0,
+                HasInvalidCaptureDate: !reader.IsDBNull(15) &&
+                    GalleryFolderOrdering.ParseCaptureDateTicks(reader.GetString(15)) is null));
         }
 
         return result;
-    }
-
-    // Reuse across large 500k-image index reads; do not allocate an array
-    // of format strings for each catalog row.
-    private static readonly string[] CaptureTimePatterns =
-    [
-        "yyyy:MM:dd HH:mm:ss", "yyyy:MM:dd HH:mm:ss.FFF",
-        "yyyy-MM-dd HH:mm:ss", "yyyy-MM-ddTHH:mm:ss",
-        "yyyy-MM-ddTHH:mm:ss.FFF", "yyyy-MM-ddTHH:mm:ssK"
-    ];
-
-    private static long? ParseCaptureTime(string source)
-    {
-        // Camera EXIF uses YYYY:MM:DD HH:mm:ss. Importers also write ISO.
-        // A missing/invalid source date is not an epoch date; the comparer
-        // explicitly falls back to file creation then modification.
-        return DateTime.TryParseExact(source.Trim(), CaptureTimePatterns,
-            System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.AllowWhiteSpaces,
-            out var timestamp)
-            ? timestamp.Ticks : null;
     }
 
     public BrowseCacheWriteSession CreateWriteSession()

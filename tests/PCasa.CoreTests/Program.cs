@@ -79,6 +79,22 @@ try
             new DateTime(2026, 1, 1), null))
         throw new Exception("Gallery date filtering lost inclusive days or capture-date precedence.");
 
+    var dateRows = new[] {
+        dateImage with { ModifiedUtcTicks = new DateTime(2020, 6, 15, 12, 0, 0, DateTimeKind.Utc).Ticks },
+        dateImage with { ImageId = 2, TakenUtcTicks = GalleryFolderOrdering.ParseCaptureDateTicks("1985/07/15 14:32:10") },
+        dateImage with { ImageId = 3, TakenUtcTicks = null, HasInvalidCaptureDate = true },
+        dateImage with { ImageId = 4, TakenUtcTicks = GalleryFolderOrdering.ParseCaptureDateTicks("1990:06:01 12:00:00+02:00") }
+    };
+    if (!GalleryFolderOrdering.FilterDateRange(dateRows, GallerySortField.Captured,
+            new DateTime(1985,1,1), new DateTime(1985,12,31), false).Select(x=>x.ImageId).SequenceEqual(new long[]{1,2}) ||
+        !GalleryFolderOrdering.FilterDateRange(dateRows, GallerySortField.Created,
+            new DateTime(2025,12,30), new DateTime(2026,1,2), false).Select(x=>x.ImageId).SequenceEqual(new long[]{1,2,3,4}) ||
+        !GalleryFolderOrdering.FilterDateRange(dateRows, GallerySortField.Modified,
+            new DateTime(2020,6,14), new DateTime(2020,6,16), false).Select(x=>x.ImageId).SequenceEqual(new long[]{1}) ||
+        !GalleryFolderOrdering.FilterDateRange(dateRows, GallerySortField.Captured,
+            new DateTime(1985,1,1), new DateTime(1985,12,31), true).Select(x=>x.ImageId).SequenceEqual(new long[]{3,4}))
+        throw new Exception("Date projection failed to respect field selection, formats, invalid dates or inversion.");
+
     // The inventory must recognize images without loading a decoder.
     var media = Path.Combine(directory, "photos");
     Directory.CreateDirectory(media);
