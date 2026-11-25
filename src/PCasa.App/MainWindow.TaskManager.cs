@@ -119,7 +119,7 @@ public partial class MainWindow
                 _folderRepository.SetPendingFirstImportPaused(folderId, true)));
         if (!paused) return false;
         _initialScanAttempted.Add(folderId);
-        if (_initialScanActive && _activeScanFolderId == folderId &&
+        if (_initialScanActive && _initialScanTaskKey == key &&
             _initialScanCancellation is { IsCancellationRequested: false } active)
         {
             _initialScanStopRequested = true;
