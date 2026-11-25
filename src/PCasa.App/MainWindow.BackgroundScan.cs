@@ -1216,7 +1216,11 @@ public partial class MainWindow
 
     private async void BackgroundDebounceTimer_Tick(object? sender, EventArgs e)
     {
-        if (_externalEditPauseActive) return;
+        if (_externalEditPauseActive || _shutdownStarted || _backgroundMonitorClosing)
+        {
+            _backgroundDebounceTimer?.Stop();
+            return;
+        }
         _backgroundDebounceTimer?.Stop();
 
         // Accepted watcher jobs enter the same scheduler arbitration as
@@ -1247,6 +1251,9 @@ public partial class MainWindow
         // A paused-only queue must not spin the debounce timer.
         if (!HasRunnableBackgroundRequests())
             return;
+        var pausedRequests = _backgroundPending
+            .Where(entry => !IsRunnableBackgroundRequest(entry.Value))
+            .ToArray();
         var requests = _backgroundPending.Values
             .Where(IsRunnableBackgroundRequest)
             .Select(request =>
@@ -1264,13 +1271,13 @@ public partial class MainWindow
             .ThenBy(item => item.Request.Path,
                 StringComparer.OrdinalIgnoreCase)
             .Select(item => item.Request)
-            .Take(1)
             .ToArray();
-        // Keep every other accepted request in the authoritative waiting
-        // collection. Re-evaluate the global order at every safe boundary,
-        // rather than draining a previously sorted private batch.
-        foreach (var selected in requests)
-            _backgroundPending.Remove(AutomaticTaskKey(selected));
+        // Retain the existing publication batch to avoid a gallery rebuild
+        // per watcher event. Every individual request enters the scheduler
+        // separately, and new ranks are reconsidered at every boundary.
+        _backgroundPending.Clear();
+        foreach (var pausedRequest in pausedRequests)
+            _backgroundPending[pausedRequest.Key] = pausedRequest.Value;
         _backgroundInFlight = requests;
         _backgroundInFlightIndex = 0;
         RefreshFolderStatusVisuals();
