@@ -57,6 +57,7 @@ public partial class MainWindow : Window
         _scheduler.RegisterDurablePackageType("tag-edit-v2", BuildTagEditPackage);
         _scheduler.RegisterDurablePackageType("gps-edit-v1", BuildGpsEditPackage);
         _scheduler.RegisterDurablePackageType("gps-edit-v2", BuildGpsEditPackageV2);
+        _scheduler.RegisterDurablePackageType("capture-date-from-name-v1", BuildCaptureDatePackage);
         _scheduler.RegisterDurablePackageType("gpx-write-v1", BuildGpxWritePackage);
         _scheduler.RegisterDurablePackageType("undo-restore-v1", BuildUndoRestorePackage);
         _scheduler.RegisterDurablePackageType("image-crop-v1", BuildCropPackage);

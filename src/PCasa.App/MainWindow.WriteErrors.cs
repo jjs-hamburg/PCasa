@@ -26,14 +26,14 @@ public partial class MainWindow
     {
         var errors = _originalWriteFailures;
         if (errors.IsParked(kind, imageId,
-                kind == OriginalWriteFailureRepository.Gps ? packageKey : null))
+                kind == OriginalWriteFailureRepository.Tags ? null : packageKey))
             return false;
         try
         {
             write();
             // A tag write returning with pending newer revisions is not
             // necessarily a completed intent; do not clear its error then.
-            if (kind == OriginalWriteFailureRepository.Gps)
+            if (kind != OriginalWriteFailureRepository.Tags)
                 errors.ClearIfOwned(kind, imageId, packageKey);
             else if (new ImageTagRepository(_database)
                 .PendingEditsForImage(imageId).Count == 0)
@@ -287,6 +287,21 @@ public partial class MainWindow
             // Old retry recipes are never recreated from an obsolete tag set.
             errors.ClearIfOwned(issue.Kind, issue.ImageId, issue.PackageKey);
             StartPendingTagDrain();
+            return;
+        }
+
+        if (issue.Kind == OriginalWriteFailureRepository.CaptureDate)
+        {
+            var stored = errors.OriginalRecipe(issue.PackageKey);
+            if (stored is null || stored.Value.Type != "capture-date-from-name-v1")
+                throw new InvalidDataException("Originaler Datumsauftrag nicht mehr vorhanden.");
+            var originalDate = JsonSerializer.Deserialize<CaptureDateRecipe>(stored.Value.Payload)
+                ?? throw new InvalidDataException("Datumsrezept nicht lesbar.");
+            var index = Array.IndexOf(originalDate.ImageIds, issue.ImageId);
+            if (index < 0) return;
+            QueueCaptureDateRecipe(new CaptureDateRecipe([issue.ImageId],
+                [originalDate.Dates[index]], originalDate.MissingOnly));
+            errors.ClearIfOwned(issue.Kind, issue.ImageId, issue.PackageKey);
             return;
         }
 

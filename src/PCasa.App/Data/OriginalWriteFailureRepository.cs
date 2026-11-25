@@ -21,6 +21,7 @@ public sealed class OriginalWriteFailureRepository
 
     public const string Gps = "gps";
     public const string Tags = "tags";
+    public const string CaptureDate = "capture-date";
     public const int MaximumAttempts = 3;
 
     public sealed record FailedFile(string Kind, string PackageKey, long ImageId,
