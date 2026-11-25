@@ -240,9 +240,10 @@ internal static class TaskManagerFlow
                 journal.Pending().Any(item => item.Key == "taskmanager:b"))
                 throw new Exception("Deleting a queued task did not durably cancel it.");
 
-            // A started tag package is allowed to hold user-visible tag
-            // intent in SQLite. Deleting it must NOT silently orphan data.
-            journal.Put("taskmanager:protected", "tag-edit-v2", "{}",
+            // Legacy tag recipes without ownership must remain protected.
+            // Current owned tag cancellation is exercised against the real
+            // catalog in DurablePauseFlow.
+            journal.Put("taskmanager:protected", "tag-edit-v1", "{}",
                 SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
             journal.SetState("taskmanager:protected", "running", 1);
             var refused = false;
