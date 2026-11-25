@@ -298,6 +298,10 @@ public sealed class LocalDatabase
                 """;
             pendingTags.ExecuteNonQuery();
         }
+        // The current revision carries the identity of the accepting job.
+        // Older catalogs have no such identity; retain their pending edits
+        // for explicit review instead of attributing them to a new job.
+        EnsureColumn(connection, "pending_tag_edits", "owner_key", "TEXT NULL");
 
         // The last used tags are shared by every sidebar opening in this local
         // catalogue, rather than being lost with the window's in-memory state.
