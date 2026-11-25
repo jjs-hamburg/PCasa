@@ -49,7 +49,7 @@ public partial class MainWindow : Window
         // before scheduler recovery can start any original-file write.
         _originalWriteFailures = new OriginalWriteFailureRepository(_database);
         _durableGalleryTransfers = new DurableGalleryTransferJournal(_database);
-        _scheduler.EnableDurablePackages(_database, retireFileJobsOnSessionEnd: true);
+        _scheduler.EnableDurablePackages(_database);
         _durableGalleryTransfers.PruneCompleted();
         _scheduler.RegisterDurablePackageType("tag-recovery-v1", BuildTagRecoveryPackage);
         _scheduler.RegisterDurablePackageType("tag-recovery-v2", BuildTagRecoveryPackageV2);

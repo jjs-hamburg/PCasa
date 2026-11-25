@@ -28,7 +28,8 @@ public sealed class GpsSourceIntegrityAudit(LocalDatabase database)
                    CASE WHEN json_valid(x.exif_json)=1
                      THEN json_extract(x.exif_json,'$.SourceFile')
                      ELSE NULL END,
-                   x.gps_latitude, x.gps_longitude
+                   x.gps_latitude, x.gps_longitude,
+                   EXISTS(SELECT 1 FROM raw_gps_overrides r WHERE r.image_id=i.id)
               FROM images i JOIN image_exif x ON x.image_id=i.id
              WHERE i.folder_id=$root AND i.id>$after
              ORDER BY i.id LIMIT $limit;
@@ -61,6 +62,10 @@ public sealed class GpsSourceIntegrityAudit(LocalDatabase database)
                 mismatched.Add(expectedPath);
                 continue;
             }
+            // RAW GPS overrides are deliberate catalog values, not corruption.
+            // The source identity must still match, but its native coordinates
+            // are not the authority when an override exists.
+            if (reader.GetBoolean(6)) continue;
             // Even with correct provenance, older catalog code could have
             // materialized another photo's latitude/longitude columns.
             // The embedded native EXIF JSON is independent evidence: repair

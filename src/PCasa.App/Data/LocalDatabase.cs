@@ -815,6 +815,68 @@ public sealed class LocalDatabase
                 transaction.Commit();
             }
         }
+        ResetAlpha64TaskState(connection);
+    }
+
+    // One-time, transactional task reset authorized for the Alpha.64 upgrade.
+    // Never touch original files, source generations, indexed images,
+    // thumbnails, exclusion rules or directory-owned import receipts.
+    private static void ResetAlpha64TaskState(SqliteConnection connection)
+    {
+        using var tx = connection.BeginTransaction();
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            CREATE TABLE IF NOT EXISTS catalog_migrations (
+                migration_key TEXT PRIMARY KEY);
+            INSERT OR IGNORE INTO catalog_migrations(migration_key)
+                VALUES ('alpha64-task-reset');
+            """;
+        // INSERT is the last statement, but determine its effect explicitly.
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = "SELECT changes();";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) == 0)
+        {
+            tx.Commit();
+            return;
+        }
+
+        // Cancel all old jobs, but retain unconfirmed tag intents as parked
+        // write failures. They must not be auto-drained into a new package.
+        cmd.CommandText = """
+            INSERT INTO original_write_failures
+                (kind,image_id,package_key,file_path,attempts,last_error,last_attempt_utc,resolved)
+            SELECT DISTINCT 'tags',p.image_id,'tags:alpha64-reset:' || p.image_id,
+                i.local_path,3,'Alpha.64: bisheriger Auftrag zurückgesetzt.',
+                strftime('%Y-%m-%dT%H:%M:%fZ','now'),0
+            FROM pending_tag_edits p JOIN images i ON i.id=p.image_id
+            WHERE 1=1
+            ON CONFLICT(kind,image_id) DO UPDATE SET attempts=MAX(attempts,3),resolved=0;
+            DELETE FROM automatic_change_jobs;
+            DELETE FROM scan_resume_jobs;
+            UPDATE monitored_folders SET initial_scan_paused=0,
+                initial_scan_deleted=CASE WHEN initial_scan_pending=1 THEN 1 ELSE 0 END,
+                initial_scan_queue_order=0;
+            UPDATE scan_root_review SET requested_priority=4,retry_after_utc=NULL;
+            """;
+        cmd.ExecuteNonQuery();
+
+        // These two tables are created lazily by the scheduler, so a fresh
+        // database may not have either one yet. The transaction includes the
+        // migration marker and all changes: crash/retry cannot split them.
+        foreach (var table in new[] { "scheduler_packages", "scheduler_task_order" })
+        {
+            cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=$table);";
+            cmd.Parameters.Clear();
+            cmd.Parameters.AddWithValue("$table", table);
+            if (Convert.ToInt32(cmd.ExecuteScalar()) != 0)
+            {
+                cmd.Parameters.Clear();
+                cmd.CommandText = "DELETE FROM " + table + ";";
+                cmd.ExecuteNonQuery();
+            }
+        }
+        tx.Commit();
     }
 
     private static void EnsureColumn(
