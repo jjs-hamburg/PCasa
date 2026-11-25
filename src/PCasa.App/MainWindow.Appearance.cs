@@ -196,7 +196,6 @@ public partial class MainWindow
         // Freeze new dispatch synchronously. The writer currently inside its
         // original-file transaction will finish and checkpoint, then yield.
         _databaseBackupCancellation?.Cancel();
-        if (!_directImageWriteStarted) _directImageWriteCancellation?.Cancel();
         _scheduler.BeginGracefulShutdown();
         // Stop producers immediately. BackgroundScan_WindowClosed runs only
         // AFTER disposal and is too late to stop startup probes/inventories.
@@ -212,7 +211,7 @@ public partial class MainWindow
         // uninterruptible file transaction or a slow NAS cancellation.
         // Make this visible before any slow cleanup, not after it.
         var busy = _databaseBackupTask is { IsCompleted: false } ||
-            _directImageWriteTask is { IsCompleted: false } ||
+            _scheduler.HasSessionWrites ||
             ExifToolProcessRegistry.LiveCount > 0 ||
             ExifToolKeywordWriter.HasLiveSessions ||
             _scheduler.Snapshot().Any(job => job.State is
@@ -246,12 +245,6 @@ public partial class MainWindow
                 try { await backup; }
                 catch (OperationCanceledException) { }
                 catch (Exception ex) { PCasaDiagnostics.Write("Shutdown.Backup", ex); }
-            }
-            if (_directImageWriteTask is { } directWrite)
-            {
-                try { await directWrite; }
-                catch (OperationCanceledException) { }
-                catch (Exception ex) { PCasaDiagnostics.Write("Shutdown.DirectImageWrite", ex); }
             }
             await Task.Run(async () =>
             {

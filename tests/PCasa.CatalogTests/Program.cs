@@ -202,6 +202,7 @@ internal static class Program
         Run("Catalog cleanup has indexed pack and root lookups", CatalogCleanupIndexesExist, failures);
         Run("Unicode JPEG keyword leaves pixels untouched", JpegUnicodeTagPreservesPixels, failures);
         Run("EXIF fields survive tag write and removal", JpegExifFieldsSurviveTags, failures);
+        Run("Filename capture date changes only native metadata and retains the catalog thumbnail", CaptureDateFromFilenameRoundTrip, failures);
         Run("JPEG EXIF orientation 6/8 is honored by viewer without altering original", JpegExifOrientationViewer, failures);
         Run("Viewer uses decoded EXIF axes at original pixel size", ViewerDecodedGeometry, failures);
         Run("RAW preview applies container orientation exactly once", RawPreviewOrientation, failures);
@@ -7176,6 +7177,71 @@ internal static class Program
             if (!shaBefore.SequenceEqual(SHA256.HashData(File.ReadAllBytes(path))))
                 throw new Exception("Viewing a JPEG unexpectedly changed source bytes.");
         }
+    }
+
+    private static void CaptureDateFromFilenameRoundTrip()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "20240525_102030.jpg");
+        var existing = Path.Combine(sandbox.Images, "20240526_112233.jpg");
+        WriteJpeg(path);
+        WriteJpeg(existing);
+        RunExifTool("-overwrite_original", "-EXIF:DateTimeOriginal=",
+            "-EXIF:CreateDate=2020:03:04 05:06:07",
+            "-EXIF:ModifyDate=2021:03:04 05:06:07", "-EXIF:Artist=Photographer", path);
+        RunExifTool("-overwrite_original", "-EXIF:DateTimeOriginal=2000:01:02 03:04:05", existing);
+        var pixels = PixelHash(path);
+        var stamp = File.GetLastWriteTimeUtc(path);
+        var created = File.GetCreationTimeUtc(path);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        using var conn = db.OpenConnection();
+        (long Id, string Thumb, string? Date, long Size) Read(string file)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT i.id,i.thumbnail_path,x.date_time_original,i.file_size
+                FROM images i LEFT JOIN image_exif x ON x.image_id=i.id
+                WHERE i.local_path=$path;
+                """;
+            cmd.Parameters.AddWithValue("$path", file);
+            using var row = cmd.ExecuteReader();
+            if (!row.Read()) throw new Exception("Missing capture-date fixture.");
+            return (row.GetInt64(0),row.GetString(1),row.IsDBNull(2)?null:row.GetString(2),row.GetInt64(3));
+        }
+        var before = Read(path);
+        var old = Read(existing);
+        var worker = new FilenameCaptureDateWriter(db, new UndoOptions
+        {
+            DirectoryPath = Path.Combine(Path.GetDirectoryName(sandbox.Images)!, "undo")
+        });
+        var requested = PhotoDateFromFilename.Recognize(Path.GetFileName(path))?.AsExifDateTime
+            ?? throw new Exception("Filename date not recognized.");
+        worker.Apply(before.Id, requested, true, CancellationToken.None);
+        var after = Read(path);
+        if (after.Id != before.Id || after.Thumb != before.Thumb ||
+            after.Date != "2024:05:25 10:20:30" || after.Size != new FileInfo(path).Length ||
+            File.GetLastWriteTimeUtc(path) != stamp || File.GetCreationTimeUtc(path) != created ||
+            !pixels.SequenceEqual(PixelHash(path)) ||
+            RunExifTool("-s3", "-EXIF:CreateDate", path).Trim() != "2020:03:04 05:06:07" ||
+            RunExifTool("-s3", "-EXIF:ModifyDate", path).Trim() != "2021:03:04 05:06:07" ||
+            RunExifTool("-s3", "-EXIF:Artist", path).Trim() != "Photographer" ||
+            !OriginalFileMutationReceipts.IsConfirmedNotification(db, path))
+            throw new Exception("Capture date lost a native metadata field, pixel data, stamp or catalog receipt.");
+        var bytes = SHA256.HashData(File.ReadAllBytes(path));
+        worker.Apply(before.Id, requested, true, CancellationToken.None);
+        if (!bytes.SequenceEqual(SHA256.HashData(File.ReadAllBytes(path))))
+            throw new Exception("Resumed date step rewrote an already committed original.");
+        var oldBytes = SHA256.HashData(File.ReadAllBytes(existing));
+        worker.Apply(old.Id, "2024:05:26 11:22:33", true, CancellationToken.None);
+        if (!oldBytes.SequenceEqual(SHA256.HashData(File.ReadAllBytes(existing))) ||
+            Read(existing).Date != old.Date)
+            throw new Exception("Missing-only mode overwrote a preexisting date.");
+        worker.Apply(old.Id, "2024:05:26 11:22:33", false, CancellationToken.None);
+        if (Read(existing).Date != "2024:05:26 11:22:33")
+            throw new Exception("Explicit overwrite did not use the date and clock time in the filename.");
+        if (PhotoDateFromFilename.Recognize("IMG-20240525-WA0001.jpg")?.Time is not null)
+            throw new Exception("Date-only filename acquired an invented time.");
     }
 
     private static void JpegExifFieldsSurviveTags()

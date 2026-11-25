@@ -43,6 +43,10 @@ public partial class MainWindow
         var thumbnailIds = SelectThumbnailIds(id, _selectedImageIds,
             _displayedBrowseIndex);
         var selectedSet = thumbnailIds.ToHashSet();
+        if (_displayedBrowseIndex.Any(image => selectedSet.Contains(image.ImageId) &&
+                CanManuallyEditExifDates(image.FileName)))
+            AddContextAction(menu, "Aufnahmedatum aus Dateinamen übernehmen",
+                () => _ = EditCaptureDatesFromNamesAsync(thumbnailIds));
         var errorIds = _displayedBrowseIndex.Where(image =>
             image.HasImportError && selectedSet.Contains(image.ImageId))
             .Select(image => image.ImageId).ToArray();

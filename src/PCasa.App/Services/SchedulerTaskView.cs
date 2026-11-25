@@ -218,8 +218,12 @@ public sealed class SchedulerTaskView
                         continue;
                     }
                     var first = failures[0];
-                    var task = first.Kind == OriginalWriteFailureRepository.Gps
-                        ? UiLanguage.T("GPS schreiben") : UiLanguage.T("Tags schreiben");
+                    var task = first.Kind switch
+                    {
+                        OriginalWriteFailureRepository.Gps => UiLanguage.T("GPS schreiben"),
+                        OriginalWriteFailureRepository.CaptureDate => UiLanguage.T("Aufnahmedatum aus Dateinamen übernehmen"),
+                        _ => UiLanguage.T("Tags schreiben")
+                    };
                     rows.Add(new SchedulerTaskViewItem(key, task,
                         CurrentDirectory(first.Path),
                         UiLanguage.Format("{0:N0} fehlerhaft", failures.Count),
@@ -308,6 +312,29 @@ public sealed class SchedulerTaskView
                               (job.Total > 0 ? $" · {job.Processed:N0}/{job.Total:N0}" : "")
                             : job.Total > 0 ? $"{job.Processed:N0}/{job.Total:N0}" : "–",
                         status, job.Error, (int)job.Priority, job.Id,
+                        false, false, false, false, job.WorkKind));
+                }
+
+                // Accepted single-image writes have the same real queue rank
+                // and lifecycle as other user work. No separate direct slot.
+                foreach (var job in latest.Values.Where(job => job.SessionWrite &&
+                    (job.State is SchedulerJobState.Queued or SchedulerJobState.Running
+                        or SchedulerJobState.YieldRequested or SchedulerJobState.Failed ||
+                     (showCompleted && job.State == SchedulerJobState.Completed))))
+                {
+                    if (rows.Any(row => row.Key == job.Key)) continue;
+                    var status = job.State switch
+                    {
+                        SchedulerJobState.Running => "Läuft",
+                        SchedulerJobState.Failed => "Fehler",
+                        SchedulerJobState.Completed => "Abgeschlossen",
+                        _ => "Wartet"
+                    };
+                    rows.Add(new SchedulerTaskViewItem(job.Key,
+                        UiLanguage.T(job.Phase ?? "Dateiaktion"),
+                        CurrentDirectory(job.CurrentPath),
+                        job.Total > 0 ? $"{job.Processed:N0}/{job.Total:N0}" : "–",
+                        status, job.Error, (int)job.Priority, job.QueueOrder,
                         false, false, false, false, job.WorkKind));
                 }
 
@@ -510,6 +537,7 @@ public sealed class SchedulerTaskView
             "gps-edit-v1" or "gps-edit-v2" => item.Payload.Contains("\"Mode\":2", StringComparison.Ordinal)
                 ? UiLanguage.T("GPS entfernen") : UiLanguage.T("GPS schreiben"),
             "tag-edit-v1" or "tag-edit-v2" => UiLanguage.T("Tags schreiben"),
+            "capture-date-from-name-v1" => UiLanguage.T("Aufnahmedatum aus Dateinamen übernehmen"),
             "tag-recovery-v1" or "tag-recovery-v2" => UiLanguage.T("Tags wiederherstellen"),
             "manual-folder-scan-v1" => UiLanguage.T("Ordner aktualisieren"),
             "import-error-retry-v1" => UiLanguage.T("Erneut einlesen"),

@@ -21,6 +21,22 @@ public readonly record struct GallerySortOptions(
     public static GallerySortOptions Default => new(GallerySortField.Name, false);
 }
 
+// A missing month/day denotes the entire containing calendar period.
+// Bounds are expanded only when applying the filter, never in the editor.
+public readonly record struct GalleryDateParts(int Year, int? Month = null, int? Day = null)
+{
+    public GalleryDateParts WithYear(int year) => new GalleryDateParts(year, Month,
+        Day is int day && Month is int month ? Math.Min(day, DateTime.DaysInMonth(year, month)) : null);
+    public GalleryDateParts WithMonth(int? month) => new GalleryDateParts(Year, month,
+        month is int value && Day is int day ? Math.Min(day, DateTime.DaysInMonth(Year, value)) : null);
+    public GalleryDateParts WithDay(int? day) => new GalleryDateParts(Year, Month, Month.HasValue ? day : null);
+    public DateTime FirstDay => new(Year, Month ?? 1, Day ?? 1);
+    public DateTime LastDay => new(Year, Month ?? 12,
+        Day ?? DateTime.DaysInMonth(Year, Month ?? 12));
+    public (DateTime From, DateTime Until) Bounds(GalleryDateParts? end = null)
+        => (FirstDay, (end ?? this).LastDay);
+}
+
 public static class GalleryFolderOrdering
 {
     public static IReadOnlyList<BrowseThumbnailIndexEntry> Order(

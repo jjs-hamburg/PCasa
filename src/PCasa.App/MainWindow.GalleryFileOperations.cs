@@ -382,7 +382,6 @@ public partial class MainWindow
     // NAS scan until a manual scheduler worker actually begins execution.
     private bool ScanMayReplaceWaitingManualPresentation()
         => _visibleManualOperations.Count > 0 &&
-            _directImageWriteProgress?.State != SchedulerJobState.Running &&
             !_scheduler.Snapshot().Any(job =>
                 _visibleManualOperations.ContainsKey(job.Key) &&
                 job.State == SchedulerJobState.Running);
@@ -397,8 +396,6 @@ public partial class MainWindow
 
     private string? PreferredVisibleManualOperation()
     {
-        if (_directImageWriteProgress is { State: SchedulerJobState.Running } direct)
-            return direct.Key;
         // Actual work ALWAYS wins. A yielded worker is already giving up the
         // lane and must not be shown as running in another UI projection.
         var running = _scheduler.Snapshot()
@@ -438,8 +435,7 @@ public partial class MainWindow
         // never reappear after the window is reset.
         _lastManualThumbnailPath = null;
         _visibleManualWindow?.BeginManualOperation(item.Title, item.Total);
-        var latest = _directImageWriteProgress is { } direct && direct.Key == key
-            ? direct : _scheduler.Snapshot().LastOrDefault(snapshot => snapshot.Key == key);
+        var latest = _scheduler.Snapshot().LastOrDefault(snapshot => snapshot.Key == key);
         if (latest is not null)
         {
             if (IsTagSeriesKey(key)) UpdateVisibleTagSeries(latest);

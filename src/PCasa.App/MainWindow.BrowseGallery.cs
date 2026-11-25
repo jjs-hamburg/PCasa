@@ -202,6 +202,11 @@ public partial class MainWindow
             BeginVisibleManualOperation(key, "GPS in Originaldateien schreiben", 0);
             _ = ObserveGpsEditAsync(completion, key);
         }
+        else if (key.StartsWith("capture-date:", StringComparison.Ordinal))
+        {
+            BeginVisibleManualOperation(key, "Aufnahmedatum aus Dateinamen übernehmen", 0);
+            _ = ObserveCaptureDatePackageAsync(completion, key);
+        }
         else if (key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal) ||
                  key.StartsWith("catalog:scan-all:", StringComparison.Ordinal))
         {
