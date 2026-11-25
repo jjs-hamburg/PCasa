@@ -71,6 +71,14 @@ public partial class MainWindow
                 _dragTargetValidity.Clear();
                 PromoteExplorerMonitoredPath(directory);
             }
+            // A newly registered root already owns a durable initial:<id>
+            // request. Use its shared admission rank, not a second manual
+            // scan identity that competes with the very same import.
+            if (registration.CreatedRoot)
+            {
+                ReconsiderInitialImportOrder();
+                return;
+            }
             BrowseScanCurrentFolder_Click(new ExplorerRegisteredScan(directory,
                 registration.RootId, registration.CreatedRoot,
                 registration.AcknowledgeTargetedPending), e);
