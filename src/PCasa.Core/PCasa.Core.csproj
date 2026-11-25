@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <InternalsVisibleTo Include="PCasa.App" />
+    <InternalsVisibleTo Include="PCasa.CatalogTests" />
+    <InternalsVisibleTo Include="PCasa.WindowSmokeTests" />
+  </ItemGroup>
+  <!-- Transitional links preserve existing source-level regression checks.
+       These implementations are compiled ONLY into the portable assembly. -->
+  <ItemGroup>
+    <Compile Include="../PCasa.App/Data/LocalDatabase.cs" Link="Data/LocalDatabase.cs" />
+    <Compile Include="../PCasa.App/Data/OriginalWriteFailureRepository.cs" Link="Data/OriginalWriteFailureRepository.cs" />
+    <Compile Include="../PCasa.App/Services/PcasaDataPaths.cs" Link="Services/PcasaDataPaths.cs" />
+    <Compile Include="../PCasa.App/Services/PCasaDiagnostics.cs" Link="Services/PCasaDiagnostics.cs" />
+    <Compile Include="../PCasa.App/Services/SourceAvailabilityGate.cs" Link="Services/SourceAvailabilityGate.cs" />
+    <Compile Include="../PCasa.App/Services/SchedulerTaskPackage.cs" Link="Services/SchedulerTaskPackage.cs" />
+  </ItemGroup>
+  <Import Project="../../PCasa.Version.props" />
+</Project>
