@@ -735,8 +735,8 @@ public partial class MainWindow
     private void StartPendingTagDrain()
     {
         if (_shutdownStarted || Dispatcher.HasShutdownStarted ||
-            _directImageWriteProgress?.Key.StartsWith("direct:tags:",
-                StringComparison.Ordinal) == true) return;
+            _scheduler.Snapshot().Any(job => job.Key.StartsWith("direct:tags:", StringComparison.Ordinal) &&
+                job.State is SchedulerJobState.Queued or SchedulerJobState.Running or SchedulerJobState.YieldRequested)) return;
         var parked = _originalWriteFailures.Unresolved()
             .Where(error => error.Kind == OriginalWriteFailureRepository.Tags)
             .Select(error => error.ImageId).ToHashSet();

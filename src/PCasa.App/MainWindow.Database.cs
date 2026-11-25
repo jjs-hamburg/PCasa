@@ -23,7 +23,7 @@ public partial class MainWindow
     private bool StartDatabaseBackup(string destination)
     {
         if (_shutdownStarted || _databaseMaintenancePending ||
-            _directImageWriteTask is { IsCompleted: false }) return false;
+            _scheduler.HasSessionWrites) return false;
         if (_databaseBackupTask is { IsCompleted: false })
         {
             PcasaDialog.Show(this, UiLanguage.T("Eine Datenbanksicherung läuft bereits."),
@@ -186,7 +186,7 @@ public partial class MainWindow
     private bool StartDatabaseMaintenance(DatabaseMaintenance.Request request)
     {
         if (_databaseMaintenancePending || _shutdownStarted ||
-            _directImageWriteTask is { IsCompleted: false }) return false;
+            _scheduler.HasSessionWrites) return false;
         if (_databaseBackupTask is { IsCompleted: false })
         {
             PcasaDialog.Show(this,

@@ -113,6 +113,18 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private volatile bool _gracefulShutdownRequested;
     public bool GracefulShutdownRequested => _gracefulShutdownRequested;
 
+    // Accepted session writes share the ordinary scheduler rank and owner.
+    // Their immutable in-memory payload must finish before normal exit;
+    // unlike durable recipes it cannot be reconstructed after a restart.
+    public bool HasSessionWrites
+    {
+        get { lock (_gate) return _pending.Concat(_runningWork).Any(item => item.SessionWrite); }
+    }
+
+    public Task EnqueueSessionWriteAsync(string key, Func<CancellationToken, Task> operation)
+        => EnqueueAsync(key, SchedulerPriority.ManualAction, operation,
+            workKind: SchedulerWorkKind.Catalog, sessionWrite: true);
+
     // Freeze new dispatch before waiting for already-running file mutations.
     // Never cancel an original-file writer while its atomic write is in flight.
     public void BeginGracefulShutdown()
@@ -144,7 +156,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     SetStateUnsafe(item, SchedulerJobState.Canceled);
                     item.Completion.TrySetCanceled();
                 }
-            var active = _runningWork.Where(item => fileKeys.Contains(item.Key)).ToArray();
+            var active = _runningWork.Where(item => fileKeys.Contains(item.Key))
+                .Concat(_pending.Concat(_runningWork).Where(item => item.SessionWrite)).Distinct().ToArray();
             writing = active.Select(item =>
                 _durableActiveTasks.GetValueOrDefault(item.Key, item.Completion.Task))
                 .ToArray();
@@ -669,7 +682,42 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 await _controllerWake.WaitAsync(TimeSpan.FromMilliseconds(150),
                     _shutdown.Token);
                 if (_gracefulShutdownRequested)
-                    continue; // Freeze arbitration and all preemptions mid-write.
+                {
+                    // Do not dispatch any new scan or durable recipe during
+                    // exit. The accepted nonpersistent writes still need to
+                    // finish in their normal LIFO order.
+                    List<CancellationTokenSource> yields = new();
+                    var started = false;
+                    lock (_gate)
+                    {
+                        if (_disposed) break;
+                        var next = _pending.Where(item => item.SessionWrite)
+                            .OrderBy(item => item.Priority).ThenBy(item => item.QueueOrder)
+                            .ThenBy(item => item.Id).FirstOrDefault();
+                        if (next is not null)
+                        {
+                            foreach (var running in _runningWork.Where(item =>
+                                item.Kind is SchedulerWorkKind.CatalogScan or SchedulerWorkKind.InitialImport))
+                            {
+                                if (running.YieldSource is not { } source || running.YieldRequested) continue;
+                                running.YieldRequested = true;
+                                yields.Add(source);
+                            }
+                            if (!_runningWork.Any(IsCatalogMutation) && _maintenancePauseCount == 0)
+                            {
+                                StartExecutionUnsafe(next, ExecutorCatalog);
+                                started = true;
+                            }
+                        }
+                    }
+                    foreach (var source in yields)
+                    {
+                        try { _ = source.CancelAsync(); }
+                        catch (ObjectDisposedException) { }
+                    }
+                    if (started) NotifyTaskViewChanged();
+                    continue;
+                }
                 if (_deferredRecoveryReady)
                 {
                     // Completed source probes are DATA, not execution decisions.
@@ -836,7 +884,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         _pending.Remove(item);
         item.YieldRequested = false;
         item.ExecutionClass = executor;
-        var yieldRequest = IsCatalogMutation(item) ? new CancellationTokenSource() : null;
+        var yieldRequest = IsCatalogMutation(item) && !item.SessionWrite ? new CancellationTokenSource() : null;
         item.YieldSource = yieldRequest;
         _runningWork.Add(item);
         SetStateUnsafe(item, SchedulerJobState.Running);
@@ -1530,7 +1578,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         CancellationToken cancellationToken = default,
         SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
         long? queueOrder = null, string? parentKey = null,
-        bool durableJob = false)
+        bool durableJob = false, bool sessionWrite = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(operation);
@@ -1540,7 +1588,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             // A recipe factory may finish constructing after shutdown
             // froze dispatch. Never leave it waiting on a frozen queue.
-            if (_gracefulShutdownRequested && durableJob)
+            if (_gracefulShutdownRequested && (durableJob || sessionWrite))
                 return Task.FromCanceled(new CancellationToken(true));
             var identity = key;
             var existing = _pending.FirstOrDefault(x =>
@@ -1564,6 +1612,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     operation, isCurrent, cancellationToken)
                 {
                     DurableJob = durableJob,
+                    SessionWrite = sessionWrite,
                     // Ephemeral manual preflight (e.g. GPS eligibility)
                     // must never be buried behind the old durable ledger's
                     // large historical sequence values. Durable ranks remain
@@ -1766,7 +1815,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         {
             try
             {
-                if (_gracefulShutdownRequested)
+                if (_gracefulShutdownRequested && !item.SessionWrite)
                     throw new OperationCanceledException(
                         "Application exit: preserve pending durable work.");
                 linked.Token.ThrowIfCancellationRequested();
@@ -1943,6 +1992,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         public long QueueOrder { get; set; }
         public WorkItem? Parent { get; set; }
         public bool DurableJob { get; init; }
+        public bool SessionWrite { get; init; }
         public CancellationTokenSource UserCancellation { get; } = new();
         public SchedulerPriority Priority { get; set; } = priority;
         public SchedulerWorkKind Kind { get; } = kind;
