@@ -1577,7 +1577,12 @@ public partial class MainWindow
                     string? schedulerScanKey = null;
                     IProgress<ScanProgress> scanProgress = new Progress<ScanProgress>(value =>
                     {
-                        if (!acceptsScanProgress || _manualFileTransferActive) return;
+                        // Progress<T> posts to the Dispatcher. A callback
+                        // queued before Close can execute after the WPF owner
+                        // is already closed (including during a new session).
+                        if (!acceptsScanProgress || _manualFileTransferActive ||
+                            _shutdownStarted || _backgroundMonitorClosing ||
+                            Dispatcher.HasShutdownStarted || !IsLoaded) return;
                         _backgroundLiveChecked = value.ImageFilesSeen;
                         if (schedulerScanKey is not null)
                             _scheduler.ReportProgress(schedulerScanKey,
