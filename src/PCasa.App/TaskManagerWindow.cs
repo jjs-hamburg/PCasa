@@ -46,6 +46,7 @@ public sealed class TaskManagerWindow : Window
     private List<TaskRow> _all = [];
     private bool _reading;
     private bool _acting;
+    private readonly HashSet<string> _deleting = new(StringComparer.Ordinal);
     private bool _refreshRequested;
     // A one-shot coalescer, never a polling loop. Each tick is caused by
     // an actual scheduler change notification.
@@ -388,7 +389,8 @@ public sealed class TaskManagerWindow : Window
 
     private void TaskMouseMove(object sender, MouseEventArgs e)
     {
-        if (_acting || _dragOrigin is not Point origin || _dragKey is null)
+        if (_acting || _dragOrigin is not Point origin || _dragKey is null ||
+            _deleting.Contains(_dragKey))
             return;
         if (e.LeftButton != MouseButtonState.Pressed)
         {
@@ -422,7 +424,8 @@ public sealed class TaskManagerWindow : Window
             ? e.Data.GetData(TaskDragFormat) as string : null;
         var target = TaskAt(e.OriginalSource as DependencyObject);
         var source = _all.FirstOrDefault(row => row.Key == key);
-        e.Effects = !_acting && source is not null &&
+        e.Effects = !_acting && source is not null && !_deleting.Contains(source.Key) &&
+            (target is null || !_deleting.Contains(target.Key)) &&
             !InformationalExternal(source) && !InformationalExternal(target) &&
             !IsContinuousReview(source) && !IsContinuousReview(target) &&
             target is not null && source.Key != target.Key &&
@@ -524,9 +527,10 @@ public sealed class TaskManagerWindow : Window
     private void UpdateActions()
     {
         var row = Selection;
-        _up.IsEnabled = !_acting && row is not null && CanMove(row, -1);
-        _down.IsEnabled = !_acting && row is not null && CanMove(row, 1);
-        _startNow.IsEnabled = !_acting && !InformationalExternal(row) &&
+        var busy = _acting || (row is not null && _deleting.Contains(row.Key));
+        _up.IsEnabled = !busy && row is not null && CanMove(row, -1);
+        _down.IsEnabled = !busy && row is not null && CanMove(row, 1);
+        _startNow.IsEnabled = !busy && !InformationalExternal(row) &&
             !IsContinuousReview(row) &&
             (row is { Status: "Fehler", Retryable: true } ||
              (row is { Status: "Wartet" or "Angehalten" } &&
@@ -539,13 +543,13 @@ public sealed class TaskManagerWindow : Window
              (IsInitialImport(row.Key) ||
               row.Key.StartsWith("automatic:", StringComparison.Ordinal)));
         _pauseResume.Content = UiLanguage.T(canResume ? "Fortsetzen" : "Pausieren");
-        _pauseResume.IsEnabled = !_acting && !InformationalExternal(row) &&
+        _pauseResume.IsEnabled = !busy && !InformationalExternal(row) &&
             (canResume || canPause);
         _pauseResume.ToolTip = UiLanguage.T(
             canResume ? "Erstimport mit gespeichertem Fortschritt fortsetzen" :
             canPause ? "Erstimport am nächsten sicheren Punkt pausieren" :
             "Für diese Auftragsart ist sicheres Pausieren noch nicht verfügbar");
-        _delete.IsEnabled = !_acting && !InformationalExternal(row) &&
+        _delete.IsEnabled = !busy && !InformationalExternal(row) &&
             row is { Deletable: true };
         const string moveInfo =
             "Aufträge frei verschieben. Die neue Reihenfolge wird im Scheduler gespeichert; " +
@@ -680,7 +684,7 @@ public sealed class TaskManagerWindow : Window
     private void Delete()
     {
         var row = Selection;
-        if (row is not { Deletable: true }) return;
+        if (row is not { Deletable: true } || _deleting.Contains(row.Key)) return;
         var prompt = IsInitialImport(row.Key)
             ? UiLanguage.Format(
                 "Scanauftrag '{0}' aus der Warteschlange löschen? Bereits eingelesene Fotos, Katalogeinträge und bestätigte Scanpositionen bleiben erhalten.",
@@ -697,7 +701,7 @@ public sealed class TaskManagerWindow : Window
             return;
         if (_failedRows.TryGetValue(row.Key, out var failedFiles))
         {
-            _ = PerformAsync(row.Key, async () =>
+            _ = PerformDeleteAsync(row.Key, async () =>
             {
                 foreach (var file in failedFiles)
                     await _discardFailedFile!(file);
@@ -708,14 +712,35 @@ public sealed class TaskManagerWindow : Window
         // owner, never the durable manual-package deleter. For an initial
         // import this delegate removes the queued intent even if held.
         else if (!row.Durable && _stopAutomaticScan is not null)
-            _ = PerformAsync(row.Key, () => _stopAutomaticScan(row.Key));
+            _ = PerformDeleteAsync(row.Key, () => _stopAutomaticScan(row.Key));
         else
-            _ = PerformAsync(row.Key, () => _deleteDurableTask(row.Key));
+            _ = PerformDeleteAsync(row.Key, () => _deleteDurableTask(row.Key));
+    }
+
+    // A stop may wait for an uncancellable SMB call. Only its own row
+    // is busy; unrelated tasks and the live task list remain usable.
+    private async Task PerformDeleteAsync(string key, Func<Task<bool>> action)
+    {
+        if (!_deleting.Add(key)) return;
+        UpdateActions();
+        try { await action(); }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Taskmanager.Delete", ex);
+            PcasaDialog.Show(this, ex.Message, UiLanguage.T("Taskmanager"),
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        finally
+        {
+            _deleting.Remove(key);
+            UpdateActions();
+            RequestRefresh();
+        }
     }
 
     private async Task PerformAsync(string key, Func<Task<bool>> action)
     {
-        if (_acting) return;
+        if (_acting || _deleting.Contains(key)) return;
         _acting = true;
         UpdateActions();
         try

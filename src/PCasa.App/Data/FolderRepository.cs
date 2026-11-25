@@ -1117,6 +1117,48 @@ public sealed class FolderRepository
         return new DirectoryFirstPass(completed, cursors);
     }
 
+    // Pending traversal belongs to the directory, not the scheduler job.
+    // Null means no saved traversal; an empty array means completed.
+    public string[]? GetImportFrontier(long folderId, long generation, string scanRoot)
+    {
+        using var connection = _database.OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT pending_json FROM scan_import_frontier
+             WHERE monitored_folder_id=$id AND source_generation=$generation
+               AND scan_root=$root COLLATE NOCASE;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        cmd.Parameters.AddWithValue("$root", scanRoot);
+        return cmd.ExecuteScalar() is string json
+            ? System.Text.Json.JsonSerializer.Deserialize<string[]>(json) : null;
+    }
+
+    public bool SaveImportFrontier(long folderId, long generation, string scanRoot,
+        IReadOnlyCollection<string> pending)
+    {
+        using var connection = _database.OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO scan_import_frontier(monitored_folder_id,scan_root,source_generation,pending_json)
+            SELECT $id,$root,$generation,$pending
+             WHERE EXISTS (
+                SELECT 1 FROM monitored_folders m JOIN scheduler_sources s
+                  ON s.canonical_path=m.canonical_path
+                 WHERE m.id=$id AND s.desired_present=1 AND s.generation=$generation)
+            ON CONFLICT(monitored_folder_id,scan_root) DO UPDATE SET
+                source_generation=excluded.source_generation,
+                pending_json=excluded.pending_json
+            WHERE excluded.source_generation >= scan_import_frontier.source_generation;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        cmd.Parameters.AddWithValue("$root", scanRoot);
+        cmd.Parameters.AddWithValue("$pending", System.Text.Json.JsonSerializer.Serialize(pending));
+        return cmd.ExecuteNonQuery() == 1;
+    }
+
     // A monotonic prefix may advance only after a file's catalog commit (or
     // an explicitly logged skipped-file failure) and the regular scan receipt.
     // A change in source membership always invalidates the old frontier.

@@ -2155,6 +2155,9 @@ internal static class Program
             !folders.GetDirectoryFirstPass(root.Id, generation, root.LocalPath)
                 .Completed.Contains(interruptedDirectory))
             throw new Exception("Actual import path revisited a confirmed file or lost directory state.");
+        var frontier = folders.GetImportFrontier(root.Id, generation, interruptedDirectory);
+        if (frontier is not { Length: 0 })
+            throw new Exception("Completed import scope did not persist an empty traversal.");
         var noRepeat = scanner.ScanDirectory(root, interruptedDirectory, true,
             durableScanKey: "manual:alpha65:new-job", preferFirstPass: true,
             catalogOwnedProgress: true);
