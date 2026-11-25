@@ -199,6 +199,57 @@ internal static class DurablePauseFlow
             !tags.PendingImageIdsOwnedBy("shutdown:newer-tags").SequenceEqual(new[] { imageId }) ||
             !tags.PendingImageIdsOwnedBy("shutdown:staged-tags").SequenceEqual(new[] { imageId }))
             throw new Exception("Tag revision ownership did not survive overlapping edits and database reopen.");
+        // No original exists at this path: cancellation must be a local
+        // transaction, preserve other jobs, and restore a removed keyword.
+        using (var db = database.OpenConnection())
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE image_tags SET keywords=keywords||char(10)||'existing' WHERE image_id=$id;";
+            cmd.Parameters.AddWithValue("$id", imageId);
+            cmd.ExecuteNonQuery();
+        }
+        const string cancelKey = "shutdown:cancel-tags";
+        journal.Put(cancelKey, "tag-edit-v2", "{}", SchedulerPriority.ManualAction,
+            SchedulerWorkKind.Catalog);
+        journal.SetState(cancelKey, "running", 1);
+        Stage(cancelKey, "temporary", false);
+        Stage(cancelKey, "existing", true);
+        if (!await scheduler.DeleteDurableTaskAsync(cancelKey).WaitAsync(TimeSpan.FromSeconds(5)) ||
+            tags.PendingImageIdsOwnedBy(cancelKey).Count != 0 ||
+            tags.PendingEditsForImage(imageId).Count != 2 ||
+            !tags.PendingImageIdsOwnedBy("shutdown:newer-tags").Contains(imageId) ||
+            !(tags.GetKeywords(imageId) ?? "").Split('\n').ToHashSet()
+                .SetEquals(new[] { "unfinished", "existing" }) ||
+            journal.Pending().Any(row => row.Key == cancelKey))
+            throw new Exception("Targeted tag cancellation altered another job or lost the original projection.");
+        const string uncertainKey = "shutdown:uncertain-tags";
+        journal.Put(uncertainKey, "tag-edit-v2", "{}", SchedulerPriority.ManualAction,
+            SchedulerWorkKind.Catalog);
+        journal.SetState(uncertainKey, "running", 1);
+        Stage(uncertainKey, "uncertain", false);
+        using (var db = database.OpenConnection())
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE pending_tag_edits SET base_present=NULL WHERE owner_key=$key;";
+            cmd.Parameters.AddWithValue("$key", uncertainKey);
+            cmd.ExecuteNonQuery();
+        }
+        var refused = false;
+        try { await scheduler.DeleteDurableTaskAsync(uncertainKey); }
+        catch (InvalidOperationException) { refused = true; }
+        if (!refused || tags.PendingImageIdsOwnedBy(uncertainKey).Count != 1 ||
+            journal.Pending().Single(row => row.Key == uncertainKey).State != "paused")
+            throw new Exception("An uncertain native write was silently reversed.");
+        using (var db = database.OpenConnection())
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE pending_tag_edits SET base_present=0 WHERE owner_key=$key;";
+            cmd.Parameters.AddWithValue("$key", uncertainKey);
+            cmd.ExecuteNonQuery();
+        }
+        if (!await scheduler.DeleteDurableTaskAsync(uncertainKey))
+            throw new Exception("Confirmed cancellation could not be retried.");
+        Console.WriteLine("PASS: Owned tag cancellation preserves other jobs and refuses an uncertain native receipt.");
         journal.Put("shutdown:staged-tags", "tag-edit-v2", "{}",
             SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
         journal.SetState("shutdown:staged-tags", "running", 1);
