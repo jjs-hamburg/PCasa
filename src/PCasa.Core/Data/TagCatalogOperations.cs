@@ -266,7 +266,7 @@ public class TagCatalogOperations
         if (metadataOnly)
             OriginalFileMutationReceipts.RecordConfirmed(db, transaction, imageId, after);
         transaction.Commit();
-        ownMutation.Confirm(newSize, newTicks);
+        if (metadataOnly) ownMutation.Confirm(newSize, newTicks);
         }
     }
 
@@ -680,7 +680,8 @@ public class TagCatalogOperations
                 oldTicks == indexedTicks && newTicks == oldTicks)
                 OriginalFileMutationReceipts.RecordConfirmed(db, tx, imageId, after);
             tx.Commit();
-            ownMutation?.Confirm(newSize, newTicks);
+            if (oldSize == indexedSize && oldTicks == indexedTicks && newTicks == oldTicks)
+                ownMutation?.Confirm(newSize, newTicks);
         }
     }
 
