@@ -1498,37 +1498,13 @@ public partial class MainWindow
                 var scanPath = request.Kind == BackgroundFolderChangeKind.RescanRoot
                     ? folder.LocalPath
                     : request.Path;
-                if (!_scheduler.SourceAvailability.CanAccess(scanPath,
-                        _backgroundLifetime.Token) || IsPathKnownOffline(scanPath))
-                {
-                    // A missing network mount is a normal dormant state.
-                    // Never manufacture a new inventory upon reconnection.
-                    scanResume?.Dispose();
-                    continue;
-                }
-
-                // A network path can stall the OS for a long time. The
-                // existence check must run on a worker, never on Dispatcher.
-                var scanPathExists = await _scheduler.RunAsync(
-                    $"background:scan-path-probe:{Guid.NewGuid():N}",
-                    SchedulerPriority.Background,
-                    token =>
-                    {
-                        token.ThrowIfCancellationRequested();
-                        var exists = request.Kind == BackgroundFolderChangeKind.ScanFile
-                            ? File.Exists(scanPath)
-                            : Directory.Exists(scanPath);
-                        if (!exists)
-                            _scheduler.SourceAvailability.CheckAfterSourceError(
-                                scanPath, token);
-                        return exists;
-                    }, cancellationToken: _backgroundLifetime.Token,
-                    workKind: SchedulerWorkKind.SourceProbe);
-                if (!scanPathExists)
+                if (IsPathKnownOffline(scanPath))
                 {
                     scanResume?.Dispose();
                     continue;
                 }
+                // Reachability and existence checks are part of the
+                // accepted scan's own execution, not separate P1 probes.
                 if (request.Kind == BackgroundFolderChangeKind.RescanRoot &&
                     _scheduler.IsExternalTaskPaused(PCasaScheduler.ContinuousReviewKey))
                 {
@@ -1631,6 +1607,7 @@ public partial class MainWindow
                         continue;
                     }
                     ScanResult? scanResult = null;
+                    bool unavailablePath = false;
                     CatalogInventoryCheckResult? inventoryResult = null;
                     IReadOnlyList<FolderRepository.AutomaticChangeJob>? acceptedReviewChanges = null;
                     var reviewEpoch = _folderRepository.GetScanEpoch(folder.CanonicalPath);
@@ -1679,6 +1656,21 @@ public partial class MainWindow
                         token =>
                         {
                             token.ThrowIfCancellationRequested();
+                            unavailablePath = false;
+                            if (!_scheduler.SourceAvailability.CanAccess(scanPath, token))
+                            {
+                                unavailablePath = true;
+                                return Task.CompletedTask;
+                            }
+                            var exists = request.Kind == BackgroundFolderChangeKind.ScanFile
+                                ? File.Exists(scanPath) : Directory.Exists(scanPath);
+                            token.ThrowIfCancellationRequested();
+                            if (!exists)
+                            {
+                                _scheduler.SourceAvailability.CheckAfterSourceError(scanPath, token);
+                                unavailablePath = true;
+                                return Task.CompletedTask;
+                            }
                             // Running (not queued) scan: make progress visible
                             // even before a NAS directory yields its first file.
                             scanProgress.Report(new ScanProgress(
@@ -1720,6 +1712,23 @@ public partial class MainWindow
                         workKind: SchedulerWorkKind.CatalogScan,
                         queueOrder: request.QueueOrder == long.MaxValue
                             ? null : request.QueueOrder);
+                    if (unavailablePath)
+                    {
+                        // Keep accepted watcher receipts for the normal
+                        // monitor retry. A failed check cannot advance order.
+                        if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
+                            _folderRepository.DeferRootReview(folder.Id,
+                                sourceState.Value.Generation, DateTime.UtcNow + SourceRetryInterval);
+                        scanResume.Dispose();
+                        scanResume = null;
+                        requests[nextRequestIndex] = request with
+                        {
+                            Resume = null, ResumeGeneration = null
+                        };
+                        TrackFolderActivity(scanPath, "Pending", request.Recursive);
+                        RefreshFolderStatusVisuals();
+                        continue;
+                    }
                     var result = scanResult ?? throw new OperationCanceledException();
                     if (inventoryResult is not null)
                     {
