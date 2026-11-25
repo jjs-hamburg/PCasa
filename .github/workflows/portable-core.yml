@@ -1,0 +1,28 @@
+name: Portable Core Tests
+
+on:
+  push:
+    branches:
+      - main
+      - alpha63-architecture
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: portable-core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable-core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test portable core
+        run: dotnet run --project tests/PCasa.CoreTests/PCasa.CoreTests.csproj --configuration Release
