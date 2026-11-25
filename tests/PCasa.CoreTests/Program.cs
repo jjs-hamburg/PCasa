@@ -107,6 +107,42 @@ try
     if (unchanged.Unchanged != 1 || unchanged.Updated != 0 || importMedia.Decodes != 1)
         throw new Exception("Portable scanner decoded an unchanged image again.");
 
+    // Test the real video cache lifecycle with a codec-independent adapter.
+    var video = Path.Combine(directory, "clip.mp4");
+    File.WriteAllBytes(video, new byte[] { 1, 2, 3 });
+    var videoRoot = Path.Combine(directory, "video-cache");
+    var encodes = 0;
+    void EncodeVideo(string source, string target, bool refresh, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (source != video) throw new Exception("Wrong video source.");
+        File.WriteAllBytes(target, new byte[] { (byte)++encodes });
+    }
+    var preview = VideoPreviewCache.Resolve(video, EncodeVideo, cacheRoot: videoRoot);
+    if (VideoPreviewCache.Resolve(video, EncodeVideo, cacheRoot: videoRoot) != preview ||
+        encodes != 1 ||
+        VideoPreviewCache.Resolve(video, EncodeVideo, forceRefresh: true, cacheRoot: videoRoot) != preview ||
+        encodes != 2 || File.ReadAllBytes(preview).Single() != 2)
+        throw new Exception("Video cache did not preserve identity or explicit refresh.");
+    try
+    {
+        VideoPreviewCache.Resolve(video, (_, temp, _, _) =>
+        {
+            File.WriteAllBytes(temp, new byte[] { 9 });
+            throw new IOException("Simulated codec failure");
+        }, forceRefresh: true, cacheRoot: videoRoot);
+        throw new Exception("Video cache swallowed codec failure.");
+    }
+    catch (IOException) { }
+    if (File.ReadAllBytes(preview).Single() != 2 ||
+        Directory.EnumerateFiles(videoRoot, "*.tmp", SearchOption.AllDirectories).Any())
+        throw new Exception("Failed refresh destroyed the last valid preview.");
+    if (typeof(ExifToolKeywordWriter).Assembly != typeof(LocalDatabase).Assembly ||
+        typeof(AdaptiveMetadataWriteTimeout).Assembly != typeof(LocalDatabase).Assembly ||
+        !CatalogMediaFormats.IsRawPath("test.ARW") ||
+        !AdaptiveMetadataWriteTimeout.SourceKey(jpg).StartsWith("LOCAL:"))
+        throw new Exception("Portable metadata write boundary failed.");
+
     // Exercise the actual PSD decoder with no Windows bitmap or native library.
     // The asymmetric portrait fixture detects swapped dimensions/channels.
     PortablePsdRegression.Run(directory);

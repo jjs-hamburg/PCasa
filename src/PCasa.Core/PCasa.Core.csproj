@@ -48,6 +48,8 @@
     <Compile Include="../PCasa.App/Services/ImageExifReader.cs" Link="Services/ImageExifReader.cs" />
     <Compile Include="../PCasa.App/Services/ExifToolProcessRegistry.cs" Link="Services/ExifToolProcessRegistry.cs" />
     <Compile Include="../PCasa.App/Services/FolderScanner.cs" Link="Services/FolderScanner.cs" />
+    <Compile Include="../PCasa.App/Services/ExifToolKeywordWriter.cs" Link="Services/ExifToolKeywordWriter.cs" />
+    <Compile Include="../PCasa.App/Services/AdaptiveMetadataWriteTimeout.cs" Link="Services/AdaptiveMetadataWriteTimeout.cs" />
   </ItemGroup>
   <Import Project="../../PCasa.Version.props" />
 </Project>

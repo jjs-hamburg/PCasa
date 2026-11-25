@@ -42,13 +42,7 @@ public static class NativeImageCachePolicy
 /// </summary>
 public static class VipsImageSource
 {
-    private static readonly HashSet<string> Extensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".arw", ".nef", ".nrw", ".cr2", ".cr3", ".dng",
-        ".raf", ".rw2", ".orf", ".pef", ".srw", ".crw"
-    };
-
-    public static bool IsRawPath(string path) => Extensions.Contains(Path.GetExtension(path));
+    public static bool IsRawPath(string path) => CatalogMediaFormats.IsRawPath(path);
 
     public static bool IsPsdPath(string path) =>
         Path.GetExtension(path).Equals(".psd", StringComparison.OrdinalIgnoreCase);

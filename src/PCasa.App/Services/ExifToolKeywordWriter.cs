@@ -291,14 +291,14 @@ public static class ExifToolKeywordWriter
             IReadOnlyDictionary<string, string?> values,
             CancellationToken token = default)
         {
-            if (RawImageSource.IsRawPath(imagePath))
+            if (CatalogMediaFormats.IsRawPath(imagePath))
                 throw new NotSupportedException(
                     "RAW-Metadaten dürfen von dieser Funktion nicht verändert werden.");
             if (values.Count == 0) return;
             var commands = new List<string>();
             foreach (var (tag, value) in values)
             {
-                if (!ExifDateMetadata.IsAllowedTag(tag))
+                if (!ProtectedExifDateTags.IsAllowedTag(tag))
                     throw new ArgumentException("Nicht unterstütztes EXIF-Datumsfeld: " + tag);
                 if (value is { Length: > 128 } || value?.Contains('\r') == true ||
                     value?.Contains('\n') == true)
@@ -413,8 +413,10 @@ public static class ExifToolKeywordWriter
             if (_process is not null) return;
             var executable = Environment.GetEnvironmentVariable("PCASA_EXIFTOOL_PATH");
             if (string.IsNullOrWhiteSpace(executable))
-                executable = Path.Combine(AppContext.BaseDirectory, "exiftool", "exiftool.exe");
-            if (!File.Exists(executable))
+                executable = OperatingSystem.IsWindows()
+                    ? Path.Combine(AppContext.BaseDirectory, "exiftool", "exiftool.exe")
+                    : "exiftool";
+            if ((OperatingSystem.IsWindows() || Path.IsPathFullyQualified(executable)) && !File.Exists(executable))
                 throw new FileNotFoundException(
                     "Die mit PCasa ausgelieferte Metadatenkomponente ExifTool fehlt.", executable);
 
