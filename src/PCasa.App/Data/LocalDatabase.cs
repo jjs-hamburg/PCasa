@@ -302,6 +302,7 @@ public sealed class LocalDatabase
         // Older catalogs have no such identity; retain their pending edits
         // for explicit review instead of attributing them to a new job.
         EnsureColumn(connection, "pending_tag_edits", "owner_key", "TEXT NULL");
+        EnsureColumn(connection, "pending_tag_edits", "base_present", "INTEGER NULL");
 
         // The last used tags are shared by every sidebar opening in this local
         // catalogue, rather than being lost with the window's in-memory state.
