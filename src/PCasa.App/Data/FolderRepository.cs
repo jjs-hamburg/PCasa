@@ -504,7 +504,7 @@ public sealed class FolderRepository
               FROM monitored_folders m
               JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
               LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
-             WHERE s.desired_present=1 AND m.initial_scan_pending=0
+             WHERE s.desired_present=1 AND (m.initial_scan_pending=0 OR m.initial_scan_deleted=1)
                AND (r.monitored_folder_id IS NULL
                     OR r.source_generation != s.generation
                     OR r.retry_after_utc IS NULL
@@ -556,7 +556,7 @@ public sealed class FolderRepository
             SELECT m.id,s.generation,$now,NULL
               FROM monitored_folders m
               JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
-             WHERE m.id=$id AND m.initial_scan_pending=0 AND s.desired_present=1
+             WHERE m.id=$id AND (m.initial_scan_pending=0 OR m.initial_scan_deleted=1) AND s.desired_present=1
                AND s.generation=$generation AND s.scan_epoch=$epoch
             ON CONFLICT(monitored_folder_id) DO UPDATE SET
                 source_generation=excluded.source_generation,
@@ -596,7 +596,7 @@ public sealed class FolderRepository
             SELECT m.id FROM monitored_folders m
               JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
               LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
-             WHERE s.desired_present=1 AND m.initial_scan_pending=0
+             WHERE s.desired_present=1 AND (m.initial_scan_pending=0 OR m.initial_scan_deleted=1)
              ORDER BY COALESCE(r.requested_priority,4) ASC,
                       CASE WHEN COALESCE(r.queue_order,0)>0 THEN 0 ELSE 1 END,
                       r.queue_order ASC,
@@ -626,7 +626,7 @@ public sealed class FolderRepository
                 SELECT m.id FROM monitored_folders m
                   JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
                   LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
-                 WHERE s.desired_present=1 AND m.initial_scan_pending=0
+                 WHERE s.desired_present=1 AND (m.initial_scan_pending=0 OR m.initial_scan_deleted=1)
                  ORDER BY CASE WHEN COALESCE(r.queue_order,0)>0 THEN 0 ELSE 1 END,
                           r.queue_order ASC,
                           COALESCE(r.last_completed_utc,'') ASC,
@@ -684,7 +684,7 @@ public sealed class FolderRepository
             SELECT m.id,s.generation,2,NULL
               FROM monitored_folders m
               JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
-             WHERE m.id=$id AND m.initial_scan_pending=0 AND s.desired_present=1
+             WHERE m.id=$id AND (m.initial_scan_pending=0 OR m.initial_scan_deleted=1) AND s.desired_present=1
             ON CONFLICT(monitored_folder_id) DO UPDATE SET
                 requested_priority=2,retry_after_utc=NULL;
             """;
@@ -700,7 +700,7 @@ public sealed class FolderRepository
             SELECT m.id FROM monitored_folders m
               JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
               JOIN scan_root_review r ON r.monitored_folder_id=m.id
-             WHERE s.desired_present=1 AND m.initial_scan_pending=0
+             WHERE s.desired_present=1 AND (m.initial_scan_pending=0 OR m.initial_scan_deleted=1)
                AND r.requested_priority=2;
             """;
         var ids = new HashSet<long>();
@@ -815,7 +815,7 @@ public sealed class FolderRepository
             WHERE j.scan_key LIKE 'background:inventory:%'
               AND j.source_generation=s.generation
               AND j.scan_epoch=s.scan_epoch
-              AND s.desired_present=1 AND m.initial_scan_pending=0
+              AND s.desired_present=1 AND (m.initial_scan_pending=0 OR m.initial_scan_deleted=1)
             ORDER BY j.started_utc, j.scan_key;
             """;
         var result = new List<PendingAutomaticInventory>();

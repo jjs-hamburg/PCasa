@@ -1559,7 +1559,7 @@ public partial class MainWindow
                         if (!acceptsScanProgress || _manualFileTransferActive ||
                             _shutdownStarted || _backgroundMonitorClosing ||
                             Dispatcher.HasShutdownStarted || !IsLoaded) return;
-                        _backgroundLiveChecked = value.ImageFilesSeen;
+                        _backgroundLiveChecked = value.CatalogIndexed ?? value.ImageFilesSeen;
                         if (schedulerScanKey is not null)
                             _scheduler.ReportProgress(schedulerScanKey,
                                 AutomaticTaskTitle(request.Kind), value.CatalogIndexed ?? value.ImageFilesSeen,
@@ -1668,6 +1668,17 @@ public partial class MainWindow
                                 }
                                 _scheduler.SourceAvailability.CheckAfterSourceError(scanPath, token);
                                 unavailablePath = true;
+                                return Task.CompletedTask;
+                            }
+                            // A watcher request may have been admitted BEFORE
+                            // the parent metadata job committed. Revalidate its
+                            // acknowledged fingerprint now, under scheduler order.
+                            // This is completion of the old observation, not a
+                            // second decoder/EXIF operation.
+                            if (request.Kind == BackgroundFolderChangeKind.ScanFile &&
+                                OriginalFileMutationReceipts.IsConfirmedNotification(_database, scanPath))
+                            {
+                                scanResult = new ScanResult(0, 0, 0, 0);
                                 return Task.CompletedTask;
                             }
                             // Running (not queued) scan: make progress visible

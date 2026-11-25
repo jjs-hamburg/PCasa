@@ -198,6 +198,18 @@ try
         catalog.CountIndexedImages(root.Id, media, true) != 2 ||
         catalog.GetImageId(jpg) != photoId || catalog.GetImageId(rawPath) != rawId)
         throw new Exception("Alpha.64 reset retained old work or destroyed catalog progress.");
+    // Even a canceled first import remains a monitored source. Verify that
+    // its background inventory can discover further images without a new P0 job.
+    using (var connection = database.OpenConnection())
+    using (var command = connection.CreateCommand())
+    {
+        command.CommandText = "UPDATE monitored_folders SET initial_scan_pending=1, initial_scan_deleted=1 WHERE id=$id;";
+        command.Parameters.AddWithValue("$id", root.Id);
+        command.ExecuteNonQuery();
+    }
+    if (folders.GetPendingInitialScans().Any(f => f.Id == root.Id) ||
+        !folders.GetDueRootReviewIds(DateTime.UtcNow).Contains(root.Id))
+        throw new Exception("Reset source became invisible to continuous inventory.");
     resetJournal.Put("alpha64:new", "gps-edit-v2", "{}",
         SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
     resetJournal.SetState("alpha64:new", "running", 1);

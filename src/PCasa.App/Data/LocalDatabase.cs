@@ -869,7 +869,7 @@ public sealed class LocalDatabase
             UPDATE monitored_folders SET initial_scan_paused=0,
                 initial_scan_deleted=CASE WHEN initial_scan_pending=1 THEN 1 ELSE 0 END,
                 initial_scan_queue_order=0;
-            UPDATE scan_root_review SET requested_priority=4,retry_after_utc=NULL;
+            UPDATE scan_root_review SET requested_priority=4,retry_after_utc=NULL,queue_order=0;
             """;
         cmd.ExecuteNonQuery();
 
