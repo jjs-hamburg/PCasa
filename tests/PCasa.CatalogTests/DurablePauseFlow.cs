@@ -22,6 +22,7 @@ internal static class DurablePauseFlow
             ExerciseYieldDuringShutdown(dir).GetAwaiter().GetResult();
             ExerciseSharedUserAcceptanceOrder(dir);
             ExerciseLegacyFirstImportOrder(dir);
+            ExerciseNewImportPreemptsOlderManualScan(dir).GetAwaiter().GetResult();
             Console.WriteLine("DURABLE / AUTOMATIC PAUSE, RESUME, PRIORITY PASS");
             return 0;
         }
@@ -34,6 +35,54 @@ internal static class DurablePauseFlow
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    private static async Task ExerciseNewImportPreemptsOlderManualScan(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "initial-import-preempts.db"));
+        database.Initialize();
+        var journal = new DurablePackageJournal(database);
+        var folders = new FolderRepository(database);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var attempts = 0;
+        SchedulerTaskPackage Build(string key, string payload)
+        {
+            var package = new SchedulerTaskPackage(key);
+            package.AddStep(async token =>
+            {
+                if (Interlocked.Increment(ref attempts) == 1)
+                {
+                    entered.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                events.Enqueue("older-scan");
+            });
+            return package;
+        }
+        await using var scheduler = new PCasaScheduler();
+        scheduler.EnableDurablePackages(database);
+        scheduler.RegisterDurablePackageType("manual-folder-scan-v1", Build);
+        var older = scheduler.EnqueueDurablePackageAsync(Build("older-scan", "{}"),
+            "manual-folder-scan-v1", "{}", SchedulerPriority.ManualAction,
+            SchedulerWorkKind.CatalogScan);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var source = Path.Combine(dir, "new-priority-import");
+        Directory.CreateDirectory(source);
+        folders.Add(source);
+        var accepted = folders.GetPendingFirstImportQueue().Single();
+        if (accepted.QueueOrder >= journal.Pending().Single().QueueOrder)
+            throw new Exception("New import has an older rank than the existing manual scan.");
+        var import = scheduler.EnqueueAsync($"initial:{accepted.FolderId}",
+            SchedulerPriority.ManualAction, _ =>
+            {
+                events.Enqueue("new-import");
+                return Task.CompletedTask;
+            }, workKind: SchedulerWorkKind.InitialImport, queueOrder: accepted.QueueOrder);
+        await Task.WhenAll(import, older).WaitAsync(TimeSpan.FromSeconds(8));
+        if (!events.SequenceEqual(new[] { "new-import", "older-scan" }) || attempts != 2)
+            throw new Exception("New accepted initial import did not preempt and resume the older manual scan.");
+        Console.WriteLine("PASS: Shared P0 admission dispatches newer first imports before older scans.");
     }
 
     private static void ExerciseLegacyFirstImportOrder(string dir)
