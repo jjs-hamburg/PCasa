@@ -296,6 +296,99 @@ public sealed class DurablePackageJournal
         return cmd.ExecuteNonQuery() == 1;
     }
 
+    // A paused tag job has reached its safe file boundary. Remove only its
+    // current, unconfirmed revisions and restore their previous membership.
+    // A superseding owner and a confirmed native write are never reversed.
+    // The projection, pending intents and terminal job state commit together.
+    public bool CancelOwnedTagEdits(string key)
+    {
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        using (var job = db.CreateCommand())
+        {
+            job.Transaction = tx;
+            job.CommandText = """
+                UPDATE scheduler_packages SET state='canceled',retry_after_utc=NULL,
+                    updated_utc=$now
+                WHERE package_key=$key AND package_type='tag-edit-v2'
+                  AND state='paused';
+                """;
+            job.Parameters.AddWithValue("$key", key);
+            job.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            if (job.ExecuteNonQuery() != 1) return false;
+        }
+        var edits = new List<(long Id, string Tag, bool BasePresent)>();
+        using (var read = db.CreateCommand())
+        {
+            read.Transaction = tx;
+            read.CommandText = """
+                SELECT image_id,tag,base_present FROM pending_tag_edits
+                WHERE owner_key=$key ORDER BY image_id;
+                """;
+            read.Parameters.AddWithValue("$key", key);
+            using var rows = read.ExecuteReader();
+            while (rows.Read())
+            {
+                if (rows.IsDBNull(2))
+                    throw new InvalidOperationException(
+                        "Dieser Tag-Auftrag enthält bereits vorgemerkte Änderungen. " +
+                        "Er darf erst nach deren sicherem Abgleich oder Verwerfen gelöscht werden.");
+                edits.Add((rows.GetInt64(0), rows.GetString(1), rows.GetBoolean(2)));
+            }
+        }
+        foreach (var image in edits.GroupBy(edit => edit.Id))
+        {
+            string? words;
+            using (var read = db.CreateCommand())
+            {
+                read.Transaction = tx;
+                read.CommandText = "SELECT keywords FROM image_tags WHERE image_id=$id;";
+                read.Parameters.AddWithValue("$id", image.Key);
+                words = read.ExecuteScalar() as string;
+            }
+            var tags = new HashSet<string>((words ?? string.Empty).Split('\n',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var edit in image)
+            {
+                if (edit.BasePresent) tags.Add(edit.Tag);
+                else tags.Remove(edit.Tag);
+            }
+            using (var update = db.CreateCommand())
+            {
+                update.Transaction = tx;
+                update.CommandText = "UPDATE image_tags SET keywords=$words WHERE image_id=$id;";
+                update.Parameters.AddWithValue("$words", string.Join("\n", tags));
+                update.Parameters.AddWithValue("$id", image.Key);
+                update.ExecuteNonQuery();
+            }
+            using (var remove = db.CreateCommand())
+            {
+                remove.Transaction = tx;
+                remove.CommandText =
+                    "DELETE FROM pending_tag_edits WHERE owner_key=$key AND image_id=$id;";
+                remove.Parameters.AddWithValue("$key", key);
+                remove.Parameters.AddWithValue("$id", image.Key);
+                remove.ExecuteNonQuery();
+            }
+            using (var clear = db.CreateCommand())
+            {
+                clear.Transaction = tx;
+                clear.CommandText = """
+                    DELETE FROM original_write_failures
+                    WHERE kind='tags' AND image_id=$id
+                      AND (package_key=$key OR NOT EXISTS
+                         (SELECT 1 FROM pending_tag_edits WHERE image_id=$id));
+                    """;
+                clear.Parameters.AddWithValue("$key", key);
+                clear.Parameters.AddWithValue("$id", image.Key);
+                clear.ExecuteNonQuery();
+            }
+        }
+        tx.Commit();
+        return true;
+    }
+
     // A real persisted HOLD, distinct from a failure/backoff and from
     // cancellation. No recovery controller may reactivate this state.
     public bool Pause(string key)
