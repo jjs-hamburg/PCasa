@@ -93,19 +93,22 @@ public sealed class FolderScanner
     }
 
     private readonly ImageCatalogRepository _catalog;
-    private readonly ThumbnailCache _thumbnailCache;
+    private readonly IFolderImportMedia _thumbnailCache;
+    private readonly Func<IImportExifReader> _exifReaderFactory;
     private readonly FolderRepository _folderRepository;
     private readonly BrowseThumbnailProfileRepository _browseProfile;
 
     public FolderScanner(
         ImageCatalogRepository catalog,
-        ThumbnailCache thumbnailCache,
+        IFolderImportMedia thumbnailCache,
         FolderRepository? folderRepository = null,
-        BrowseThumbnailProfileRepository? profileRepository = null)
+        BrowseThumbnailProfileRepository? profileRepository = null,
+        Func<IImportExifReader>? exifReaderFactory = null)
     {
         _browseProfile = profileRepository ?? new BrowseThumbnailProfileRepository(new LocalDatabase());
         _catalog = catalog;
         _thumbnailCache = thumbnailCache;
+        _exifReaderFactory = exifReaderFactory ?? (() => new ImageExifReader());
         _folderRepository = folderRepository ?? new FolderRepository(new LocalDatabase());
     }
 
@@ -177,7 +180,7 @@ public sealed class FolderScanner
         bool catalogOwnedProgress = false,
         bool retryFailedFiles = false)
     {
-        var scanRoot = Path.GetFullPath(localDirectory).Replace('/', '\\');
+        var scanRoot = CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(localDirectory));
         EnsureInsideMonitoredFolder(folder, scanRoot);
 
         if (!Directory.Exists(scanRoot))
@@ -393,7 +396,7 @@ public sealed class FolderScanner
         var scanSession = _catalog.CreateScanSession(
             folder.CanonicalPath, folder.Id, generation, cancellationToken);
         // ExifTool is reused throughout this scan, not restarted per file.
-        using var exifReader = new ImageExifReader();
+        using var exifReader = _exifReaderFactory();
         var enumerator = resume?.Enumerator ??
             (specificFile is null
                 ? EnumerateIncludedFiles(
@@ -502,7 +505,7 @@ public sealed class FolderScanner
                         existing.FileSize == fileLength &&
                         existing.ModifiedUtcTicks == modifiedUtcTicks &&
                         File.Exists(existing.ThumbnailPath) &&
-                        (!RawImageSource.IsRawPath(localPath) ||
+                        (!_thumbnailCache.IsRawPath(localPath) ||
                          Path.GetFileName(existing.ThumbnailPath).StartsWith(
                              "raw2-", StringComparison.OrdinalIgnoreCase));
                     // Publish the actual pending operation BEFORE slow EXIF
@@ -570,9 +573,7 @@ public sealed class FolderScanner
                         decodeIdentity = new CatalogImageData(folder.Id, photoFolderId,
                             localPath, canonicalPath, file.Name, extension.ToLowerInvariant(),
                             fileLength, modifiedUtcTicks, 256, 256, "", createdUtcTicks);
-                        var renderPath = VideoFormats.IsVideo(localPath)
-                            ? VideoThumbnailSource.Resolve(localPath, cancellationToken)
-                            : RawImageSource.Resolve(localPath, cancellationToken);
+                        var renderPath = _thumbnailCache.ResolveSource(localPath, cancellationToken);
                         var thumbnail = _thumbnailCache.CreateOrUpdate(
                             renderPath,
                             canonicalPath,
@@ -589,23 +590,23 @@ public sealed class FolderScanner
                         // Each image owns exactly one pack writer lifetime.
                         // A later cache compaction must never race a cached,
                         // still-open handle to a previous pack file.
-                        using var packStore = new PackedThumbnailStore();
+                        using var packStore = _thumbnailCache.CreatePackStore();
                         var smallTiers = profile.Tiers.Where(tier => tier <= 512).ToArray();
                         var largeTiers = profile.Tiers.Where(tier => tier > 512).ToArray();
                         var preparedSmall = smallTiers.Length > 0
                             ? packStore.PrepareTiers(
                                 thumbnail.Path, new BrowseThumbnailProfile(smallTiers),
                                 cancellationToken)
-                            : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
+                            : Array.Empty<ImportThumbnailTier>();
                         var preparedLarge = largeTiers.Length > 0
                             ? packStore.PrepareTiers(
                                 renderPath, new BrowseThumbnailProfile(largeTiers),
                                 cancellationToken, originalSourcePath: localPath)
-                            : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
+                            : Array.Empty<ImportThumbnailTier>();
                         // Only source decode failures qualify as permanent
                         // import errors; do not mislabel database/write faults.
                         decodeIdentity = null;
-                        var keywords = ImageTagRepository.ReadKeywords(localPath);
+                        var keywords = _thumbnailCache.ReadKeywords(localPath);
                         var exif = exifReader.Read(localPath, cancellationToken);
                         cancellationToken.ThrowIfCancellationRequested();
 
@@ -671,7 +672,7 @@ public sealed class FolderScanner
                         throw;
                     scanSession.RollbackPending();
                     failed++;
-                    if (decodeIdentity is { } identity && ex is NetVips.VipsException)
+                    if (decodeIdentity is { } identity && _thumbnailCache.IsDecodeFailure(ex))
                     {
                         using var sourceLock = SourceFileLocks.Enter(localPath, cancellationToken);
                         // Verify access and the same file identity again. A
@@ -689,7 +690,7 @@ public sealed class FolderScanner
                         var placeholder = _thumbnailCache.CreateImportErrorPlaceholder(
                             identity.CanonicalPath, identity.FileSize,
                             identity.ModifiedUtcTicks, cancellationToken);
-                        using var store = new PackedThumbnailStore();
+                        using var store = _thumbnailCache.CreatePackStore();
                         var prepared = store.PrepareTiers(placeholder.Path, profile,
                             cancellationToken);
                         lock (CatalogRemovalService.CacheLock)
@@ -1061,25 +1062,9 @@ public sealed class FolderScanner
 
     private static void EnsureInsideMonitoredFolder(MonitoredFolder folder, string scanRoot)
     {
-        var monitoredRoot = Path.GetFullPath(folder.LocalPath)
-            .Replace('/', '\\')
-            .TrimEnd('\\');
-        var normalizedScanRoot = scanRoot.TrimEnd('\\');
-
-        if (string.Equals(
-                monitoredRoot,
-                normalizedScanRoot,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        var prefix = monitoredRoot + "\\";
-        if (!normalizedScanRoot.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
+        if (!FolderExclusionRules.IsAtOrBelow(scanRoot, folder.LocalPath))
             throw new InvalidOperationException(
                 $"Der Ordner liegt nicht innerhalb des überwachten Bereichs: {scanRoot}");
-        }
     }
 
     internal static string ResolveCanonicalFullPath(MonitoredFolder folder, string fullLocalPath)

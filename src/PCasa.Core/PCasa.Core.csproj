@@ -46,6 +46,7 @@
     <Compile Include="../PCasa.App/Services/BackgroundScanSettings.cs" Link="Services/BackgroundScanSettings.cs" />
     <Compile Include="../PCasa.App/Services/ImageExifReader.cs" Link="Services/ImageExifReader.cs" />
     <Compile Include="../PCasa.App/Services/ExifToolProcessRegistry.cs" Link="Services/ExifToolProcessRegistry.cs" />
+    <Compile Include="../PCasa.App/Services/FolderScanner.cs" Link="Services/FolderScanner.cs" />
   </ItemGroup>
   <Import Project="../../PCasa.Version.props" />
 </Project>

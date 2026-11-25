@@ -1,4 +1,5 @@
 using PCasa.App.Data;
+using PCasa.App.Models;
 using PCasa.App.Services;
 
 var directory = Path.Combine(Path.GetTempPath(), "PCasa.CoreTests-" + Guid.NewGuid().ToString("N"));
@@ -92,12 +93,27 @@ try
         typeof(BackgroundFolderMonitor).Assembly != typeof(LocalDatabase).Assembly)
         throw new Exception("Catalog or inventory still depends on the Windows host.");
 
+    // Exercise the production import transaction without WPF, libvips or
+    // ExifTool. Only the media/metadata adapters are test doubles.
+    var catalog = new ImageCatalogRepository(database);
+    var importMedia = new TestImportMedia(directory);
+    var scanner = new FolderScanner(catalog, importMedia, folders,
+        new BrowseThumbnailProfileRepository(database), () => new TestExifReader());
+    var imported = scanner.Scan(root);
+    if (imported.Updated != 1 || imported.Failed != 0 ||
+        catalog.GetImageId(jpg) is null || importMedia.Decodes != 1)
+        throw new Exception("Portable scanner did not commit the new image.");
+    var unchanged = scanner.Scan(root);
+    if (unchanged.Unchanged != 1 || unchanged.Updated != 0 || importMedia.Decodes != 1)
+        throw new Exception("Portable scanner decoded an unchanged image again.");
+
     // These types must be delivered from the same WPF-free core assembly.
     var assembly = typeof(LocalDatabase).Assembly;
     if (assembly.GetName().Name != "PCasa.Core" ||
         typeof(SourceAvailabilityGate).Assembly != assembly ||
         typeof(SchedulerTaskPackage).Assembly != assembly ||
         typeof(PCasaScheduler).Assembly != assembly ||
+        typeof(FolderScanner).Assembly != assembly ||
         typeof(DurablePackageJournal).Assembly != assembly ||
         typeof(SchedulerTaskOrderStore).Assembly != assembly ||
         typeof(DurableGalleryTransferJournal).Assembly != assembly ||
@@ -112,4 +128,52 @@ finally
 {
     Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
     Directory.Delete(directory, recursive: true);
+}
+
+sealed class TestExifReader : IImportExifReader
+{
+    public ImageExifData Read(string path, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return new ImageExifData("{}", null, null, null, null, null, null);
+    }
+    public void Dispose() { }
+}
+
+sealed class TestImportMedia(string directory) : IFolderImportMedia
+{
+    public int Decodes { get; private set; }
+    public bool IsRawPath(string path) => false;
+    public string ResolveSource(string path, CancellationToken token) => path;
+    public ThumbnailResult CreateOrUpdate(string sourcePath, string canonicalPath,
+        long fileSize, long modifiedUtcTicks, string? originalSourcePath = null,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Decodes++;
+        var path = Path.Combine(directory, "test-thumbnail.jpg");
+        File.WriteAllBytes(path, new byte[] { 1, 2, 3 });
+        return new ThumbnailResult(path, 32, 24);
+    }
+    public ThumbnailResult CreateImportErrorPlaceholder(string canonicalPath,
+        long fileSize, long modifiedUtcTicks, CancellationToken token)
+        => throw new NotSupportedException();
+    public IImportThumbnailStore CreatePackStore() => new TestImportPack();
+    public string? ReadKeywords(string path) => null;
+    public bool IsDecodeFailure(Exception exception) => false;
+}
+
+sealed class TestImportPack : IImportThumbnailStore
+{
+    public IReadOnlyList<ImportThumbnailTier> PrepareTiers(string sourcePath,
+        BrowseThumbnailProfile profile, CancellationToken cancellationToken = default,
+        string? originalSourcePath = null)
+        => profile.Tiers.Select(t => new ImportThumbnailTier(t, new byte[] { 1 }, 32, 24)).ToArray();
+
+    public IReadOnlyList<PackedThumbnailLocation> AppendPrepared(
+        IReadOnlyList<ImportThumbnailTier> prepared, CancellationToken cancellationToken = default)
+        => prepared.Select(t => new PackedThumbnailLocation(t.Tier, "test.pack",
+            0, t.Bytes.Length, t.Width, t.Height)).ToArray();
+
+    public void Dispose() { }
 }

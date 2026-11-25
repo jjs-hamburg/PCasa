@@ -15,7 +15,7 @@ public sealed record ImageExifData(string Json, string? CameraMake,
     string? CameraModel, string? DateTimeOriginal,
     double? GpsLatitude, double? GpsLongitude, double? GpsAltitude);
 
-public sealed class ImageExifReader : IDisposable
+public sealed class ImageExifReader : IImportExifReader
 {
     private Process? _process;
     private int _nextRequestId;

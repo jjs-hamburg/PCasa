@@ -5,10 +5,23 @@ using NetVips;
 
 namespace PCasa.App.Services;
 
-public sealed record ThumbnailResult(string Path, int Width, int Height);
-
-public sealed class ThumbnailCache
+public sealed class ThumbnailCache : IFolderImportMedia
 {
+    bool IFolderImportMedia.IsRawPath(string path) => RawImageSource.IsRawPath(path);
+
+    string IFolderImportMedia.ResolveSource(string path, CancellationToken token)
+        => VideoFormats.IsVideo(path)
+            ? VideoThumbnailSource.Resolve(path, token)
+            : RawImageSource.Resolve(path, token);
+
+    IImportThumbnailStore IFolderImportMedia.CreatePackStore() => new PackedThumbnailStore();
+
+    string? IFolderImportMedia.ReadKeywords(string path)
+        => PCasa.App.Data.ImageTagRepository.ReadKeywords(path);
+
+    bool IFolderImportMedia.IsDecodeFailure(Exception exception)
+        => exception is VipsException;
+
     private const int ThumbnailSize = 512;
     private readonly string _cacheRoot;
 
