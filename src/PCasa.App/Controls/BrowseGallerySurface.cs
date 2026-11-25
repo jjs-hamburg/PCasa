@@ -55,6 +55,14 @@ public sealed class BrowseGallerySurface : FrameworkElement
         Array.Empty<BrowseThumbnailIndexEntry>();
     private IReadOnlyList<PhotoFolderSummary> _folders =
         Array.Empty<PhotoFolderSummary>();
+    private IReadOnlyDictionary<long, int> _previewRotations = new Dictionary<long, int>();
+
+    public void SetPreviewRotations(IReadOnlyDictionary<long, int> rotations)
+    {
+        _previewRotations = new Dictionary<long, int>(rotations);
+        InvalidateVisual();
+    }
+
     private IReadOnlySet<long> _selectedImageIds = new HashSet<long>();
     private IReadOnlySet<long> _hiddenFolderIds = new HashSet<long>();
     // Exactly one folder with zero filter matches can have a real gallery
@@ -944,6 +952,13 @@ public sealed class BrowseGallerySurface : FrameworkElement
                     _pageCache.TryGet(imageIndex, out var bitmap) &&
                     bitmap is not null)
                 {
+                    if (_previewRotations.TryGetValue(entry.ImageId, out var turns) && turns != 0)
+                    {
+                        var rotated = new System.Windows.Media.Imaging.TransformedBitmap(
+                            bitmap, new RotateTransform(turns * 90));
+                        rotated.Freeze();
+                        bitmap = rotated;
+                    }
                     imageRect = FitInto(box, bitmap.PixelWidth, bitmap.PixelHeight);
 
                     if (_showShadows)

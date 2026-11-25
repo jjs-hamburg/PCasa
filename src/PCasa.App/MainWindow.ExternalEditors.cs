@@ -777,7 +777,6 @@ public partial class MainWindow
             }) + (cleanupPending == 0 ? string.Empty :
                 UiLanguage.T(" · Temporäre Bereinigung ausstehend: ") + cleanupPending);
             _scheduler.NotifyTaskViewChanged();
-            ScheduleExternalCleanup();
             return true;
         }
         catch (Exception ex)
@@ -793,42 +792,6 @@ public partial class MainWindow
             review.Busy = false;
             if (!Dispatcher.HasShutdownStarted) UpdateEditControls();
         }
-    }
-
-    // P4 cleanup uses the SAME scheduler. A locked old editor file remains
-    // visible as pending but cannot block the next isolated workspace.
-    private void ScheduleExternalCleanup()
-    {
-        if (Dispatcher.HasShutdownStarted) return;
-        _ = ObserveExternalCleanupAsync("external:cleanup:" + Guid.NewGuid().ToString("N"));
-    }
-
-    private async Task ObserveExternalCleanupAsync(string key)
-    {
-        try
-        {
-            var remaining = await _scheduler.RunAsync(key,
-                SchedulerPriority.Idle,
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    _scheduler.ReportProgress(key,
-                        UiLanguage.T("Temporäre Arbeitsdateien bereinigen"), 0, 0,
-                        ExternalEditTransaction.DirectoryPath);
-                    return ExternalEditTransaction.CleanupCompletedWorkspaces();
-                }, workKind: SchedulerWorkKind.Catalog);
-            if (!Dispatcher.HasShutdownStarted)
-            {
-                _scheduler.NotifyTaskViewChanged();
-                _taskManagerWindow?.RequestRefresh();
-                if (remaining > 0)
-                    StatusText.Text = UiLanguage.T(
-                        "Externe Bearbeitung: temporäre Bereinigung ausstehend · ") +
-                        remaining + UiLanguage.T(" Ordner/Dateien (Editor noch geöffnet?)");
-            }
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { PCasaDiagnostics.Write("ExternalEdit.Cleanup", ex); }
     }
 
     private async Task RefreshExternalEditCatalogAsync(

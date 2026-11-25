@@ -31,6 +31,60 @@ public static class JpegCropWriter
     // in the same durable edit recipe as the source image and the steps.
     // No overwrite: even a retried durable job must not replace an existing
     // copy or accidentally modify the source.
+    // JPEG quarter-turns use EXIF orientation; the compressed image data
+    // remains untouched. Stage and verify before replacing the source.
+    public static void RotateGalleryImage(string originalPath, int turns, CancellationToken token)
+    {
+        turns = ((turns % 4) + 4) % 4;
+        if (turns == 0) return;
+        if (Path.GetExtension(originalPath).ToLowerInvariant() is not (".jpg" or ".jpeg"))
+        {
+            Save(originalPath, [new PhotoEditStep("rotate", Degrees: turns * 90)], token);
+            return;
+        }
+
+        var path = Path.GetFullPath(originalPath);
+        using var lease = SourceFileLocks.Enter(path, token);
+        var before = new FileInfo(path);
+        var size = before.Length;
+        var modified = before.LastWriteTimeUtc;
+        var created = before.CreationTimeUtc;
+        int orientation;
+        using (var input = File.Open(path, FileMode.Open, FileAccess.Read,
+                   FileShare.ReadWrite | FileShare.Delete))
+            orientation = ExifOrientation.Read(input);
+        var target = ExifOrientation.RotateQuarterTurns(orientation, turns);
+        var staged = Path.Combine(Path.GetDirectoryName(path)!,
+            ".pcasa-edit-" + Guid.NewGuid().ToString("N") + Path.GetExtension(path));
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            File.Copy(path, staged);
+            using (var writer = new ExifToolKeywordWriter.Session())
+                writer.WriteOrientation(staged, target, token);
+            using (var input = File.OpenRead(staged))
+                if (ExifOrientation.Read(input) != target)
+                    throw new IOException("JPEG orientation verification failed.");
+            ExifDateMetadata.VerifyUnchanged(path, staged, token);
+            new UndoHistoryService(UndoOptions.Load()).CaptureBeforeSave(path, token);
+            ReplaceWithVerifiedSharingRetry(staged, path, token, size, modified);
+            try
+            {
+                File.SetCreationTimeUtc(path, created);
+                var now = DateTime.UtcNow;
+                File.SetLastWriteTimeUtc(path, now > modified ? now : modified.AddMilliseconds(1));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            { PCasaDiagnostics.Write("Image.Rotate.Timestamp", ex); }
+        }
+        finally
+        {
+            try { if (File.Exists(staged)) File.Delete(staged); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            { PCasaDiagnostics.Write("Image.Rotate.Cleanup", ex); }
+        }
+    }
+
     public static string GetAvailableCopyPath(string originalPath)
     {
         var source = Path.GetFullPath(originalPath);

@@ -201,17 +201,18 @@ internal sealed class GalleryDateFilterWindow : Window
             // A decade is navigation only. The two grids are never shown
             // together, and no choice depends on the catalog or photo dates.
             panel.Width = 360;
-            var page = (value.Year + 100) / 200;
+            var currentYear = DateTime.Today.Year;
+            var page = (Math.Min(value.Year, currentYear) + 100) / 200;
             void DrawDecades()
             {
                 panel.Children.Clear();
                 var first = Math.Max(0, page * 200 - 100);
-                var last = Math.Min(9999, page * 200 + 99);
+                var last = Math.Min(currentYear, page * 200 + 99);
                 var header = new DockPanel { LastChildFill = true };
                 var prev = Choice("‹", () => { page--; DrawDecades(); });
                 var next = Choice("›", () => { page++; DrawDecades(); });
                 prev.IsEnabled = page > 0;
-                next.IsEnabled = page < 50;
+                next.IsEnabled = last < currentYear;
                 DockPanel.SetDock(prev, Dock.Left);
                 DockPanel.SetDock(next, Dock.Right);
                 prev.Width = next.Width = 28;
@@ -225,7 +226,7 @@ internal sealed class GalleryDateFilterWindow : Window
                 {
                     var decade = i;
                     decades.Children.Add(Choice(
-                        Math.Max(1, decade) + "–" + (decade + 9),
+                        decade.ToString(_culture),
                         () => DrawYears(decade), value.Year / 10 * 10 == decade));
                 }
                 panel.Children.Add(decades);
@@ -239,11 +240,11 @@ internal sealed class GalleryDateFilterWindow : Window
                 back.Width = 28;
                 DockPanel.SetDock(back, Dock.Left);
                 header.Children.Add(back);
-                header.Children.Add(new TextBlock { Text = Math.Max(1, decade) + " – " + (decade + 9),
+                header.Children.Add(new TextBlock { Text = decade.ToString(_culture),
                     TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
                 panel.Children.Add(header);
                 var years = new UniformGrid { Columns = 5 };
-                for (int i = Math.Max(1, decade); i <= decade + 9; i++)
+                for (int i = Math.Max(1, decade); i <= Math.Min(currentYear, decade + 9); i++)
                 {
                     var year = i;
                     years.Children.Add(Choice(year.ToString(_culture),

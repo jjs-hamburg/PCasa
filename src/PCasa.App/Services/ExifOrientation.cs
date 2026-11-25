@@ -11,6 +11,15 @@ namespace PCasa.App.Services;
 /// </summary>
 public static class ExifOrientation
 {
+    public static int RotateQuarterTurns(int orientation, int turns)
+    {
+        var clockwise = new[] { 0, 6, 7, 8, 5, 2, 3, 4, 1 };
+        if (orientation is < 1 or > 8) orientation = 1;
+        for (var i = 0; i < ((turns % 4) + 4) % 4; i++)
+            orientation = clockwise[orientation];
+        return orientation;
+    }
+
     public static BitmapSource Apply(BitmapSource decoded, Stream originalStream)
     {
         ArgumentNullException.ThrowIfNull(decoded);

@@ -153,14 +153,24 @@ internal static class Program
                         .Children.Cast<Button>().ToArray();
                     var decades = Years();
                     var starts = decades.Select(button =>
-                        int.Parse(button.Content.ToString()!.Split('–')[0])).ToArray();
+                        int.Parse(button.Content.ToString()!)).ToArray();
                     if (CurrentPanel().Children.Count != 2 ||
                         !starts.SequenceEqual(starts.OrderBy(year => year)) ||
                         !starts.Contains(selectedYear / 10 * 10) ||
-                        !starts.Contains(1900) || !starts.Contains(2090))
+                        !starts.Contains(1900) || starts.Any(year => year > DateTime.Today.Year))
                         throw new Exception("Decade popup must present an ascending grid independent of the catalog.");
                     var opened = CurrentPopup();
-                    decades.Single(button => button.Content.ToString() == "1980–1989")
+                    var now = DateTime.Today.Year;
+                    var recentDecade = now / 10 * 10;
+                    decades.Single(button => button.Content.ToString() == recentDecade.ToString())
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    if (!Years().Select(button => int.Parse(button.Content.ToString()!))
+                            .SequenceEqual(Enumerable.Range(recentDecade, now - recentDecade + 1)))
+                        throw new Exception("Future years must not be offered.");
+                    ((Button)((DockPanel)CurrentPanel().Children[0]).Children[0])
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    decades = Years();
+                    decades.Single(button => button.Content.ToString() == "1980")
                         .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     if (!opened.IsOpen || yearButton.Content.ToString() != selectedYear.ToString())
                         throw new Exception("Selecting a decade must navigate, not change the date or close the popup.");
@@ -171,9 +181,9 @@ internal static class Program
                         throw new Exception("The decade grid must be replaced by ten ascending years.");
                     ((Button)((DockPanel)CurrentPanel().Children[0]).Children[0])
                         .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                    if (!Years().Any(button => button.Content.ToString() == "1980–1989"))
+                    if (!Years().Any(button => button.Content.ToString() == "1980"))
                         throw new Exception("Year dateFilterDialog back button must restore the decade grid.");
-                    Years().Single(button => button.Content.ToString() == "1980–1989")
+                    Years().Single(button => button.Content.ToString() == "1980")
                         .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     Years().Single(button => button.Content.ToString() == "1985")
                         .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -182,7 +192,7 @@ internal static class Program
                         throw new Exception("A year click must immediately commit and close its popup.");
                     yearButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     Flush(dateFilterDialog);
-                    if (!Years().Any(button => button.Content.ToString() == "1980–1989"))
+                    if (!Years().Any(button => button.Content.ToString() == "1980"))
                         throw new Exception("Reopening the year popup must show the decade grid.");
                 }
                 finally { dateFilterDialog.Close(); }

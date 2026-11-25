@@ -253,7 +253,7 @@ public sealed class ImageExifReader : IImportExifReader
             start.ArgumentList.Add(arg);
         _process = ExifToolProcessRegistry.Start(start);
         // Drain warnings asynchronously to avoid a blocked stderr pipe.
-        _ = _process.StandardError.ReadToEndAsync();
+        _ = ExifToolKeywordWriter.DrainDiagnosticsAsync(_process);
     }
 
     public void Dispose()
