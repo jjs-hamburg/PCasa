@@ -95,6 +95,18 @@ try
             new DateTime(1985,1,1), new DateTime(1985,12,31), true).Select(x=>x.ImageId).SequenceEqual(new long[]{3,4}))
         throw new Exception("Date projection failed to respect field selection, formats, invalid dates or inversion.");
 
+    var yearParts = new GalleryDateParts(1984);
+    var yearBounds = yearParts.Bounds();
+    var monthBounds = yearParts.WithMonth(5).Bounds();
+    var exact = yearParts.WithMonth(5).WithDay(25).Bounds();
+    if (yearBounds != (new DateTime(1984,1,1), new DateTime(1984,12,31)) ||
+        monthBounds != (new DateTime(1984,5,1), new DateTime(1984,5,31)) ||
+        exact != (new DateTime(1984,5,25), new DateTime(1984,5,25)) ||
+        yearParts.WithMonth(2).WithDay(29).WithYear(1985).Day != 28 ||
+        yearParts.WithMonth(5).WithDay(25).WithMonth(null).Day is not null ||
+        yearParts.Bounds(new GalleryDateParts(1986,2)).Until != new DateTime(1986,2,28))
+        throw new Exception("Partial date selection expanded incorrectly.");
+
     // The inventory must recognize images without loading a decoder.
     var media = Path.Combine(directory, "photos");
     Directory.CreateDirectory(media);
