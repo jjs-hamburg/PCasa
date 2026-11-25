@@ -19,6 +19,7 @@ public partial class MainWindow
     // no independent task queue is introduced.
     private string? _initialScanTaskKey;
     private string? _initialScanTaskDirectory;
+    private long _initialScanTaskQueueOrder;
     private string? _initialScanTaskCurrentFile;
     private int _initialScanTaskChecked;
     private bool _initialScanWorkerStarted;
@@ -139,6 +140,7 @@ public partial class MainWindow
         var scanKey = $"initial:{folder.Id}";
         _initialScanTaskKey = scanKey;
         _initialScanTaskDirectory = folder.LocalPath;
+        _initialScanTaskQueueOrder = queueOrder;
         _initialScanTaskCurrentFile = null;
         _initialScanTaskChecked = 0;
         _initialScanWorkerStarted = false;
@@ -277,6 +279,7 @@ public partial class MainWindow
             _scheduler.NotifyTaskViewChanged();
             _initialScanTaskKey = null;
             _initialScanTaskDirectory = null;
+            _initialScanTaskQueueOrder = 0;
             _initialScanTaskCurrentFile = null;
             _initialScanTaskChecked = 0;
             _initialScanWorkerStarted = false;
