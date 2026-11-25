@@ -218,7 +218,7 @@ public partial class MainWindow
                 if (_manualFileTransferActive || !scanActive ||
                     _initialScanTaskKey != scanKey) return;
                 _initialScanTaskChecked = Math.Max(
-                    _initialScanTaskChecked, scan.ImageFilesSeen);
+                    _initialScanTaskChecked, scan.CatalogIndexed ?? scan.ImageFilesSeen);
                 _initialScanTaskCurrentFile = scan.CurrentFile;
                 _initialScanWorkerStarted = true;
                 if (scan.VerifiedDirectoryPath is { Length: > 0 } verifiedDirectory)

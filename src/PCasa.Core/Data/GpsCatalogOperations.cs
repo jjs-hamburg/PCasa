@@ -145,11 +145,12 @@ public class GpsCatalogOperations(LocalDatabase database,
             {
                 update.Transaction = tx;
                 update.CommandText = """
-                    UPDATE images SET file_size=$size
+                    UPDATE images SET file_size=$size,created_utc_ticks=$created
                      WHERE id=$id AND local_path=$path COLLATE NOCASE
                        AND file_size=$oldSize AND modified_utc_ticks=$ticks;
                     """;
                 update.Parameters.AddWithValue("$size", after.Length);
+                update.Parameters.AddWithValue("$created", after.CreationTimeUtc.Ticks);
                 update.Parameters.AddWithValue("$id", imageId);
                 update.Parameters.AddWithValue("$path", path);
                 update.Parameters.AddWithValue("$oldSize", indexedSize);

@@ -15,6 +15,27 @@ public sealed class ImageCatalogRepository
         _database = database;
     }
 
+    // Count committed catalog rows, not the current scan's visited filenames.
+    // Directory-boundary comparisons must not match similarly named siblings.
+    public int CountIndexedImages(long rootId, string directory, bool recursive)
+    {
+        var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        var prefix = Path.EndsInDirectorySeparator(path) ? path : path + Path.DirectorySeparatorChar;
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*) FROM images i JOIN photo_folders f ON f.id=i.photo_folder_id
+            WHERE i.folder_id=$id AND i.import_error IS NULL
+              AND (f.local_path=$path COLLATE NOCASE
+                OR ($recursive=1 AND substr(f.local_path,1,length($prefix))=$prefix COLLATE NOCASE));
+            """;
+        cmd.Parameters.AddWithValue("$id", rootId);
+        cmd.Parameters.AddWithValue("$path", path);
+        cmd.Parameters.AddWithValue("$prefix", prefix);
+        cmd.Parameters.AddWithValue("$recursive", recursive ? 1 : 0);
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
     public CatalogScanSession CreateScanSession(string? sourcePath = null,
         long? folderId = null, long? generation = null,
         CancellationToken cancellationToken = default)

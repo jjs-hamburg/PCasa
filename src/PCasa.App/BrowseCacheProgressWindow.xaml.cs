@@ -621,7 +621,9 @@ public partial class BrowseCacheProgressWindow : Window
             };
         Progress.IsIndeterminate = true;
         var processed = progress.Updated + progress.Unchanged + progress.Failed;
-        CountText.Text = UiLanguage.Format("Neu: {0:N0} · geprüft: {1:N0}", progress.Added, processed) +
+        CountText.Text = (progress.CatalogIndexed is int indexed
+            ? UiLanguage.Format("{0:N0} eingelesen", indexed)
+            : UiLanguage.Format("Neu: {0:N0} · geprüft: {1:N0}", progress.Added, processed)) +
             (progress.Failed > 0 ? UiLanguage.Format(" · Fehler: {0:N0}", progress.Failed) : string.Empty);
         CountText.ToolTip = UiLanguage.Format("{0:N0} gefunden · {1:N0} unverändert · {2:N0} geändert · {3:N0} Cache-Reparaturen", progress.ImageFilesSeen, progress.Unchanged, progress.Changed, progress.CacheRepaired);
         // The scanner has already committed this local thumbnail.

@@ -1562,7 +1562,7 @@ public partial class MainWindow
                         _backgroundLiveChecked = value.ImageFilesSeen;
                         if (schedulerScanKey is not null)
                             _scheduler.ReportProgress(schedulerScanKey,
-                                AutomaticTaskTitle(request.Kind), value.ImageFilesSeen,
+                                AutomaticTaskTitle(request.Kind), value.CatalogIndexed ?? value.ImageFilesSeen,
                                 0, value.CurrentFile);
                         // Continuous checks are passive, never foreground
                         // import presentations. In particular, do not steal
@@ -1652,6 +1652,20 @@ public partial class MainWindow
                             token.ThrowIfCancellationRequested();
                             if (!exists)
                             {
+                                // A delayed create/change event for a file already
+                                // removed or renamed is complete, not an offline
+                                // retry. Require explicit positive missing evidence.
+                                if (request.Kind == BackgroundFolderChangeKind.ScanFile &&
+                                    SourceFilePresence.Probe(scanPath) == FilePresence.ConfirmedMissing)
+                                {
+                                    var removed = _catalogRemovalService.RemovePath(
+                                        folder.Id, scanPath, cancellationToken: token,
+                                        sourceCanonicalPath: folder.CanonicalPath,
+                                        expectedGeneration: sourceState.Value.Generation,
+                                        deferCleanup: true);
+                                    scanResult = new ScanResult(0, 0, 0, 0, removed);
+                                    return Task.CompletedTask;
+                                }
                                 _scheduler.SourceAvailability.CheckAfterSourceError(scanPath, token);
                                 unavailablePath = true;
                                 return Task.CompletedTask;
@@ -1662,7 +1676,11 @@ public partial class MainWindow
                                 scanResume.ImageFilesSeen, scanResume.Updated,
                                 scanResume.Unchanged, scanResume.Failed, scanPath,
                                 scanResume.Added, scanResume.Changed,
-                                scanResume.CacheRepaired));
+                                scanResume.CacheRepaired,
+                                CatalogIndexed: request.Kind == BackgroundFolderChangeKind.RescanRoot
+                                    ? null : new ImageCatalogRepository(_database).CountIndexedImages(
+                                        folder.Id, request.Kind == BackgroundFolderChangeKind.ScanFile
+                                            ? Path.GetDirectoryName(scanPath)! : scanPath, request.Recursive)));
                             if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
                             {
                                 inventoryResult = new CatalogInventoryCheck(_database).Check(
