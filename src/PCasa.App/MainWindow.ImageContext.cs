@@ -234,6 +234,9 @@ public partial class MainWindow
                     _dragPublishedImages[entry.ImageId] = entry;
                 _browsePageCache.ReplaceThumbnailEntries(refreshed, decoded);
                 BrowseSurface.ReplaceThumbnailEntries(refreshed);
+                if (AttributeFilterActive || _gpsAreaFilterIds is not null ||
+                    !string.IsNullOrWhiteSpace(TagSearchBox.Text))
+                    await ApplyTagFilterAsync();
                 if (changesGeometry)
                 {
                     BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,

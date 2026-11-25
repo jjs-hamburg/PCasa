@@ -94,22 +94,66 @@ public static class GalleryFolderOrdering
 
     public static bool MatchesCaptureDate(BrowseThumbnailIndexEntry item,
         DateTime? from, DateTime? until)
+        => MatchesDate(item, GallerySortField.Captured, from, until);
+
+    public static bool MatchesDate(BrowseThumbnailIndexEntry item,
+        GallerySortField field, DateTime? from, DateTime? until)
     {
         if (from is null && until is null) return true;
-        var ticks = CaptureTime(item);
-        if (ticks <= 0 || ticks > DateTime.MaxValue.Ticks) return false;
-        var day = new DateTime(ticks).Date;
+        if (field == GallerySortField.Captured && item.HasInvalidCaptureDate)
+            return false;
+        // Camera dates are wall-clock values. File dates are UTC instants
+        // and must match the user's local calendar day, not the UTC day.
+        var nativeCapture = field == GallerySortField.Captured && item.TakenUtcTicks.HasValue;
+        long? ticks = field switch
+        {
+            GallerySortField.Captured => item.TakenUtcTicks ?? item.CreatedUtcTicks,
+            GallerySortField.Created => item.CreatedUtcTicks,
+            GallerySortField.Modified => item.ModifiedUtcTicks,
+            _ => null
+        };
+        if (ticks is not long stamp || stamp <= 0 || stamp > DateTime.MaxValue.Ticks)
+            return false;
+        var day = nativeCapture ? new DateTime(stamp).Date
+            : new DateTime(stamp, DateTimeKind.Utc).ToLocalTime().Date;
         return (!from.HasValue || day >= from.Value.Date) &&
             (!until.HasValue || day <= until.Value.Date);
     }
 
+    public static IReadOnlyList<BrowseThumbnailIndexEntry> FilterDateRange(
+        IReadOnlyList<BrowseThumbnailIndexEntry> index, GallerySortField field,
+        DateTime from, DateTime? until, bool inverted)
+        => index.Where(image => MatchesDate(image, field, from, until) != inverted).ToArray();
+
+    private static readonly string[] CaptureFormats =
+    [
+        "yyyy:MM:dd HH:mm:ss", "yyyy:MM:dd HH:mm:ss.FFFFFFF",
+        "yyyy/MM/dd HH:mm:ss", "yyyy/MM/dd HH:mm:ss.FFFFFFF",
+        "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm:ss.FFFFFFF",
+        "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF"
+    ];
+    private static readonly string[] CaptureOffsetFormats = CaptureFormats
+        .SelectMany(format => new[] { format + "zzz", format + " zzz", format + "'Z'" }).ToArray();
+
+    public static long? ParseCaptureDateTicks(string? source)
+    {
+        if (string.IsNullOrWhiteSpace(source)) return null;
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        var value = source.Trim();
+        if (DateTime.TryParseExact(value, CaptureFormats, culture,
+                System.Globalization.DateTimeStyles.AllowWhiteSpaces, out var local))
+            return local.Ticks;
+        return DateTimeOffset.TryParseExact(value, CaptureOffsetFormats, culture,
+            System.Globalization.DateTimeStyles.AllowWhiteSpaces, out var offset)
+            ? offset.DateTime.Ticks : null;
+    }
+
     private static long CaptureTime(BrowseThumbnailIndexEntry item)
         // EXIF missing: source creation; if unavailable: modification.
-        => item.TakenUtcTicks ?? CreatedTime(item);
+        => item.HasInvalidCaptureDate ? 0 : item.TakenUtcTicks ?? item.CreatedUtcTicks ?? 0;
 
     private static long CreatedTime(BrowseThumbnailIndexEntry item)
-        => item.CreatedUtcTicks is > 0 ? item.CreatedUtcTicks.Value
-            : item.ModifiedUtcTicks;
+        => item.CreatedUtcTicks is > 0 ? item.CreatedUtcTicks.Value : 0;
 
     private static long PixelCount(BrowseThumbnailIndexEntry item)
         => (long)item.OriginalWidth * item.OriginalHeight;

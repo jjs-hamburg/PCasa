@@ -9,74 +9,109 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
-    // Date filters refine the existing local gallery, never schedule a scan.
-    // They are session-only so an old date range cannot hide a new library.
     private DateTime? _galleryDateFrom, _galleryDateUntil;
-    private bool _syncingGalleryDate;
-    private Popup? _galleryDatePopup;
+    private GallerySortField _galleryDateField = GallerySortField.Captured;
     private bool DateFilterActive => _galleryDateFrom.HasValue;
 
-    private CultureInfo GalleryDateCulture => CultureInfo.GetCultureInfo(
+    private async Task OpenGalleryDateFilterAsync()
+    {
+        var dialog = new GalleryDateFilterWindow(_galleryDateField,
+            _galleryDateFrom ?? DateTime.Today, _galleryDateUntil) { Owner = this };
+        if (dialog.ShowDialog() != true)
+        {
+            SyncGalleryAttributeFilterUi();
+            return;
+        }
+        await ApplyGalleryDateRangeAsync(dialog.Field, dialog.From, dialog.Until);
+    }
+
+    private Task ApplyGalleryDateRangeAsync(GallerySortField field, DateTime from, DateTime? until)
+    {
+        _galleryDateField = field;
+        _galleryDateFrom = from.Date;
+        _galleryDateUntil = until?.Date;
+        return ChangeGalleryAttributeFilterAsync("Date", false, force: true);
+    }
+}
+
+internal sealed class GalleryDateFilterWindow : Window
+{
+    private readonly CultureInfo _culture = CultureInfo.GetCultureInfo(
         UiLanguage.Current.Code == "en" ? "en-GB" : "de-DE");
+    private Popup? _popup;
+    private DateTime _from, _until;
+    private readonly CheckBox _hasUntil;
+    private readonly Button _fromButton, _untilButton, _ok;
+    public GallerySortField Field { get; private set; }
+    public DateTime From => _from;
+    public DateTime? Until => _hasUntil.IsChecked == true ? _until : null;
 
-    private void SyncGalleryDateFilterUi()
+    public GalleryDateFilterWindow(GallerySortField field, DateTime from, DateTime? until)
     {
-        if (GalleryDateFromButton is null || GalleryDateUntilButton is null ||
-            GalleryDateUntilCheck is null || GalleryDateClearButton is null) return;
-        _syncingGalleryDate = true;
-        try
+        Field = field;
+        _from = from.Date;
+        _until = until?.Date ?? (from > DateTime.Today ? from.Date : DateTime.Today);
+        Title = UiLanguage.T("Datumsfilter");
+        SizeToContent = SizeToContent.WidthAndHeight;
+        ResizeMode = ResizeMode.NoResize;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        ShowInTaskbar = false;
+        Background = Application.Current.TryFindResource("PcasaPanelBrush") as Brush ?? Brushes.DimGray;
+        Foreground = Application.Current.TryFindResource("PcasaTextBrush") as Brush ?? Brushes.White;
+        var root = new StackPanel { Margin = new Thickness(14) };
+        Content = root;
+        var kinds = new StackPanel { Orientation = Orientation.Horizontal };
+        foreach (var (kind, label) in new[] {
+            (GallerySortField.Captured, "Aufnahmedatum"),
+            (GallerySortField.Created, "Erstellungsdatum"),
+            (GallerySortField.Modified, "Änderungsdatum") })
         {
-            GalleryDateFromButton.Content = _galleryDateFrom?.ToString("d", GalleryDateCulture) ?? "–";
-            GalleryDateUntilButton.Content = _galleryDateUntil?.ToString("d", GalleryDateCulture) ?? "–";
-            GalleryDateUntilCheck.IsEnabled = DateFilterActive;
-            GalleryDateUntilCheck.IsChecked = _galleryDateUntil.HasValue;
-            GalleryDateUntilButton.Visibility = _galleryDateUntil.HasValue
-                ? Visibility.Visible : Visibility.Collapsed;
-            GalleryDateClearButton.IsEnabled = DateFilterActive;
+            var radio = new RadioButton
+            {
+                Content = UiLanguage.T(label), IsChecked = field == kind,
+                GroupName = "DateField", Margin = new Thickness(0,0,12,0)
+            };
+            radio.Checked += (_, _) => Field = kind;
+            kinds.Children.Add(radio);
         }
-        finally { _syncingGalleryDate = false; }
+        root.Children.Add(kinds);
+        var dates = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0,12,0,12) };
+        dates.Children.Add(new TextBlock { Text = UiLanguage.T("Von"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0,0,6,0) });
+        _fromButton = new Button { Content = _from.ToString("d", _culture), Width = 108, Height = 28 };
+        _untilButton = new Button { Content = _until.ToString("d", _culture), Width = 108, Height = 28,
+            Visibility = until.HasValue ? Visibility.Visible : Visibility.Collapsed };
+        _hasUntil = new CheckBox { Content = UiLanguage.T("Bis"), IsChecked = until.HasValue,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(14,0,6,0) };
+        dates.Children.Add(_fromButton);
+        dates.Children.Add(_hasUntil);
+        dates.Children.Add(_untilButton);
+        root.Children.Add(dates);
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        var cancel = new Button { Content = UiLanguage.T("Abbrechen"), Width = 98, Height = 30, IsCancel = true, Margin = new Thickness(0,0,8,0) };
+        _ok = new Button { Content = UiLanguage.T("OK"), Width = 76, Height = 30, IsDefault = true };
+        _ok.Click += (_, _) => { if (Until is null || Until >= From) DialogResult = true; };
+        actions.Children.Add(cancel);
+        actions.Children.Add(_ok);
+        root.Children.Add(actions);
+        _fromButton.Click += (_, _) => OpenCalendar(_fromButton, _from, value => { _from = value; ValidateRange(); });
+        _untilButton.Click += (_, _) => OpenCalendar(_untilButton, _until, value => { _until = value; ValidateRange(); });
+        _hasUntil.Checked += (_, _) => { _untilButton.Visibility = Visibility.Visible; ValidateRange(); };
+        _hasUntil.Unchecked += (_, _) => { _untilButton.Visibility = Visibility.Collapsed; ValidateRange(); };
+        Closed += (_, _) => { if (_popup is { } popup) popup.IsOpen = false; };
+        ValidateRange();
     }
 
-    private async void GalleryDateUntil_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_syncingGalleryDate || _galleryDateFrom is not DateTime from ||
-            GalleryDateUntilCheck is null) return;
-        _galleryDateUntil = GalleryDateUntilCheck.IsChecked == true
-            ? (from > DateTime.Today ? from : DateTime.Today) : null;
-        await ApplyGalleryDateFilterAsync();
-    }
+    private void ValidateRange() => _ok.IsEnabled = Until is null || Until >= From;
 
-    private async void GalleryDateClear_Click(object sender, RoutedEventArgs e)
+    private void OpenCalendar(Button anchor, DateTime date, Action<DateTime> selected)
     {
-        if (_galleryDatePopup is { } popup) popup.IsOpen = false;
-        _galleryDateFrom = _galleryDateUntil = null;
-        await ApplyGalleryDateFilterAsync();
-    }
-
-    private async Task ApplyGalleryDateFilterAsync()
-    {
-        SyncGalleryDateFilterUi();
-        if (!_browseInitialized || _browsePageCache is null) return;
-        try
-        {
-            await ApplyTagFilterAsync(scrollToTop: false);
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { PCasaDiagnostics.Write("Gallery.DateFilter", ex); }
-    }
-
-    private void GalleryDatePicker_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button anchor) return;
-        if (_galleryDatePopup is { } old) old.IsOpen = false;
-        var until = ReferenceEquals(anchor, GalleryDateUntilButton);
-        var date = (until ? _galleryDateUntil : _galleryDateFrom) ?? DateTime.Today;
+        if (_popup is { } old) old.IsOpen = false;
         var year = date.Year;
         var month = date.Month;
         var decade = Math.Max(1, year / 10 * 10);
         var century = year / 100 * 100;
         var mode = 0; // days, months, years
-        var culture = GalleryDateCulture;
+        var culture = _culture;
         var panel = new StackPanel { Width = 288, Margin = new Thickness(8) };
         var border = new Border { Child = panel, BorderThickness = new Thickness(1) };
         border.SetResourceReference(Border.BackgroundProperty, "PcasaTopBrush");
@@ -86,10 +121,10 @@ public partial class MainWindow
             PlacementTarget = anchor, Placement = PlacementMode.Bottom,
             StaysOpen = false, AllowsTransparency = true, Child = border
         };
-        _galleryDatePopup = popup;
+        _popup = popup;
         popup.Closed += (_, _) =>
         {
-            if (ReferenceEquals(_galleryDatePopup, popup)) _galleryDatePopup = null;
+            if (ReferenceEquals(_popup, popup)) _popup = null;
         };
 
         Button Choice(string text, Action action, bool selected = false, bool enabled = true)
@@ -122,18 +157,12 @@ public partial class MainWindow
             Draw();
         }
 
-        async void Pick(int day)
+        void Pick(int day, bool close = true)
         {
-            var selected = new DateTime(year, month, day);
-            popup.IsOpen = false;
-            if (until) _galleryDateUntil = selected;
-            else
-            {
-                _galleryDateFrom = selected;
-                if (_galleryDateUntil is DateTime end && end < selected)
-                    _galleryDateUntil = selected;
-            }
-            await ApplyGalleryDateFilterAsync();
+            date = new DateTime(year, month, day);
+            selected(date);
+            anchor.Content = date.ToString("d", culture);
+            if (close) popup.IsOpen = false;
         }
 
         void Draw()
@@ -166,7 +195,7 @@ public partial class MainWindow
                 {
                     var value = i;
                     months.Children.Add(Choice(culture.DateTimeFormat.GetAbbreviatedMonthName(value),
-                        () => { month = value; mode = 0; Draw(); }, value == month));
+                        () => { month = value; mode = 0; Pick(Math.Min(date.Day, DateTime.DaysInMonth(year, month)), false); Draw(); }, value == month));
                 }
                 panel.Children.Add(months);
                 return;
@@ -190,7 +219,7 @@ public partial class MainWindow
                 {
                     var value = i;
                     years.Children.Add(Choice(value.ToString(culture),
-                        () => { year = value; mode = 0; Draw(); }, value == year));
+                        () => { year = value; mode = 0; Pick(Math.Min(date.Day, DateTime.DaysInMonth(year, month)), false); Draw(); }, value == year));
                 }
                 panel.Children.Add(years);
                 return;
@@ -212,8 +241,7 @@ public partial class MainWindow
                 var value = i;
                 var candidate = new DateTime(year, month, value);
                 days.Children.Add(Choice(value.ToString(culture), () => Pick(value),
-                    candidate == date.Date,
-                    !until || _galleryDateFrom is not DateTime min || candidate >= min));
+                    candidate == date.Date));
             }
             panel.Children.Add(days);
         }

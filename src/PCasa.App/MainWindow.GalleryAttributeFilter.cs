@@ -12,6 +12,7 @@ public partial class MainWindow
     // The existing gallery index already carries GPS, tag and RAW flags.
     // No second catalog query, scan, index or projection is introduced.
     private string CurrentAttributeFilter =>
+        DateFilterActive ? "Date" :
         _appearance.GalleryAttributeFilter is "Gps" or "Tags" or "Raw" or "Video" or "ImportError"
             ? _appearance.GalleryAttributeFilter : "None";
 
@@ -35,11 +36,11 @@ public partial class MainWindow
     private void SyncGalleryAttributeFilterUi()
     {
         if (GalleryAttributeFilterLabel is null) return;
-        SyncGalleryDateFilterUi();
         var filter = CurrentAttributeFilter;
         var inverse = _appearance.GalleryAttributeFilterInverted;
         GalleryAttributeFilterLabel.Text = UiLanguage.T(filter switch
         {
+            "Date" => "Datum",
             "Gps" => inverse ? "Ohne GPS" : "Mit GPS",
             "Tags" => inverse ? "Ohne Tags" : "Mit Tags",
             "Raw" => inverse ? "Ohne RAW" : "Nur RAW",
@@ -47,6 +48,7 @@ public partial class MainWindow
             "ImportError" => inverse ? "Ohne Einlesefehler" : "Einlesefehler",
             _ => "Filter"
         });
+        GalleryAttributeDateMenu.IsChecked = filter == "Date";
         GalleryAttributeGpsMenu.IsChecked = filter == "Gps";
         GalleryAttributeTagsMenu.IsChecked = filter == "Tags";
         GalleryAttributeRawMenu.IsChecked = filter == "Raw";
@@ -75,6 +77,11 @@ public partial class MainWindow
     private async void GalleryAttributeFilterOption_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem { Tag: string choice }) return;
+        if (choice == "Date")
+        {
+            await OpenGalleryDateFilterAsync();
+            return;
+        }
         await ChangeGalleryAttributeFilterAsync(
             choice == "VideoPhotos" ? "Video" : choice,
             choice == "VideoPhotos");
@@ -135,10 +142,10 @@ public partial class MainWindow
 
     private long _attributeFilterChangeVersion;
 
-    private async Task ChangeGalleryAttributeFilterAsync(string next, bool inverted)
+    private async Task ChangeGalleryAttributeFilterAsync(string next, bool inverted, bool force = false)
     {
-        if (next is not ("None" or "Gps" or "Tags" or "Raw" or "Video" or "ImportError")) return;
-        if (CurrentAttributeFilter == next &&
+        if (next is not ("None" or "Gps" or "Tags" or "Raw" or "Video" or "ImportError" or "Date")) return;
+        if (!force && CurrentAttributeFilter == next &&
             _appearance.GalleryAttributeFilterInverted == inverted) return;
 
         // Capture BEFORE replacing the projection. Never use ScrollToTop()
@@ -149,7 +156,8 @@ public partial class MainWindow
             BrowseScrollViewer.VerticalOffset + 4);
         var originalOffset = BrowseScrollViewer.VerticalOffset;
         var change = ++_attributeFilterChangeVersion;
-        _appearance.GalleryAttributeFilter = next;
+        if (next != "Date") _galleryDateFrom = _galleryDateUntil = null;
+        _appearance.GalleryAttributeFilter = next == "Date" ? "None" : next;
         _appearance.GalleryAttributeFilterInverted = inverted;
         SyncGalleryAttributeFilterUi();
         SaveAppearance();

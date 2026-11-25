@@ -178,20 +178,9 @@ public partial class MainWindow
         }
 
         e.Cancel = true;
-        if (_shutdownStarted || _shutdownReviewOpen) return;
-        try
-        {
-            // One review before any producer/scheduler is canceled.
-            // The review's Abbrechen buttons cancel exactly their tasks.
-            if (!ConfirmPendingShutdown()) return;
-        }
-        catch (Exception ex)
-        {
-            PCasaDiagnostics.Write("Shutdown.Review", ex);
-            PcasaDialog.Show(this, ex.Message, UiLanguage.T("PCasa beenden"),
-                MessageBoxButton.OK, MessageBoxImage.Error);
-            return;
-        }
+        if (_shutdownStarted) return;
+        // Unsubmitted drafts are discarded, accepted writes are drained at
+        // their safe boundary below. No separate pending-operation dialog.
         _tagDraft.Clear();
         if (_photoEditSession is { HasChanges: true }) CancelEditSession();
         // Save the ACTUAL visible folder expansion before shutdown begins.
