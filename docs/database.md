@@ -40,7 +40,7 @@ Bei Tag-Schreibjobs kann die Fortschrittsanzeige auf den bereits vorhandenen **l
 
 ## Tag-Schreiben und Wiederanlauf
 
-Einzeländerungen werden direkt ausgeführt. Mehrfachänderungen benutzen denselben fachlichen Schreibpfad; pending_tag_edits und scheduler_packages halten bestätigten Fortschritt bzw. noch offene Absichten fest. Die Originaldatei bleibt maßgeblich. Unbestätigte Schreibabsichten werden nach Sitzungsende nicht automatisch wiederholt. Sicherheitsreceipts bleiben zur expliziten Prüfung erhalten. Ein reiner Keyword-Wechsel darf keine erneute Pixeldekodierung auslösen.
+Einzeländerungen werden direkt ausgeführt. Mehrfachänderungen benutzen denselben fachlichen Schreibpfad; pending_tag_edits und scheduler_packages halten bestätigten Fortschritt bzw. noch offene Absichten fest. Die Originaldatei bleibt maßgeblich. Angenommene Mehrfachaufträge setzen nach dem Neustart am bestätigten Schreibschritt fort; Sicherheitsreceipts bleiben zur Integrität erhalten. Der einmalige Alpha.64-Reset entfernt alte Aufträge, ohne bestätigten Katalogbestand oder Sicherheitsreceipts zu löschen. Ein reiner Keyword-Wechsel darf keine erneute Pixeldekodierung auslösen.
 
 ## Mehrclient-Datenbank
 

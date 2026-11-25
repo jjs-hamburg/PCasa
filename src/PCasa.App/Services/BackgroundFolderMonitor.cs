@@ -1,5 +1,6 @@
 using System.IO;
 using PCasa.App.Models;
+using PCasa.App.Data;
 
 namespace PCasa.App.Services;
 
@@ -24,15 +25,17 @@ public sealed class BackgroundFolderMonitor : IDisposable
     private readonly Dictionary<long, WatcherState> _watchers = new();
     private readonly Func<string, FileSystemWatcher> _watcherFactory;
     private readonly SourceAvailabilityGate? _sources;
+    private readonly LocalDatabase? _database;
     private bool _disposed;
 
     public BackgroundFolderMonitor(Func<string, FileSystemWatcher>? watcherFactory = null,
-        SourceAvailabilityGate? sources = null)
+        SourceAvailabilityGate? sources = null, LocalDatabase? database = null)
     {
         // A single scheduler source gate is shared with Tag and scan work.
         // Tests can still inject a deterministic watcher factory.
         _watcherFactory = watcherFactory ?? (path => new FileSystemWatcher(path));
         _sources = sources;
+        _database = database;
     }
 
     public event EventHandler<BackgroundFolderChange>? Changed;
@@ -156,6 +159,10 @@ public sealed class BackgroundFolderMonitor : IDisposable
         }
     }
 
+    private bool IsOwnMutation(string path) =>
+        OriginalFileMutationReceipts.IsOwnedNotification(path) ||
+        (_database is not null && OriginalFileMutationReceipts.IsConfirmedNotification(_database, path));
+
     private void OnCreatedOrChanged(WatcherState state, string path, bool created)
     {
         if (_disposed)
@@ -183,7 +190,7 @@ public sealed class BackgroundFolderMonitor : IDisposable
         }
         // An acknowledged original mutation is already part of its parent
         // GPS/tag package, not a new independent scan request.
-        if (OriginalFileMutationReceipts.IsOwnedNotification(path)) return;
+        if (IsOwnMutation(path)) return;
 
         Raise(new BackgroundFolderChange(
             state.Folder.Id,
@@ -191,6 +198,33 @@ public sealed class BackgroundFolderMonitor : IDisposable
             BackgroundFolderChangeKind.ScanFile,
             Recursive: false,
             ForceExifRefresh: !created));
+    }
+
+    // ExifTool and native writers delete temporary, unsupported files too.
+    // Those never belonged to the photo catalog. An unsupported extension
+    // can still be a directory name: retain catalogued directory removals.
+    public static bool IsRelevantRemoval(LocalDatabase database, long rootId, string path)
+    {
+        if (CatalogMediaFormats.IsSupported(path)) return true;
+        using var db = database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var prefix = Path.EndsInDirectorySeparator(full) ? full : full + Path.DirectorySeparatorChar;
+        cmd.CommandText = """
+            SELECT EXISTS(
+                SELECT 1 FROM photo_folders WHERE monitored_folder_id=$root
+                  AND (local_path=$path COLLATE NOCASE OR
+                       substr(local_path,1,length($prefix))=$prefix COLLATE NOCASE)
+                UNION ALL
+                SELECT 1 FROM created_photo_directories WHERE monitored_folder_id=$root
+                  AND local_path=$path COLLATE NOCASE
+                UNION ALL
+                SELECT 1 FROM monitored_folders WHERE id=$root AND local_path=$path COLLATE NOCASE);
+            """;
+        cmd.Parameters.AddWithValue("$root", rootId);
+        cmd.Parameters.AddWithValue("$path", full);
+        cmd.Parameters.AddWithValue("$prefix", prefix);
+        return Convert.ToInt32(cmd.ExecuteScalar()) != 0;
     }
 
     private void OnDeleted(WatcherState state, string path)
@@ -201,7 +235,8 @@ public sealed class BackgroundFolderMonitor : IDisposable
         }
         // A native metadata writer may atomically replace the original.
         // Its temporary deletion is owned by the same durable package.
-        if (OriginalFileMutationReceipts.IsOwnedNotification(path)) return;
+        if (IsOwnMutation(path)) return;
+        if (_database is not null && !IsRelevantRemoval(_database, state.Folder.Id, path)) return;
 
         Raise(new BackgroundFolderChange(
             state.Folder.Id,
@@ -224,14 +259,15 @@ public sealed class BackgroundFolderMonitor : IDisposable
         }
         // Metadata writers may rename a temporary file over the original.
         // Neither half of that replacement is a new source task.
-        if (OriginalFileMutationReceipts.IsOwnedNotification(e.OldFullPath) ||
-            OriginalFileMutationReceipts.IsOwnedNotification(e.FullPath)) return;
+        if (IsOwnMutation(e.FullPath)) return;
+        // A receipt for the OLD name alone must not hide an external rename.
 
-        Raise(new BackgroundFolderChange(
-            state.Folder.Id,
-            e.OldFullPath,
-            BackgroundFolderChangeKind.RemovePath,
-            Recursive: false));
+        if (_database is null || IsRelevantRemoval(_database, state.Folder.Id, e.OldFullPath))
+            Raise(new BackgroundFolderChange(
+                state.Folder.Id,
+                e.OldFullPath,
+                BackgroundFolderChangeKind.RemovePath,
+                Recursive: false));
 
         if (Directory.Exists(e.FullPath))
         {

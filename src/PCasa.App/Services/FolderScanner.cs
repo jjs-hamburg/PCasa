@@ -24,7 +24,8 @@ public sealed record ScanProgress(
     bool? ReadingNew = null,
     // A phase notification precedes file work; only a post-commit callback
     // may advertise a thumbnail as ready for preview.
-    bool PreviewCommitted = true);
+    bool PreviewCommitted = true,
+    int? CatalogIndexed = null);
 
 public sealed record ScanResult(
     int ImageFilesSeen,
@@ -190,6 +191,9 @@ public sealed class FolderScanner
         }
 
         var progressClock = Stopwatch.StartNew();
+        var catalogCountClock = Stopwatch.StartNew();
+        int? catalogIndexed = progress is null ? null :
+            _catalog.CountIndexedImages(folder.Id, scanRoot, recursive);
         var catalogCommitClock = Stopwatch.StartNew();
 
         var sourceState = _folderRepository.GetSourceState(folder.CanonicalPath);
@@ -898,6 +902,11 @@ public sealed class FolderScanner
             }
 
             progressClock.Restart();
+            if (progress is not null && (catalogCountClock.ElapsedMilliseconds >= 1000 || currentFile is null))
+            {
+                catalogIndexed = _catalog.CountIndexedImages(folder.Id, scanRoot, recursive);
+                catalogCountClock.Restart();
+            }
             progress?.Report(new ScanProgress(
                 imageFilesSeen,
                 updated,
@@ -912,7 +921,7 @@ public sealed class FolderScanner
                 localPreviewPath,
                 verifiedDirectoryPath,
                 readingNew,
-                previewCommitted));
+                previewCommitted, catalogIndexed));
         }
     }
 

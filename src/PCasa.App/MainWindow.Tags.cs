@@ -238,6 +238,10 @@ public partial class MainWindow
                 image, CurrentAttributeFilter,
                 _appearance.GalleryAttributeFilterInverted)).ToArray();
 
+        if (DateFilterActive)
+            scope = scope.Where(image => GalleryFolderOrdering.MatchesCaptureDate(
+                image, _galleryDateFrom, _galleryDateUntil)).ToArray();
+
         // GPS bounds are one criterion of the existing gallery filter,
         // not an independent list, renderer or thumbnail ownership.
         if (_gpsAreaFilterIds is { } area)
@@ -281,7 +285,7 @@ public partial class MainWindow
         EmptyPanel.Visibility = desired.Count == 0 &&
             BrowseSurface.EmptyNavigationFolderId is null
                 ? Visibility.Visible : Visibility.Collapsed;
-        EmptyPanelHeading.Text = query.Length == 0 && !AttributeFilterActive
+        EmptyPanelHeading.Text = query.Length == 0 && !AttributeFilterActive && !DateFilterActive
             ? UiLanguage.T("Noch keine Bilder im Katalog") :
                 query.Length == 0 ? UiLanguage.T("Keine Bilder mit diesen Eigenschaften gefunden") :
                 _invertFilterResults ? UiLanguage.T("Keine übrigen Bilder gefunden") :
@@ -292,7 +296,7 @@ public partial class MainWindow
                 : UiLanguage.T("Gesucht wird im lokalen Tag-Index. Bei der ersten Nutzung werden Tags noch im Hintergrund erfasst.");
         var searchStatus = query.Length > 0
             ? UiLanguage.Format("{0:N0} Bilder {1} {2}: {3}", desired.Count, _invertFilterResults ? UiLanguage.T("ohne") : UiLanguage.T("mit"), _searchFileNames ? UiLanguage.T("Dateiname") : UiLanguage.T("Tags"), query)
-            : AttributeFilterActive ? UiLanguage.Format("{0:N0} Bilder", desired.Count)
+            : AttributeFilterActive || DateFilterActive ? UiLanguage.Format("{0:N0} Bilder", desired.Count)
             : UiLanguage.Format("{0:N0} Bilder", _lastCatalogImageCount);
         // A search refresh is still allowed while Tag files are being
         // written. The manual progress presenter owns the status bar for the

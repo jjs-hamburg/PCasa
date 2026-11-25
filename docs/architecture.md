@@ -25,7 +25,7 @@ Abhängigkeiten: App → Imaging/Core, Imaging → Core, nie umgekehrt. Bestehen
 
 Der [Scheduler-Vertrag](taskmanager-scheduler-contract.md) ersetzt den früheren P0–P4-Vertrag. Fachlich P0 manuelle Mehrfach- und Einleseaufträge, P1 automatische Bibliotheksaktualisierung, P2 Leerlaufarbeiten. Alte numerische Enum-Werte bleiben als technische Kompatibilitätswerte erhalten.
 
-Einzelaktionen und Datenbankwartung sind keine wiederanlaufenden Scheduler-Jobs. Konflikte mit Einlesen werden an sicheren Grenzen koordiniert. Nach Neustart bleiben Einleseabsichten erhalten. Nicht abgeschlossene Dateioperationen dürfen nicht automatisch erneut Originale verändern. Sicherheits- und Reconciliation-Receipts sind keine neuen Benutzeraufträge.
+Einzelaktionen und Datenbankwartung sind keine wiederanlaufenden Scheduler-Jobs. Konflikte mit Einlesen werden an sicheren Grenzen koordiniert. Nach Neustart bleiben Einleseabsichten und angenommene Mehrfachaufträge mit derselben Identität, Reihenfolge und bestätigten Schritten erhalten. Offene Einzelbildbearbeitungen und nicht angenommene Änderungen sind sitzungsgebunden. Sicherheits- und Reconciliation-Receipts sind keine neuen Benutzeraufträge.
 
 ## Kontinuierlicher Bestandscheck
 

@@ -110,7 +110,7 @@ public partial class MainWindow
         _catalogRemovalService = new CatalogRemovalService(_database);
         _backgroundLifetime = new CancellationTokenSource();
         _backgroundFolderMonitor = new BackgroundFolderMonitor(
-            sources: _scheduler.SourceAvailability);
+            sources: _scheduler.SourceAvailability, database: _database);
         _backgroundFolderMonitor.Changed += BackgroundFolderMonitor_Changed;
         BackgroundScanSettings.Changed += BackgroundScanSettings_Changed;
 
@@ -829,7 +829,7 @@ public partial class MainWindow
             var progress = stopping
                 ? UiLanguage.T("Abbruch angefordert")
                 : checkedFiles > 0
-                    ? UiLanguage.Format("{0:N0} geprüft", checkedFiles)
+                    ? UiLanguage.Format("{0:N0} eingelesen", checkedFiles)
                     : "–";
             rows.Add(new AutomaticScanTask(key,
                 UiLanguage.T(AutomaticTaskTitle(task.Kind)), path,
@@ -898,7 +898,7 @@ public partial class MainWindow
                 UiLanguage.T("Erstimport"), directory,
                 stopping
                     ? UiLanguage.T("Abbruch angefordert")
-                    : UiLanguage.Format("{0:N0} geprüft", checkedCount),
+                    : UiLanguage.Format("{0:N0} eingelesen", checkedCount),
                 active ? "Läuft" : "Wartet",
                 (int)SchedulerPriority.ManualAction, _initialScanTaskQueueOrder,
                 CanStop: !stopping));
@@ -1559,10 +1559,10 @@ public partial class MainWindow
                         if (!acceptsScanProgress || _manualFileTransferActive ||
                             _shutdownStarted || _backgroundMonitorClosing ||
                             Dispatcher.HasShutdownStarted || !IsLoaded) return;
-                        _backgroundLiveChecked = value.ImageFilesSeen;
+                        _backgroundLiveChecked = value.CatalogIndexed ?? value.ImageFilesSeen;
                         if (schedulerScanKey is not null)
                             _scheduler.ReportProgress(schedulerScanKey,
-                                AutomaticTaskTitle(request.Kind), value.ImageFilesSeen,
+                                AutomaticTaskTitle(request.Kind), value.CatalogIndexed ?? value.ImageFilesSeen,
                                 0, value.CurrentFile);
                         // Continuous checks are passive, never foreground
                         // import presentations. In particular, do not steal
@@ -1652,8 +1652,33 @@ public partial class MainWindow
                             token.ThrowIfCancellationRequested();
                             if (!exists)
                             {
+                                // A delayed create/change event for a file already
+                                // removed or renamed is complete, not an offline
+                                // retry. Require explicit positive missing evidence.
+                                if (request.Kind == BackgroundFolderChangeKind.ScanFile &&
+                                    SourceFilePresence.Probe(scanPath) == FilePresence.ConfirmedMissing)
+                                {
+                                    var removed = _catalogRemovalService.RemovePath(
+                                        folder.Id, scanPath, cancellationToken: token,
+                                        sourceCanonicalPath: folder.CanonicalPath,
+                                        expectedGeneration: sourceState.Value.Generation,
+                                        deferCleanup: true);
+                                    scanResult = new ScanResult(0, 0, 0, 0, removed);
+                                    return Task.CompletedTask;
+                                }
                                 _scheduler.SourceAvailability.CheckAfterSourceError(scanPath, token);
                                 unavailablePath = true;
+                                return Task.CompletedTask;
+                            }
+                            // A watcher request may have been admitted BEFORE
+                            // the parent metadata job committed. Revalidate its
+                            // acknowledged fingerprint now, under scheduler order.
+                            // This is completion of the old observation, not a
+                            // second decoder/EXIF operation.
+                            if (request.Kind == BackgroundFolderChangeKind.ScanFile &&
+                                OriginalFileMutationReceipts.IsConfirmedNotification(_database, scanPath))
+                            {
+                                scanResult = new ScanResult(0, 0, 0, 0);
                                 return Task.CompletedTask;
                             }
                             // Running (not queued) scan: make progress visible
@@ -1662,7 +1687,11 @@ public partial class MainWindow
                                 scanResume.ImageFilesSeen, scanResume.Updated,
                                 scanResume.Unchanged, scanResume.Failed, scanPath,
                                 scanResume.Added, scanResume.Changed,
-                                scanResume.CacheRepaired));
+                                scanResume.CacheRepaired,
+                                CatalogIndexed: request.Kind == BackgroundFolderChangeKind.RescanRoot
+                                    ? null : new ImageCatalogRepository(_database).CountIndexedImages(
+                                        folder.Id, request.Kind == BackgroundFolderChangeKind.ScanFile
+                                            ? Path.GetDirectoryName(scanPath)! : scanPath, request.Recursive)));
                             if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
                             {
                                 inventoryResult = new CatalogInventoryCheck(_database).Check(

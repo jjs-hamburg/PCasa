@@ -732,6 +732,29 @@
                             </Button>
                         </StackPanel>
                     </Border>
+                    <Border x:Name="GalleryDateFilterFrame" Style="{StaticResource PcasaToolbarGroupFrameStyle}" Margin="2,0,3,0">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="{loc:Tr Key='Von'}" VerticalAlignment="Center" Margin="4,0,2,0"/>
+                            <Button x:Name="GalleryDateFromButton" Width="92" Height="27" Content="–"
+                                    Style="{StaticResource PcasaSearchSortButtonStyle}" Click="GalleryDatePicker_Click"/>
+                            <CheckBox x:Name="GalleryDateUntilCheck" Content="{loc:Tr Key='Bis'}"
+                                      VerticalAlignment="Center" Margin="5,0,3,0" IsEnabled="False"
+                                      Checked="GalleryDateUntil_Changed" Unchecked="GalleryDateUntil_Changed"/>
+                            <Button x:Name="GalleryDateUntilButton" Width="92" Height="27" Content="–"
+                                    Visibility="Collapsed" Style="{StaticResource PcasaSearchSortButtonStyle}"
+                                    Click="GalleryDatePicker_Click"/>
+                            <Button x:Name="GalleryDateClearButton" Width="27" Height="27" Padding="3,0"
+                                    Style="{StaticResource PcasaSearchSortButtonStyle}" IsEnabled="False"
+                                    Click="GalleryDateClear_Click">
+                                <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24">
+                                    <Ellipse Canvas.Left="2.5" Canvas.Top="2.5" Width="19" Height="19"
+                                             Stroke="{DynamicResource PcasaDeleteIconBrush}" StrokeThickness="1.9"/>
+                                    <Path Data="M 9,9 L 15,15 M 15,9 L 9,15"
+                                          Stroke="{DynamicResource PcasaDeleteIconBrush}" StrokeThickness="2.2" StrokeEndLineCap="Round"/>
+                                </Canvas></Viewbox>
+                            </Button>
+                        </StackPanel>
+                    </Border>
 <Border x:Name="GallerySortGroupFrame" Style="{StaticResource PcasaToolbarGroupFrameStyle}" Margin="2,0,8,0">
  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
   <Button x:Name="GallerySortSelectorButton" Width="145" Height="27" Margin="0,0,5,0"

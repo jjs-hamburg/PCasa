@@ -944,7 +944,7 @@ public partial class MainWindow
 
         PublishStartupGalleryOnce();
 
-        if (string.IsNullOrWhiteSpace(TagSearchBox.Text))
+        if (string.IsNullOrWhiteSpace(TagSearchBox.Text) && !DateFilterActive && !AttributeFilterActive)
             if (!_isScanning && !_manualScanRunning && _visibleManualWindow is null)
             StatusText.Text = UiLanguage.Format("{0:N0} Bilder", imageCount);
         SelectionText.Text = UiLanguage.Format("Auswahl: {0:N0}", _selectedImageIds.Count);
@@ -1748,7 +1748,7 @@ public partial class MainWindow
 
     private bool TryNavigateToFilteredEmptyFolder(long photoFolderId)
     {
-        if (!AttributeFilterActive &&
+        if (!AttributeFilterActive && !DateFilterActive &&
             string.IsNullOrWhiteSpace(TagSearchBox?.Text) &&
             _gpsAreaFilterIds is null)
             return false;

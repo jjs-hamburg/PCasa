@@ -145,11 +145,12 @@ public class GpsCatalogOperations(LocalDatabase database,
             {
                 update.Transaction = tx;
                 update.CommandText = """
-                    UPDATE images SET file_size=$size
+                    UPDATE images SET file_size=$size,created_utc_ticks=$created
                      WHERE id=$id AND local_path=$path COLLATE NOCASE
                        AND file_size=$oldSize AND modified_utc_ticks=$ticks;
                     """;
                 update.Parameters.AddWithValue("$size", after.Length);
+                update.Parameters.AddWithValue("$created", after.CreationTimeUtc.Ticks);
                 update.Parameters.AddWithValue("$id", imageId);
                 update.Parameters.AddWithValue("$path", path);
                 update.Parameters.AddWithValue("$oldSize", indexedSize);
@@ -188,6 +189,8 @@ public class GpsCatalogOperations(LocalDatabase database,
                 exif.Parameters.AddWithValue("$alt", (object?)verified.GpsAltitude ?? DBNull.Value);
                 exif.ExecuteNonQuery();
             }
+            if (shouldWrite || alreadyApplied)
+                OriginalFileMutationReceipts.RecordConfirmed(db, tx, imageId, after);
             tx.Commit();
             ownMutation?.Confirm(after.Length, after.LastWriteTimeUtc.Ticks);
             PCasaDiagnostics.WriteMessage("GPS.Edit.Timing",

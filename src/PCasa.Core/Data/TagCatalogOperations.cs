@@ -219,17 +219,18 @@ public class TagCatalogOperations
         // the EXISTING EXIF and thumbnail cache valid without starting a
         // redundant NAS decode/pack rebuild on a watcher notification.
         using var transaction = db.BeginTransaction();
-        if (metadataOnly && newSize != oldSize)
+        if (metadataOnly)
         {
             using var size = db.CreateCommand();
             size.Transaction = transaction;
             size.CommandText = """
-                UPDATE images SET file_size = $newSize
+                UPDATE images SET file_size = $newSize, created_utc_ticks=$created
                 WHERE id = $id AND file_size = $oldSize
                   AND modified_utc_ticks = $ticks;
                 """;
             size.Parameters.AddWithValue("$id", imageId);
             size.Parameters.AddWithValue("$newSize", newSize);
+            size.Parameters.AddWithValue("$created", after.CreationTimeUtc.Ticks);
             size.Parameters.AddWithValue("$oldSize", oldSize);
             size.Parameters.AddWithValue("$ticks", oldTicks);
             if (size.ExecuteNonQuery() == 1)
@@ -262,8 +263,10 @@ public class TagCatalogOperations
             update.Parameters.AddWithValue("$words", confirmed);
             update.ExecuteNonQuery();
         }
+        if (metadataOnly)
+            OriginalFileMutationReceipts.RecordConfirmed(db, transaction, imageId, after);
         transaction.Commit();
-        ownMutation.Confirm(newSize, newTicks);
+        if (metadataOnly) ownMutation.Confirm(newSize, newTicks);
         }
     }
 
@@ -643,16 +646,17 @@ public class TagCatalogOperations
             // A keyword-only edit preserves the original timestamp. Update
             // the cached byte length so scans do not rebuild pixel caches.
             if (oldSize == indexedSize && oldTicks == indexedTicks &&
-                newTicks == oldTicks && newSize != oldSize)
+                newTicks == oldTicks)
             {
                 using var size = db.CreateCommand();
                 size.Transaction = tx;
                 size.CommandText = """
-                    UPDATE images SET file_size=$newSize
+                    UPDATE images SET file_size=$newSize,created_utc_ticks=$created
                     WHERE id=$id AND file_size=$oldSize
                       AND modified_utc_ticks=$ticks;
                     """;
                 size.Parameters.AddWithValue("$newSize", newSize);
+                size.Parameters.AddWithValue("$created", after.CreationTimeUtc.Ticks);
                 size.Parameters.AddWithValue("$id", imageId);
                 size.Parameters.AddWithValue("$oldSize", oldSize);
                 size.Parameters.AddWithValue("$ticks", oldTicks);
@@ -672,8 +676,12 @@ public class TagCatalogOperations
                     exif.ExecuteNonQuery();
                 }
             }
+            if (ownMutation is not null && oldSize == indexedSize &&
+                oldTicks == indexedTicks && newTicks == oldTicks)
+                OriginalFileMutationReceipts.RecordConfirmed(db, tx, imageId, after);
             tx.Commit();
-            ownMutation?.Confirm(newSize, newTicks);
+            if (oldSize == indexedSize && oldTicks == indexedTicks && newTicks == oldTicks)
+                ownMutation?.Confirm(newSize, newTicks);
         }
     }
 

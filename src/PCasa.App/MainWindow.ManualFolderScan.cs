@@ -468,7 +468,8 @@ public partial class MainWindow
             progress?.Report(new ScanProgress(
                 _resume.ImageFilesSeen, _resume.Updated, _resume.Unchanged,
                 _resume.Failed, directory, _resume.Added, _resume.Changed,
-                _resume.CacheRepaired));
+                _resume.CacheRepaired, CatalogIndexed: new ImageCatalogRepository(owner._database)
+                    .CountIndexedImages(folder.Id, directory, true)));
             try
             {
                 // Both first import and manual reread reconcile the current
@@ -529,7 +530,7 @@ public partial class MainWindow
         public void Report(ScanProgress value)
         {
             scheduler.ReportProgress(key, "Bilder einlesen",
-                value.ImageFilesSeen, 0, value.CurrentFile);
+                value.CatalogIndexed ?? value.ImageFilesSeen, 0, value.CurrentFile);
             display?.Report(value);
         }
     }

@@ -68,6 +68,17 @@ try
             throw new Exception("Portable scheduler did not preserve LIFO and durable completion.");
     }
 
+    var dateImage = new BrowseThumbnailIndexEntry(1, 1, 96, "", 0, 0, 1, 1,
+        TakenUtcTicks: new DateTime(1985, 12, 31, 23, 59, 59).Ticks,
+        CreatedUtcTicks: new DateTime(2026, 1, 1).Ticks);
+    if (!GalleryFolderOrdering.MatchesCaptureDate(dateImage,
+            new DateTime(1985, 1, 1), new DateTime(1985, 12, 31)) ||
+        GalleryFolderOrdering.MatchesCaptureDate(dateImage,
+            new DateTime(1986, 1, 1), null) ||
+        !GalleryFolderOrdering.MatchesCaptureDate(dateImage with { TakenUtcTicks = null },
+            new DateTime(2026, 1, 1), null))
+        throw new Exception("Gallery date filtering lost inclusive days or capture-date precedence.");
+
     // The inventory must recognize images without loading a decoder.
     var media = Path.Combine(directory, "photos");
     Directory.CreateDirectory(media);
@@ -143,6 +154,69 @@ try
         File.GetLastWriteTimeUtc(rawPath) != rawStamp ||
         Directory.EnumerateFiles(media).Any(path => Path.GetExtension(path) == ".xmp"))
         throw new Exception("RAW GPS unexpectedly modified the original or created a sidecar.");
+
+    // Metadata-only confirmation is committed with the catalog fingerprint.
+    // It survives database reopen, but never claims a different file stamp.
+    using (var connection = database.OpenConnection())
+    using (var transaction = connection.BeginTransaction())
+    {
+        OriginalFileMutationReceipts.RecordConfirmed(connection, transaction,
+            photoId, new FileInfo(jpg));
+        transaction.Commit();
+    }
+    var reopened = new LocalDatabase(Path.Combine(directory, "catalog.db"));
+    reopened.Initialize();
+    if (!OriginalFileMutationReceipts.IsConfirmedNotification(reopened, jpg))
+        throw new Exception("Committed metadata notification was not recognized after reopen.");
+    if (BackgroundFolderMonitor.IsRelevantRemoval(reopened, root.Id,
+            Path.Combine(media, "sample.jpg_exiftool_tmp")) ||
+        !BackgroundFolderMonitor.IsRelevantRemoval(reopened, root.Id, media) ||
+        !BackgroundFolderMonitor.IsRelevantRemoval(reopened, root.Id, jpg))
+        throw new Exception("Temporary writer removal became a photo job, or real removal was lost.");
+    File.AppendAllText(jpg, "external change");
+    if (OriginalFileMutationReceipts.IsConfirmedNotification(reopened, jpg))
+        throw new Exception("Metadata receipt hid a subsequent external modification.");
+    scanner.ScanFile(root, jpg);
+    if (catalog.CountIndexedImages(root.Id, media, true) != 2)
+        throw new Exception("Import progress did not count committed catalog images.");
+
+    // Simulate upgrading a populated Alpha.63 catalog. The upgrade must
+    // remove old tasks once, not on every future application launch.
+    var resetJournal = new DurablePackageJournal(database);
+    resetJournal.Put("alpha63:obsolete", "gps-edit-v2", "{}",
+        SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+    folders.AcceptAutomaticChange("alpha63:automatic",
+        new BackgroundFolderChange(root.Id, jpg, BackgroundFolderChangeKind.ScanFile, false));
+    using (var connection = database.OpenConnection())
+    using (var command = connection.CreateCommand())
+    {
+        command.CommandText = "UPDATE monitored_folders SET initial_scan_pending=1, initial_scan_deleted=0; DELETE FROM catalog_migrations WHERE migration_key='alpha64-task-reset';";
+        command.ExecuteNonQuery();
+    }
+    database.Initialize();
+    if (resetJournal.Pending().Count != 0 || folders.GetPendingAutomaticChanges().Count != 0 ||
+        catalog.CountIndexedImages(root.Id, media, true) != 2 ||
+        catalog.GetImageId(jpg) != photoId || catalog.GetImageId(rawPath) != rawId)
+        throw new Exception("Alpha.64 reset retained old work or destroyed catalog progress.");
+    // Reset must not turn an unfinished first import into a completed one,
+    // nor immediately recreate it as thousands of P4 file tasks. A new
+    // explicit scan completes the source and makes it eligible for review.
+    if (folders.GetPendingInitialScans().Any(f => f.Id == root.Id) ||
+        folders.GetDueRootReviewIds(DateTime.UtcNow).Contains(root.Id) ||
+        !folders.HasIncompleteImport(root.Id))
+        throw new Exception("Reset resurrected a removed first import or claimed it completed.");
+    scanner.Scan(root);
+    if (folders.HasIncompleteImport(root.Id) ||
+        !folders.GetDueRootReviewIds(DateTime.UtcNow).Contains(root.Id) ||
+        catalog.CountIndexedImages(root.Id, media, true) != 2)
+        throw new Exception("Explicit scan did not resume the reset source from its catalog.");
+    resetJournal.Put("alpha64:new", "gps-edit-v2", "{}",
+        SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+    resetJournal.SetState("alpha64:new", "running", 1);
+    database.Initialize();
+    if (resetJournal.Pending().Single().CompletedSteps != 1)
+        throw new Exception("Alpha.64 reset ran more than once.");
+    resetJournal.SetState("alpha64:new", "completed", 2);
 
     // The actual folder-rename transaction retains identities, including
     // child images, and uses the native path separator instead of backslash.

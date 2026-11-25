@@ -14,6 +14,7 @@ internal static class DurablePauseFlow
         try
         {
             ExercisePauseAndRestart(dir).GetAwaiter().GetResult();
+            ExercisePersistentMultiWrite(dir).GetAwaiter().GetResult();
             ExerciseAutomaticControlPersistence(dir).GetAwaiter().GetResult();
             ExerciseInitialImportStartupRelease(dir);
             ExerciseImageEditFailureLifecycle(dir).GetAwaiter().GetResult();
@@ -36,6 +37,71 @@ internal static class DurablePauseFlow
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    private static async Task ExercisePersistentMultiWrite(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "alpha64-multi-write.db"));
+        database.Initialize();
+        var journal = new DurablePackageJournal(database);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var writes = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        const string key = "gps:multi-restart";
+        SchedulerTaskPackage Build(string identity, string payload)
+        {
+            var package = new SchedulerTaskPackage(identity);
+            for (var i = 1; i <= 3; i++)
+            {
+                var step = i;
+                package.AddStep(async _ =>
+                {
+                    if (step == 1)
+                    {
+                        entered.TrySetResult();
+                        await release.Task;
+                    }
+                    writes.Enqueue(step);
+                });
+            }
+            return package;
+        }
+        await using (var scheduler = new PCasaScheduler())
+        {
+            scheduler.EnableDurablePackages(database);
+            scheduler.RegisterDurablePackageType("gps-edit-v2", Build);
+            var completion = scheduler.EnqueueDurableRecipeAsync(key,
+                "gps-edit-v2", "{}", SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+            try
+            {
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(8));
+                if (journal.Pending().Single().Key != key)
+                    throw new Exception("Multi-photo GPS did not own one durable identity.");
+                var drain = scheduler.PrepareGracefulShutdownAsync();
+                release.TrySetResult();
+                await drain.WaitAsync(TimeSpan.FromSeconds(8));
+                try { await completion.WaitAsync(TimeSpan.FromSeconds(8)); }
+                catch (OperationCanceledException) { }
+                if (journal.Pending().Single().CompletedSteps != 1 ||
+                    !writes.SequenceEqual(new[] { 1 }))
+                    throw new Exception("Multi-write did not stop at the confirmed file boundary.");
+            }
+            finally { release.TrySetResult(); }
+        }
+        database.Initialize();
+        await using (var scheduler = new PCasaScheduler())
+        {
+            scheduler.EnableDurablePackages(database);
+            scheduler.RegisterDurablePackageType("gps-edit-v2", Build);
+            if (scheduler.RecoverDurablePackages().Count != 0)
+                throw new Exception("Multi-write recipe failed recovery.");
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+            while (journal.Pending().Count != 0 && DateTime.UtcNow < deadline)
+                await Task.Delay(30);
+            if (journal.Pending().Count != 0 || !writes.SequenceEqual(new[] { 1, 2, 3 }))
+                throw new Exception("Multi-write replayed confirmed files or lost unfinished files.");
+        }
+        Console.WriteLine("PASS: One multi-photo job resumes after shutdown without repeating confirmed steps.");
     }
 
     private static async Task ExerciseAcceptedRecipeReservesRank(string dir)
