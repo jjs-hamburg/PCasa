@@ -151,31 +151,42 @@ internal static class Program
                     StackPanel CurrentPanel() => (StackPanel)((Border)CurrentPopup().Child).Child;
                     Button[] Years() => ((UniformGrid)CurrentPanel().Children[1])
                         .Children.Cast<Button>().ToArray();
+                    var decades = Years();
+                    var starts = decades.Select(button =>
+                        int.Parse(button.Content.ToString()!.Split('–')[0])).ToArray();
+                    if (CurrentPanel().Children.Count != 2 ||
+                        !starts.SequenceEqual(starts.OrderBy(year => year)) ||
+                        !starts.Contains(selectedYear / 10 * 10) ||
+                        !starts.Contains(1900) || !starts.Contains(2090))
+                        throw new Exception("Decade popup must present an ascending grid independent of the catalog.");
+                    var opened = CurrentPopup();
+                    decades.Single(button => button.Content.ToString() == "1980–1989")
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    if (!opened.IsOpen || yearButton.Content.ToString() != selectedYear.ToString())
+                        throw new Exception("Selecting a decade must navigate, not change the date or close the popup.");
                     var years = Years();
-                    var values = years.Select(button => int.Parse(button.Content.ToString()!)).ToArray();
-                    if (CurrentPanel().Children.Count != 2 || values.Length != 20 ||
-                        !values.SequenceEqual(Enumerable.Range(values[^1], 20).Reverse()) ||
-                        !values.Contains(selectedYear))
-                        throw new Exception("Year popup must open at the selected year with one descending chronological grid.");
-                    var firstPageBottom = values[^1];
+                    if (CurrentPanel().Children.Count != 2 ||
+                        !years.Select(button => int.Parse(button.Content.ToString()!))
+                            .SequenceEqual(Enumerable.Range(1980, 10)))
+                        throw new Exception("The decade grid must be replaced by ten ascending years.");
                     ((Button)((DockPanel)CurrentPanel().Children[0]).Children[0])
                         .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                    if (int.Parse(Years()[0].Content.ToString()!) != firstPageBottom - 1)
-                        throw new Exception("Older year page is not contiguous.");
-                    var chosen = Years()[3];
-                    var expected = chosen.Content.ToString();
-                    var opened = CurrentPopup();
-                    chosen.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    if (!Years().Any(button => button.Content.ToString() == "1980–1989"))
+                        throw new Exception("Year picker back button must restore the decade grid.");
+                    Years().Single(button => button.Content.ToString() == "1980–1989")
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Years().Single(button => button.Content.ToString() == "1985")
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     Flush(picker);
-                    if (opened.IsOpen || yearButton.Content.ToString() != expected)
+                    if (opened.IsOpen || yearButton.Content.ToString() != "1985")
                         throw new Exception("A year click must immediately commit and close its popup.");
                     yearButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     Flush(picker);
-                    if (!Years().Any(button => button.Content.ToString() == expected))
-                        throw new Exception("Reopening the year popup must show the selected year.");
+                    if (!Years().Any(button => button.Content.ToString() == "1980–1989"))
+                        throw new Exception("Reopening the year popup must show the decade grid.");
                 }
                 finally { picker.Close(); }
-                Console.WriteLine("PASS: Year picker has one chronological grid, contiguous navigation and one-click commit.");
+                Console.WriteLine("PASS: Ascending decade and year grids are separate, catalog-independent, and commit on one year click.");
             }
             var deferredSurface = new BrowseGallerySurface();
             deferredSurface.DeferViewportPageRequests(true);

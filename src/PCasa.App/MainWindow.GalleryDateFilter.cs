@@ -198,36 +198,52 @@ internal sealed class GalleryDateFilterWindow : Window
         }
         else
         {
-            const int pageSize = 20;
-            // Open at the selected year, with recent years first. There is
-            // only one grid: every numeric button is a real year selection.
-            var latest = Math.Max(DateTime.Today.Year, value.Year);
-            var pageTop = latest - (latest - value.Year) / pageSize * pageSize;
-            void DrawYears()
+            // A decade is navigation only. The two grids are never shown
+            // together, and no choice depends on the catalog or photo dates.
+            panel.Width = 360;
+            var page = (value.Year + 100) / 200;
+            void DrawDecades()
             {
                 panel.Children.Clear();
-                var pageBottom = Math.Max(1, pageTop - pageSize + 1);
+                var first = Math.Max(0, page * 200 - 100);
+                var last = Math.Min(9999, page * 200 + 99);
                 var header = new DockPanel { LastChildFill = true };
-                var prev = Choice("‹", () =>
-                {
-                    pageTop = pageBottom - 1;
-                    DrawYears();
-                });
-                var next = Choice("›", () =>
-                {
-                    pageTop = Math.Min(9999, pageTop + pageSize);
-                    DrawYears();
-                });
-                prev.IsEnabled = pageBottom > 1;
-                next.IsEnabled = pageTop < 9999;
-                DockPanel.SetDock(prev, Dock.Left); DockPanel.SetDock(next, Dock.Right);
+                var prev = Choice("‹", () => { page--; DrawDecades(); });
+                var next = Choice("›", () => { page++; DrawDecades(); });
+                prev.IsEnabled = page > 0;
+                next.IsEnabled = page < 50;
+                DockPanel.SetDock(prev, Dock.Left);
+                DockPanel.SetDock(next, Dock.Right);
                 prev.Width = next.Width = 28;
-                header.Children.Add(prev); header.Children.Add(next);
-                header.Children.Add(new TextBlock { Text = pageBottom + " – " + pageTop,
+                header.Children.Add(prev);
+                header.Children.Add(next);
+                header.Children.Add(new TextBlock { Text = Math.Max(1, first) + " – " + last,
+                    TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+                panel.Children.Add(header);
+                var decades = new UniformGrid { Columns = 4 };
+                for (int i = first; i <= last; i += 10)
+                {
+                    var decade = i;
+                    decades.Children.Add(Choice(
+                        Math.Max(1, decade) + "–" + (decade + 9),
+                        () => DrawYears(decade), value.Year / 10 * 10 == decade));
+                }
+                panel.Children.Add(decades);
+            }
+
+            void DrawYears(int decade)
+            {
+                panel.Children.Clear();
+                var header = new DockPanel { LastChildFill = true };
+                var back = Choice("‹", DrawDecades);
+                back.Width = 28;
+                DockPanel.SetDock(back, Dock.Left);
+                header.Children.Add(back);
+                header.Children.Add(new TextBlock { Text = Math.Max(1, decade) + " – " + (decade + 9),
                     TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
                 panel.Children.Add(header);
                 var years = new UniformGrid { Columns = 5 };
-                for (int i = pageTop; i >= pageBottom; i--)
+                for (int i = Math.Max(1, decade); i <= decade + 9; i++)
                 {
                     var year = i;
                     years.Children.Add(Choice(year.ToString(_culture),
@@ -235,7 +251,7 @@ internal sealed class GalleryDateFilterWindow : Window
                 }
                 panel.Children.Add(years);
             }
-            DrawYears();
+            DrawDecades();
         }
         popup.IsOpen = true;
     }
