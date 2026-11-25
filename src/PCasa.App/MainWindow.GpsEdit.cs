@@ -336,9 +336,15 @@ public partial class MainWindow
                 var admissionWatch = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
-                    completion = _scheduler.EnqueueDurableRecipeAsync(
-                        key, "gps-edit-v2", payload,
-                        SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+                    completion = ids.Length == 1
+                        ? StartDirectImageWrite(key,
+                            UiLanguage.T("GPS in Originaldateien schreiben"),
+                            GetOriginalImagePath(ids[0]) ?? throw new IOException("Bild fehlt im Katalog."),
+                            BuildGpsEditPackageV2(key, payload),
+                            folderId: 0, reindexOriginal: false)
+                        : _scheduler.EnqueueDurableRecipeAsync(
+                            key, "gps-edit-v2", payload,
+                            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
                 }
                 finally
                 {
@@ -358,8 +364,9 @@ public partial class MainWindow
                 EndVisibleManualOperation(key);
                 throw;
             }
-            StatusText.Text = UiLanguage.Format(
-                "GPS-Auftrag für {0} Bilder gespeichert.", ids.Length);
+            if (ids.Length > 1)
+                StatusText.Text = UiLanguage.Format(
+                    "GPS-Auftrag für {0} Bilder gespeichert.", ids.Length);
             // An accepted persistent package owns an immutable coordinate
             // snapshot; keeping its draft in the editor is misleading.
                 ClearGpsEditorDraft();

@@ -49,7 +49,7 @@ public partial class MainWindow : Window
         // before scheduler recovery can start any original-file write.
         _originalWriteFailures = new OriginalWriteFailureRepository(_database);
         _durableGalleryTransfers = new DurableGalleryTransferJournal(_database);
-        _scheduler.EnableDurablePackages(_database);
+        _scheduler.EnableDurablePackages(_database, retireFileJobsOnSessionEnd: true);
         _durableGalleryTransfers.PruneCompleted();
         _scheduler.RegisterDurablePackageType("tag-recovery-v1", BuildTagRecoveryPackage);
         _scheduler.RegisterDurablePackageType("tag-recovery-v2", BuildTagRecoveryPackageV2);
@@ -62,11 +62,13 @@ public partial class MainWindow : Window
         _scheduler.RegisterDurablePackageType("image-crop-v1", BuildCropPackage);
         _scheduler.RegisterDurablePackageType("image-edit-v1", BuildEditPackage);
         _scheduler.RegisterDurablePackageType("manual-folder-scan-v1", BuildManualFolderScanPackage);
+        _scheduler.RegisterDurablePackageType("import-error-retry-v1", BuildImportErrorRetryPackage);
         _scheduler.RegisterDurablePackageType("manual-scan-all-v1", BuildScanAllPackage);
         _scheduler.RegisterDurablePackageType("gallery-transfer-v1", BuildDurableGalleryTransferPackage);
         _scheduler.RegisterDurablePackageType("gallery-delete-v1", BuildDurableDeletePackage);
         _scheduler.RegisterDurablePackageType("create-gallery-folder-v1", BuildCreateGalleryFolderPackage);
         _folderRepository = new FolderRepository(_database);
+        _folderRepository.ReleaseStartupImportPauses();
         _imageCatalog = new ImageCatalogRepository(_database);
         _folderScanner = new FolderScanner(_imageCatalog, new ThumbnailCache(), _folderRepository);
         InitializeAppearance();

@@ -27,6 +27,28 @@ public sealed class LocalDatabase
         return connection;
     }
 
+    // One persistent acceptance sequence for all user jobs, including
+    // monitored-root admission. Values above the legacy sequence range
+    // ensure new LIFO requests precede all previously accepted defaults.
+    internal static long NextSchedulerAcceptanceSequence(
+        SqliteConnection connection, SqliteTransaction transaction)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS scheduler_acceptance_sequence (
+                id INTEGER PRIMARY KEY CHECK(id=1), last_value INTEGER NOT NULL);
+            INSERT OR IGNORE INTO scheduler_acceptance_sequence(id,last_value)
+                VALUES (1,1000000000000);
+            """;
+        command.ExecuteNonQuery();
+        command.CommandText = """
+            UPDATE scheduler_acceptance_sequence SET last_value=last_value+1
+            WHERE id=1 RETURNING last_value;
+            """;
+        return Convert.ToInt64(command.ExecuteScalar());
+    }
+
     public void Initialize()
     {
         using var connection = OpenConnection();
@@ -140,6 +162,8 @@ public sealed class LocalDatabase
         // Existing images are enriched on their next ordinary scan. Never
         // pretend that indexed_utc is the source file's creation timestamp.
         EnsureColumn(connection, "images", "created_utc_ticks", "INTEGER NULL");
+        EnsureColumn(connection, "images", "import_error", "TEXT NULL");
+        EnsureColumn(connection, "images", "import_attempt_utc", "TEXT NULL");
 
         // One metadata row per photo, deleted by the existing image FK.
         // The complete EXIF JSON is kept alongside indexed camera/GPS fields.
@@ -274,6 +298,11 @@ public sealed class LocalDatabase
                 """;
             pendingTags.ExecuteNonQuery();
         }
+        // The current revision carries the identity of the accepting job.
+        // Older catalogs have no such identity; retain their pending edits
+        // for explicit review instead of attributing them to a new job.
+        EnsureColumn(connection, "pending_tag_edits", "owner_key", "TEXT NULL");
+        EnsureColumn(connection, "pending_tag_edits", "base_present", "INTEGER NULL");
 
         // The last used tags are shared by every sidebar opening in this local
         // catalogue, rather than being lost with the window's in-memory state.
@@ -360,6 +389,18 @@ public sealed class LocalDatabase
         using (var regularScan = connection.CreateCommand())
         {
             regularScan.CommandText = """
+                CREATE TABLE IF NOT EXISTS automatic_change_jobs (
+                    queue_order INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_key TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    monitored_folder_id INTEGER NOT NULL,
+                    local_path TEXT NOT NULL,
+                    kind INTEGER NOT NULL,
+                    recursive INTEGER NOT NULL,
+                    force_exif_refresh INTEGER NOT NULL,
+                    revision TEXT NOT NULL,
+                    FOREIGN KEY(monitored_folder_id)
+                        REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
                 CREATE TABLE IF NOT EXISTS scan_resume_jobs (
                     scan_key TEXT PRIMARY KEY,
                     monitored_folder_id INTEGER NOT NULL,
@@ -537,6 +578,22 @@ public sealed class LocalDatabase
         // tombstone survives restart and never touches saved scan cursors.
         EnsureColumn(connection, "monitored_folders", "initial_scan_deleted",
             "INTEGER NOT NULL DEFAULT 0");
+        // Existing roots start at zero. Neither this migration nor a restart
+        // touches image identities, thumbnails or original metadata.
+        EnsureColumn(connection, "monitored_folders", "last_check_sequence",
+            "INTEGER NOT NULL DEFAULT 0");
+        using (var checkSequence = connection.CreateCommand())
+        {
+            checkSequence.CommandText = """
+                CREATE TABLE IF NOT EXISTS catalog_check_sequence (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    last_value INTEGER NOT NULL CHECK(last_value>=0)
+                );
+                INSERT INTO catalog_check_sequence(id,last_value) VALUES(1,0)
+                    ON CONFLICT(id) DO NOTHING;
+                """;
+            checkSequence.ExecuteNonQuery();
+        }
         EnsureColumn(connection, "images", "photo_folder_id", "INTEGER NULL");
         RemoveLegacyRelativePath(connection, "photo_folders");
         RemoveLegacyRelativePath(connection, "images");

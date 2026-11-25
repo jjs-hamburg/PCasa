@@ -111,8 +111,8 @@ public partial class MainWindow
         BeginVisibleManualOperation(key, UiLanguage.T("Bild umbenennen"), 1);
         try
         {
-            await _scheduler.RunAsync(key, SchedulerPriority.ManualAction,
-                token =>
+            var work = new SchedulerTaskPackage(key);
+            work.AddStep(token =>
                 {
                     var root = _folderRepository.GetAll().Where(entry =>
                         FolderExclusionRules.IsAtOrBelow(source, entry.LocalPath))
@@ -140,8 +140,11 @@ public partial class MainWindow
                     }
                     catch (Exception ex)
                     { PCasaDiagnostics.Write("Rename.ImageUndo", ex); }
-                    return true;
-                }, workKind: SchedulerWorkKind.Catalog);
+                    return Task.CompletedTask;
+                });
+            await StartDirectImageWrite(key, UiLanguage.T("Bild umbenennen"),
+                source, work, folderId: 0, reindexOriginal: false);
+            if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: false);
             _ = RefreshRestoreBadgesAsync();

@@ -325,9 +325,16 @@ public partial class MainWindow
                 recipe.Sources.Length, recipe.Sources.Length);
             await Dispatcher.InvokeAsync(async () =>
             {
-                await _scheduler.ExecuteDependentStepAsync(key, () =>
-                    RefreshBrowseGalleryAsync(
-                        forceIndexReload: true, warmViewport: false));
+                if (_directImageWriteProgress?.Key == key)
+                {
+                    if (_shutdownStarted) return;
+                    await RefreshBrowseGalleryAsync(
+                        forceIndexReload: true, warmViewport: false);
+                }
+                else
+                    await _scheduler.ExecuteDependentStepAsync(key, () =>
+                        RefreshBrowseGalleryAsync(
+                            forceIndexReload: true, warmViewport: false));
                 if (!recovered)
                 {
                     var movedIds = journal.MovedImageIds(key);

@@ -24,6 +24,17 @@ public sealed record SchedulerTaskViewResult(
     List<SchedulerTaskViewItem> Rows,
     Dictionary<string, IReadOnlyList<OriginalWriteFailureRepository.FailedFile>> Failed);
 
+// Presentation adapter remains in the host. The portable coordinator has
+// no dependency on translated UI rows or the Windows application assembly.
+public static class SchedulerTaskViewExtensions
+{
+    public static SchedulerTaskView CreateTaskView(this PCasaScheduler scheduler,
+        LocalDatabase database, bool canMoveAutomatic, bool canResumeAutomatic,
+        bool canStopAutomatic, bool canRetryFailed, bool canDiscardFailed)
+        => new(scheduler, database, canMoveAutomatic, canResumeAutomatic,
+            canStopAutomatic, canRetryFailed, canDiscardFailed);
+}
+
 public sealed class SchedulerTaskView
 {
     private readonly PCasaScheduler _scheduler;
@@ -100,9 +111,8 @@ public sealed class SchedulerTaskView
                     // receipt as the floating progress window. A queued job
                     // restored after restart has no in-memory snapshot yet.
                     var progress = record.Type == "manual-folder-scan-v1"
-                        ? UiLanguage.Format("{0:N0} geprüft",
-                            Math.Max(snapshot?.Processed ?? 0,
-                                scanProgress.GetConfirmedRegularScanCount(record.Key)))
+                        ? UiLanguage.Format("{0:N0} Bilder",
+                            scanProgress.CountCataloguedInDirectory(path))
                         : snapshot is { Total: > 0 }
                             ? $"{snapshot.Processed:N0}/{snapshot.Total:N0}"
                             : total > 0
@@ -112,11 +122,11 @@ public sealed class SchedulerTaskView
                     var isWaiting = status == "Wartet";
                     var movable = isWaiting;
                     var retryable = status == "Fehler" && record.State == "deferred";
-                    // Tag write intents may already be staged in SQLite. The
-                    // scheduler must protect them against accidental deletion;
-                    // an unmanageable active task is not shown as actionable.
+                    // Current tag packages can cancel their own staged revisions.
+                    // Legacy recovery recipes have no exclusive ownership.
                     var deletable = record.State is "queued" or "deferred" or "running" or "paused" &&
-                        !(record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
+                        !(record.Type != "tag-edit-v2" &&
+                            record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
                             (record.CompletedSteps > 0 || record.State == "running" ||
                              record.Type.StartsWith("tag-recovery-", StringComparison.Ordinal)));
                     // Running but protected GPS/tag writes are STILL jobs.
@@ -139,39 +149,19 @@ public sealed class SchedulerTaskView
                 {
                     firstByKey.TryGetValue(scan.Key, out var first);
                     rows.Add(new SchedulerTaskViewItem(scan.Key, scan.Title,
-                        scan.Directory, scan.Progress, scan.Status,
-                        null, scan.Priority, first?.QueueOrder ?? scan.Order,
+                        scan.Directory, first is not null
+                            ? UiLanguage.Format("{0:N0} Bilder", first.CataloguedCount)
+                            : scan.CatalogDirectory is string directory
+                                ? UiLanguage.Format("{0:N0} Bilder",
+                                    scanProgress.CountCataloguedInDirectory(directory))
+                                : scan.Progress, scan.Status,
+                        null, first is not null ? (int)SchedulerPriority.ManualAction : scan.Priority,
+                        first?.QueueOrder ?? scan.Order,
                         false, _canMoveAutomatic &&
                             ((first is not null) ||
                              (scan.Priority == 4 && IsRootReview(scan.Key) &&
                               scan.Status == "Wartet")),
                         false, _canStopAutomatic && scan.CanStop));
-                }
-
-                // An in-process database backup is a real scheduler
-                // job; show its queued/running lifecycle directly from
-                // scheduler snapshots. No duplicate UI task is created.
-                foreach (var backup in latest.Values.Where(job =>
-                    job.Key.StartsWith("database:backup:", StringComparison.Ordinal) &&
-                    job.State is SchedulerJobState.Queued or
-                        SchedulerJobState.Running or SchedulerJobState.YieldRequested))
-                {
-                    var destination = backup.Key.Length >
-                        "database:backup:".Length + 33
-                        ? backup.Key[("database:backup:".Length + 33)..]
-                        : "–";
-                    var fileProgress = backup.Total > 0
-                        ? UiLanguage.Format("{0:N0}/{1:N0} Dateien",
-                            backup.Processed, backup.Total)
-                        : "–";
-                    rows.Add(new SchedulerTaskViewItem(backup.Key,
-                        UiLanguage.T("Datenbank sichern"), destination,
-                        fileProgress,
-                        backup.State == SchedulerJobState.Running
-                            ? "Läuft" : "Wartet",
-                        backup.Error, (int)backup.Priority, backup.Id,
-                        false, false, false, _canStopAutomatic,
-                        backup.WorkKind));
                 }
 
                 // The pending initial-import flag is a durable job from
@@ -187,9 +177,9 @@ public sealed class SchedulerTaskView
                     if (liveKeys.Contains(key) ||
                         continuedImports.Contains(first.Directory)) continue;
                     rows.Add(new SchedulerTaskViewItem(key, UiLanguage.T("Bilder einlesen"),
-                        first.Directory, "–",
+                        first.Directory, UiLanguage.Format("{0:N0} Bilder", first.CataloguedCount),
                         first.Paused ? "Angehalten" : "Wartet",
-                        null, 2, first.QueueOrder,
+                        null, (int)SchedulerPriority.ManualAction, first.QueueOrder,
                         false, _canMoveAutomatic,
                         first.Paused && _canResumeAutomatic,
                         _canStopAutomatic));
@@ -336,7 +326,10 @@ public sealed class SchedulerTaskView
                         Order = order
                     },
                     row => row.Status == "Läuft");
-                return new SchedulerTaskViewResult(positioned.ToList(), failedGroups);
+                var ordered = positioned.Where(row =>
+                    row.Key != PCasaScheduler.ContinuousReviewKey).Concat(
+                    positioned.Where(row => row.Key == PCasaScheduler.ContinuousReviewKey));
+                return new SchedulerTaskViewResult(ordered.ToList(), failedGroups);
     }
 
     private IReadOnlyDictionary<long,string> LoadFirstImagePaths(
@@ -511,7 +504,7 @@ public sealed class SchedulerTaskView
         => key.StartsWith("automatic:", StringComparison.Ordinal) &&
            key.Contains(":RescanRoot:", StringComparison.Ordinal);
 
-    private static string TaskCaption(DurablePackageRecord item)
+    internal static string TaskCaption(DurablePackageRecord item)
         => item.Type switch
         {
             "gps-edit-v1" or "gps-edit-v2" => item.Payload.Contains("\"Mode\":2", StringComparison.Ordinal)
@@ -519,6 +512,7 @@ public sealed class SchedulerTaskView
             "tag-edit-v1" or "tag-edit-v2" => UiLanguage.T("Tags schreiben"),
             "tag-recovery-v1" or "tag-recovery-v2" => UiLanguage.T("Tags wiederherstellen"),
             "manual-folder-scan-v1" => UiLanguage.T("Ordner aktualisieren"),
+            "import-error-retry-v1" => UiLanguage.T("Erneut einlesen"),
             "manual-scan-all-v1" => UiLanguage.T("Alle Ordner einlesen"),
             "gallery-transfer-v1" or "transfer-reconcile-v1" => UiLanguage.T("Dateien übertragen"),
             "gallery-delete-v1" => UiLanguage.T("Dateien löschen"),

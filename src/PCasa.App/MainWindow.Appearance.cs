@@ -206,6 +206,8 @@ public partial class MainWindow
         _shutdownStarted = true;
         // Freeze new dispatch synchronously. The writer currently inside its
         // original-file transaction will finish and checkpoint, then yield.
+        _databaseBackupCancellation?.Cancel();
+        if (!_directImageWriteStarted) _directImageWriteCancellation?.Cancel();
         _scheduler.BeginGracefulShutdown();
         // Stop producers immediately. BackgroundScan_WindowClosed runs only
         // AFTER disposal and is too late to stop startup probes/inventories.
@@ -220,7 +222,9 @@ public partial class MainWindow
         // In-flight catalog work or owned ExifTool sessions can need an
         // uninterruptible file transaction or a slow NAS cancellation.
         // Make this visible before any slow cleanup, not after it.
-        var busy = ExifToolProcessRegistry.LiveCount > 0 ||
+        var busy = _databaseBackupTask is { IsCompleted: false } ||
+            _directImageWriteTask is { IsCompleted: false } ||
+            ExifToolProcessRegistry.LiveCount > 0 ||
             ExifToolKeywordWriter.HasLiveSessions ||
             _scheduler.Snapshot().Any(job => job.State is
                 SchedulerJobState.Queued or SchedulerJobState.Running or
@@ -246,6 +250,20 @@ public partial class MainWindow
         var watch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
+            // A backup is outside scheduler lifetime management. Cancel it
+            // and wait for its temporary archive/snapshot cleanup explicitly.
+            if (_databaseBackupTask is { } backup)
+            {
+                try { await backup; }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { PCasaDiagnostics.Write("Shutdown.Backup", ex); }
+            }
+            if (_directImageWriteTask is { } directWrite)
+            {
+                try { await directWrite; }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { PCasaDiagnostics.Write("Shutdown.DirectImageWrite", ex); }
+            }
             await Task.Run(async () =>
             {
                 // The one scheduler cancels all jobs and journals completed
@@ -319,8 +337,8 @@ public partial class MainWindow
                 PCasaDiagnostics.WriteMessage("Shutdown.Duration",
                     $"Abschlussdauer: {watch.ElapsedMilliseconds} ms; " +
                     "Scheduler und native Metadatenprozesse abgeschlossen.");
-            // The remaining original-file recipes and cursor positions stay
-            // in SQLite for the very next startup. Never retire them here.
+            // Scan state survives shutdown. Unfinished file jobs are retired
+            // by the scheduler; unconfirmed writes remain reviewable errors.
             _shutdownProgressWindow?.Close();
             _shutdownProgressWindow = null;
             _shutdownFinished = true;

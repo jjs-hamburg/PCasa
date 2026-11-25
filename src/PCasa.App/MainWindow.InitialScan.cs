@@ -10,12 +10,17 @@ public partial class MainWindow
     // This set only avoids repeating failed attempts endlessly in one session.
     private readonly HashSet<long> _initialScanAttempted = new();
     private bool _initialScanPumpRunning;
+    // Dispatcher-owned revision of the accepted import order. A read already
+    // in flight must not start a root selected before the last reorder.
+    private long _initialScanOrderVersion;
+    private bool _initialScanRankCheckRunning;
     private bool _initialScanActive;
     // The source's pending-first-import marker lives in SQLite. These are
     // only live presentation/cancellation details of its ONE scanner job;
     // no independent task queue is introduced.
     private string? _initialScanTaskKey;
     private string? _initialScanTaskDirectory;
+    private long _initialScanTaskQueueOrder;
     private string? _initialScanTaskCurrentFile;
     private int _initialScanTaskChecked;
     private bool _initialScanWorkerStarted;
@@ -23,13 +28,63 @@ public partial class MainWindow
     private bool _initialScanResumeAfterExternalEdit;
     private CancellationTokenSource? _initialScanCancellation;
 
+    private void ReconsiderInitialImportOrder()
+    {
+        _initialScanOrderVersion++;
+        if (_initialScanActive && !_initialScanStopRequested &&
+            _initialScanCancellation is { IsCancellationRequested: false } active)
+            RequestTaskManagerYield(active);
+        QueuePendingInitialScans();
+    }
+
     private void QueuePendingInitialScans()
     {
         _scheduler.NotifyTaskViewChanged();
-        if (!_updateDownloadActive && !_folderManagerOpen && !_initialScanPumpRunning &&
-            !_externalEditPauseActive &&
-            !_manualFileTransferActive && !Dispatcher.HasShutdownStarted)
-            _ = ProcessPendingInitialScansAsync();
+        if (_shutdownStarted || _updateDownloadActive || _folderManagerOpen ||
+            _externalEditPauseActive || _manualFileTransferActive ||
+            Dispatcher.HasShutdownStarted) return;
+        if (_initialScanPumpRunning)
+        {
+            // New roots can be accepted while another import is in flight.
+            // Only yield if a real, runnable higher-ranked import exists.
+            if (_initialScanActive && !_initialScanRankCheckRunning)
+                _ = CheckInitialImportRankAsync();
+            else if (!_initialScanActive)
+                _initialScanOrderVersion++;
+            return;
+        }
+        _ = ProcessPendingInitialScansAsync();
+    }
+
+    private async Task CheckInitialImportRankAsync()
+    {
+        if (_initialScanTaskKey is not { } key ||
+            _initialScanCancellation is not { IsCancellationRequested: false } active ||
+            _initialScanStopRequested) return;
+        _initialScanRankCheckRunning = true;
+        try
+        {
+            var attempted = _initialScanAttempted.ToHashSet();
+            var order = _initialScanTaskQueueOrder;
+            var higher = await Task.Run(() =>
+            {
+                var current = _scheduler.EffectiveTaskPlacement(key,
+                    SchedulerPriority.ManualAction, order);
+                return _folderRepository.GetPendingFirstImportQueue()
+                    .Where(row => !row.Paused && !attempted.Contains(row.FolderId))
+                    .Select(row => _scheduler.EffectiveTaskPlacement(
+                        $"initial:{row.FolderId}", SchedulerPriority.ManualAction, row.QueueOrder))
+                    .Any(place => place.Priority < current.Priority ||
+                        (place.Priority == current.Priority &&
+                         place.QueueOrder < current.QueueOrder));
+            });
+            if (higher && _initialScanTaskKey == key &&
+                ReferenceEquals(_initialScanCancellation, active) &&
+                !active.IsCancellationRequested && !_initialScanStopRequested)
+                ReconsiderInitialImportOrder();
+        }
+        catch (Exception ex) { PCasaDiagnostics.Write("Catalog.InitialImportRank", ex); }
+        finally { _initialScanRankCheckRunning = false; }
     }
 
     private async Task ProcessPendingInitialScansAsync()
@@ -39,46 +94,52 @@ public partial class MainWindow
         var processedAny = false;
         try
         {
-            while (!_updateDownloadActive && !Dispatcher.HasShutdownStarted && !_folderRemovalPending &&
+            while (!_shutdownStarted && !_updateDownloadActive && !Dispatcher.HasShutdownStarted && !_folderRemovalPending &&
                    !_externalEditPauseActive && !_folderManagerOpen && !_manualFileTransferActive)
             {
-                // A manual scan already in progress owns the foreground job.
-                // Its finally block will resume pending initial imports.
-                if (_manualFileTransferActive || _manualScanRunning ||
-                    (_isScanning && !_backgroundWorkerRunning))
-                    return;
+                // Existing manual scans are scheduler owners, not an
+                // admission barrier. The scheduler decides which P0 wins.
 
                 // A pending initial import is a durable catalog decision.
                 // Read it through the scheduler, never synchronously on the
                 // UI dispatcher while another operation holds SQLite.
                 var attempted = _initialScanAttempted.ToHashSet();
-                var next = await _scheduler.RunAsync(
-                    $"catalog:pending-first-import:{Guid.NewGuid():N}",
-                    SchedulerPriority.Background,
-                    token =>
+                var orderVersion = _initialScanOrderVersion;
+                // This is admission/control-plane work, not a competing
+                // catalog job. Never queue the lookup behind the P0 whose
+                // execution the newly accepted import must supersede.
+                var next = await Task.Run(
+                    () =>
                     {
-                        token.ThrowIfCancellationRequested();
-                        return _folderRepository.GetPendingInitialScans()
-                            .Where(folder => !attempted.Contains(folder.Id))
-                            .Select((folder, index) => new
+                        var folders = _folderRepository.GetAll()
+                            .ToDictionary(folder => folder.Id);
+                        return _folderRepository.GetPendingFirstImportQueue()
+                            .Where(row => !row.Paused &&
+                                !attempted.Contains(row.FolderId) &&
+                                folders.ContainsKey(row.FolderId))
+                            .Select(row => new
                             {
-                                Folder = folder,
+                                Folder = folders[row.FolderId],
+                                row.QueueOrder,
                                 Place = _scheduler.EffectiveTaskPlacement(
-                                    $"initial:{folder.Id}",
-                                    SchedulerPriority.UserAction, index)
+                                    $"initial:{row.FolderId}",
+                                    SchedulerPriority.ManualAction, row.QueueOrder)
                             })
                             .OrderBy(x => x.Place.Priority)
                             .ThenBy(x => x.Place.QueueOrder)
-                            .Select(x => x.Folder)
+                            .ThenBy(x => x.Folder.Id)
                             .FirstOrDefault();
-                    }, workKind: SchedulerWorkKind.CatalogRead);
-                if (_folderRemovalPending || _folderManagerOpen ||
-                    _manualFileTransferActive || Dispatcher.HasShutdownStarted)
+                    });
+                if (_shutdownStarted || _folderRemovalPending || _folderManagerOpen ||
+                    _manualFileTransferActive || _externalEditPauseActive ||
+                    Dispatcher.HasShutdownStarted)
                     return;
+                if (orderVersion != _initialScanOrderVersion)
+                    continue; // select again from the newly committed global order
                 if (next is null) break;
                 processedAny = true;
-                _initialScanAttempted.Add(next.Id);
-                await RunPendingInitialScanAsync(next);
+                _initialScanAttempted.Add(next.Folder.Id);
+                await RunPendingInitialScanAsync(next.Folder, next.QueueOrder);
             }
         }
         catch (Exception ex)
@@ -108,17 +169,17 @@ public partial class MainWindow
         }
     }
 
-    private async Task RunPendingInitialScanAsync(MonitoredFolder folder)
+    private async Task RunPendingInitialScanAsync(MonitoredFolder folder, long queueOrder)
     {
         using var cancellation = new CancellationTokenSource();
         _initialScanCancellation = cancellation;
         // Reuse the job identity as the Scheduler's actual InitialImport
         // operation. The Taskmanager and the progress presenter describe the
         // SAME job, not two artificially synchronized representations.
-        var scanKey =
-            $"catalog:complete-scan:{Guid.NewGuid():N}:{folder.LocalPath}";
+        var scanKey = $"initial:{folder.Id}";
         _initialScanTaskKey = scanKey;
         _initialScanTaskDirectory = folder.LocalPath;
+        _initialScanTaskQueueOrder = queueOrder;
         _initialScanTaskCurrentFile = null;
         _initialScanTaskChecked = 0;
         _initialScanWorkerStarted = false;
@@ -193,27 +254,23 @@ public partial class MainWindow
             scanActive = true;
             PCasaDiagnostics.WriteMessage("Scan.InitialImport",
                 $"Resume pending first-import for monitored folder: {folder.LocalPath}");
-            _scheduler.RegisterTaskAlias(scanKey, $"initial:{folder.Id}");
-            ScanResult result;
-            try
-            {
-                result = await ScheduleCompleteFolderScanAsync(
-                    folder.LocalPath, SchedulerPriority.Background,
-                    progress, cancellation.Token, folder.Id,
-                    requirePendingInitialImport: true, operationKey: scanKey);
-            }
-            finally
-            {
-                _scheduler.UnregisterTaskAlias(scanKey);
-            }
+            var result = await ScheduleCompleteFolderScanAsync(
+                folder.LocalPath, SchedulerPriority.ManualAction,
+                progress, cancellation.Token, folder.Id,
+                requirePendingInitialImport: true, operationKey: scanKey,
+                queueOrder: queueOrder);
 
             scanActive = false;
             TrackFolderActivity(folder.LocalPath,
                 result.Failed > 0 ? "Failed" : "Ready", recursive: true);
             RefreshFolderStatusVisuals();
             if (!_folderManagerOpen)
+            {
                 await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false,
                     fromScanner: true);
+                if (_allFolderProjectionRootPath is not null)
+                    RefreshExplorerIndexedFolders();
+            }
             StatusText.Text = result.Failed == 0
                 ? $"Ordner eingelesen: {folder.LocalPath} · {result.Updated:N0} aktualisiert"
                 : $"Ordner unvollständig: {folder.LocalPath} · {result.Failed:N0} Fehler";
@@ -252,8 +309,8 @@ public partial class MainWindow
         {
             if (progressWindow is not null)
             {
-                progressWindow.EndScanPhase(scanOwner);
-                RestoreWaitingManualPresentationAfterScan();
+                if (progressWindow.EndScanPhase(scanOwner))
+                    RestoreWaitingManualPresentationAfterScan();
                 ReleaseProgressPresenter(scanOwner);
             }
             if (ReferenceEquals(_activeScanCancellation, cancellation))
@@ -265,6 +322,7 @@ public partial class MainWindow
             _scheduler.NotifyTaskViewChanged();
             _initialScanTaskKey = null;
             _initialScanTaskDirectory = null;
+            _initialScanTaskQueueOrder = 0;
             _initialScanTaskCurrentFile = null;
             _initialScanTaskChecked = 0;
             _initialScanWorkerStarted = false;

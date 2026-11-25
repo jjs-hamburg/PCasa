@@ -1,12 +1,12 @@
 # PCasa – lokale Datenhaltung und Persistenz
 
-**Stand 29.10.2026 · `scheduler-consistency`.** Das alte Dokument beschrieb lediglich ein noch zu entwerfendes Schema. Der aktuelle Client besitzt bereits ein konkretes SQLite-Schema und dauerhafte Wiederanlaufdaten.
+**Stand 25.11.2026 · `alpha63-architecture`.** Das alte Dokument beschrieb lediglich ein noch zu entwerfendes Schema. Der aktuelle Client besitzt bereits ein konkretes SQLite-Schema und dauerhafte Wiederanlaufdaten.
 
 ## Autorität und Speicherorte
 
 - **Originalbilder:** gewöhnliche Dateien in den ausgewählten Verzeichnissen; das Dateisystem ist die Wahrheit über Existenz und Pfad.
 - **SQLite:** lokaler Katalog, Metadaten- und Tag-Index, Überwachungs-/Ausschlusszustände sowie bestätigte Scheduler-/Dateioperationen.
-- **Lokale Vorschaudateien:** Einzel-Thumbnails in `%LOCALAPPDATA%\PCasa\thumbnails`; gepackte Browse-Thumbnails in `%LOCALAPPDATA%\PCasa\browse-cache`. Der SQLite-Katalog enthält Pack-Referenzen, aber die Bildpixel der Pakete liegen in Dateien.
+- **Lokale Vorschaudateien:** Einzel-Thumbnails in `PcasaDataPaths.SharedDataRoot/thumbnails`; gepackte Browse-Thumbnails in `PcasaDataPaths.SharedDataRoot/browse-cache`. Der SQLite-Katalog enthält Pack-Referenzen, aber die Bildpixel der Pakete liegen in Dateien.
 - **Einstellungen:** `appearance.json` (u. a. Sprache, Theme, Sortierung, Ansichts-/Fensterzustand); `scan-settings.json` (automatischer Scan). Nicht versehentlich als überflüssige Dateien entfernen.
 
 Die Datenbank wird im Quelltext von `Data/LocalDatabase.cs` initialisiert und migriert; die jeweilige Datenbankdatei und ihre aktuellen Versionen sind aus dieser Implementierung abzuleiten, nicht aus einem alten Planungsdokument.
@@ -40,14 +40,7 @@ Bei Tag-Schreibjobs kann die Fortschrittsanzeige auf den bereits vorhandenen **l
 
 ## Tag-Schreiben und Wiederanlauf
 
-1. Der Tag-Editor hält Änderungen über Auswahl- und Ordnerwechsel hinweg **pro Bild nur im Speicher**. Erst OK bestätigt die Sitzung; Abbruch verwirft sie.
-2. OK erstellt **ein** dauerhaftes `tag-edit-v2`-Paket. Dessen unterschiedliche Änderungen je Bild werden mit **einer SQLite-Transaktion** im lokalen Tag-Index und in `pending_tag_edits` abgelegt. Bereits vorhandene `tag-edit-v1`-Pakete bleiben wiederherstellbar.
-3. Der zentrale Scheduler schreibt die Original-Metadaten je Bild mit ExifTool; mehrere Änderungen desselben Bildes benötigen nicht mehrere Originaldatei-Transaktionen.
-4. Nach der bestätigten Originaldatei-Transaktion wird `pending_tag_edits` abgeglichen; unerledigte Änderungen bleiben bestehen.
-5. Fehlende/offline Quellen behalten ihre Intention. `scheduler_packages` bewahrt Priorität, Reihenfolge und bestätigten Cursor über Neustarts.
-6. Ein reiner Keyword-Wechsel soll keine unnötige neue Pixeldekodierung auslösen. Der ExifTool-Schreibweg erhält den Dateizeitstempel und der Katalog gleicht notwendige Dateigrößenänderungen gezielt ab.
-
-**Nie** eine scheinbar verwaiste Datei/Tag-Intention durch manuelles Löschen der Tabellen »reparieren«, ohne zuvor eine konsistente Migration und die referenzierten Originale zu prüfen.
+Einzeländerungen werden direkt ausgeführt. Mehrfachänderungen benutzen denselben fachlichen Schreibpfad; pending_tag_edits und scheduler_packages halten bestätigten Fortschritt bzw. noch offene Absichten fest. Die Originaldatei bleibt maßgeblich. Unbestätigte Schreibabsichten werden nach Sitzungsende nicht automatisch wiederholt. Sicherheitsreceipts bleiben zur expliziten Prüfung erhalten. Ein reiner Keyword-Wechsel darf keine erneute Pixeldekodierung auslösen.
 
 ## Mehrclient-Datenbank
 
@@ -89,27 +82,4 @@ Datenbankverwaltungsfunktionen kopiert, gelöscht oder verändert.
 
 ## Bedienung der Datenbanksicherung und des Taskmanagers
 
-Die Sicherung ist ein P2-Auftrag im bestehenden Scheduler. Der kompakte
-Datenbankdialog darf direkt nach der Auftragserteilung geschlossen werden.
-Die vorhandene, ausblendbare PCasa-Fortschrittsanzeige zeigt das aktuelle
-Arbeitsstadium, die übertragenen unkomprimierten MB, die Dateizahl und
-den gerade archivierten Cachepfad. Sie wird nach der Sicherung freigegeben.
-Während der Momentaufnahme bleibt der Pack-/Index-Bestand unter der
-vorhandenen Cache-Sperre unverändert; die zeitaufwendige ZIP-Komprimierung
-erfolgt anschließend aus einer lokalen Arbeitskopie ohne diese Sperre.
-Abbruch und unvollständige ZIP-Dateien werden bereinigt.
-
-Ein manueller Scan eines bereits überwachten Ordners wird **vor** der
-eigentlichen Quellenprüfung als dauerhaftes Paket in der gemeinsamen
-Scheduler-Warteschlange registriert; der Taskmanager kann es daher ohne
-Wartezeit auf die erste eingelesene Datei zeigen. Die Sicherheit der
-Quellen- und Generationenkontrolle bleibt in der Scan-Ausführung.
-
-Eine wartende vollständige Hintergrundprüfung lässt sich mit
-**Jetzt ausführen** oder durch **Nach oben** an der Spitze ihrer
-P4-Prüfgruppe in den P2-Benutzermodus vorziehen. Es bleibt derselbe
-Scanauftrag mit denselben bestätigten Dateicursorn; die Entscheidung
-wird in `scan_root_review.requested_priority` für einen Neustart gespeichert.
-Manuelle P0-Schreib- und Scanaufträge werden nicht überholt. Nach
-erfolgreichem vollständigem Review wird die Priorität auf P4 zurückgesetzt.
-Der Taskmanager führt keine eigene Ausführungswarteschlange.
+Ausschließlich manuelle Sicherungen einschließlich Thumbnails. Datenbankverwaltung liegt außerhalb des Schedulers. Eine Sicherung koordiniert die erforderliche Cache-/Katalog-Momentaufnahme und komprimiert anschließend die lokale Arbeitskopie; keine Originalbilder werden verändert. Einleseabsicht und bestätigter Ordnerfortschritt sind getrennt. Der permanente Bestandscheck bleibt eine einzige, nicht verschiebbare Taskmanager-Zeile. Siehe [Scheduler-Vertrag Alpha.63](taskmanager-scheduler-contract.md).

@@ -4,6 +4,9 @@ using System.IO;
 
 namespace PCasa.App.Services;
 
+// Persisted logical job priorities: P0=ManualAction, P1=Background,
+// P2=Idle. Intermediate legacy values are retained for technical reads
+// until independent read admission is extracted from this service.
 public enum SchedulerPriority { ManualAction = 0, Interactive = 1, UserAction = 2, Background = 3, Idle = 4 }
 public enum SchedulerJobState { Queued, Running, YieldRequested, Completed, Canceled, Failed }
 public enum SchedulerWorkKind { Catalog, CatalogScan, CatalogRead, ViewerRead, ThumbnailRead, SourceProbe, InitialImport, DatabaseBackup, BrowseRead }
@@ -25,45 +28,31 @@ public sealed record SchedulerJobSnapshot(
 }
 
 /// <summary>
-/// The one operation coordinator. Separate capacity lanes keep slow network
-/// scans from blocking interactive catalog mutations, viewer originals, or
-/// visible thumbnail reads. Catalog mutations still use the common short
-/// pack/index lock and their persistent SQLite source-generation fences.
+/// The one operation coordinator. The running work set is authoritative;
+/// bounded executors provide technical capacity, not independent job order.
+/// Only one logical catalog owner may mutate at a time. Gallery reads keep
+/// their independent capacity.
 /// </summary>
 public sealed class PCasaScheduler : IAsyncDisposable
 {
+    public const string ContinuousReviewKey = "automatic:continuous-review";
     private const int MaximumHistory = 512;
-    private const int LaneBackground = 0;
-    private const int LaneUserAction = 1;
-    private const int LaneManual = 2;
-    private const int LaneInteractive = 3;
-    private const int LaneViewer = 4;
-    private const int LaneThumbnail = 5;
-    private const int LaneCatalogRead = 6;
-    private const int LaneSourceProbe = 7;
-    private const int LaneManualSourceProbe = 8;
-    private const int LaneInteractiveSourceProbe = 9;
-    // First imports can wait on a particular NAS/file lock without
-    // blocking reconciliation of unrelated, already-imported roots.
-    private const int LaneInitialImport = 10;
-    // Manual folder inventories may block inside SMB I/O. They must not
-    // occupy the P0 original-file mutation executor (GPS, tags, transfers).
-    // This is capacity within the SAME scheduler, not a second task queue.
-    private const int LaneManualScan = 11;
-    // A manually requested online database backup must not wait for either
-    // blocked SMB scans or original-file writers. One scheduler, one rank.
-    private const int LaneManualBackup = 12;
-    // Reserved capacity for the user's read-only gallery projection. This
-    // lane never executes P0-P4 mutations and is never occupied by scan work.
-    private const int LaneGalleryRead = 13;
+    // Catalog admission is by logical owner, never by priority or work type.
+    // Technical reads/probes retain bounded, independent capacity.
+    private const int ExecutorCatalog = 0;
+    private const int ExecutorViewer = 1;
+    private const int ExecutorThumbnail = 2;
+    private const int ExecutorCatalogRead = 3;
+    private const int ExecutorSourceProbe = 4;
+    private const int ExecutorManualSourceProbe = 5;
+    private const int ExecutorInteractiveSourceProbe = 6;
+    private const int ExecutorGalleryRead = 7;
     private readonly object _gate = new();
     private DurablePackageJournal? _durableJournal;
     private SchedulerTaskOrderStore? _taskOrderStore;
     private readonly Dictionary<string,long> _userDispatchOrder =
         new(StringComparer.Ordinal);
     private readonly Dictionary<string,SchedulerPriority> _userPriorityOverrides =
-        new(StringComparer.Ordinal);
-    private readonly Dictionary<string,string> _taskAliases =
         new(StringComparer.Ordinal);
     // The owner of external source intents listens and reorders its
     // EXISTING scan cursor. No parallel queue or cloned scan work.
@@ -98,44 +87,28 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // The controller owns deferred activation. A passive probe only reports
     // source readiness; it never starts, ranks, or resumes a package.
     private Task<(HashSet<string> Ready, HashSet<string> Reconnected)>? _deferredProbe;
-    private DateTimeOffset _nextDeferredProbe = DateTimeOffset.MinValue;
+    private long _nextDeferredProbeTick;
     private bool _deferredRecoveryReady;
     private Action<string, Task>? _durableRestoreObserver;
     private readonly Dictionary<string, Func<string, string, SchedulerTaskPackage>> _packageFactories = new(StringComparer.Ordinal);
     private readonly HashSet<string> _pausedExternalTasks =
         new(StringComparer.Ordinal);
+    private readonly HashSet<string> _releasedStartupExternalTasks =
+        new(StringComparer.Ordinal);
     private readonly List<WorkItem> _pending = new();
-    // All physical executor lanes participate in idle admission, including
-    // read/thumbnail lanes that have no catalog-mutation counter.
+    // All admitted executions participate in idle admission, including reads.
     private readonly HashSet<WorkItem> _runningWork = new();
-    private bool _outstandingNonIdleAtLastReview;
     // Nested operations inherit their owning package across await/Dispatcher
     // continuations. A package must never await a child that the queue puts
     // behind another waiting package (dependency deadlock).
     private readonly AsyncLocal<WorkItem?> _currentPackage = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
-    // Worker semaphores are execution handoffs ONLY. No worker chooses work.
-    private readonly SemaphoreSlim[] _signals =
-        Enumerable.Range(0, LaneGalleryRead + 1).Select(_ => new SemaphoreSlim(0)).ToArray();
-    private readonly Queue<(WorkItem Item, CancellationTokenSource? Yield)>[] _assigned =
-        Enumerable.Range(0, LaneGalleryRead + 1)
-            .Select(_ => new Queue<(WorkItem, CancellationTokenSource?)>()).ToArray();
-    private readonly int[] _laneCapacity = [1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1, 2];
-    private readonly int[] _laneOccupied = new int[LaneGalleryRead + 1];
+    // The controller admits work directly to the thread pool. These tasks
+    // are tracked only to await shutdown, not to decide order or eligibility.
+    private readonly List<Task> _executions = new();
+    private static readonly int[] ReadCapacity = [0, 2, 2, 2, 2, 1, 1, 2];
     private readonly SemaphoreSlim _controllerWake = new(0, 1);
     private readonly Task _controller;
-    // Track the dedicated first-import executor as well. Otherwise an
-    // already-running initial scan never receives the scheduler's yield
-    // cancellation when a new manual P0 package arrives.
-    private readonly WorkItem?[] _runningPriorityJobs =
-        new WorkItem?[LaneGalleryRead + 1];
-    private int _catalogForegroundRunning;
-    private int _catalogManualRunning;
-    private int _catalogInteractiveRunning;
-    private int _manualSourceProbeRunning;
-    private WorkItem? _runningManualSourceProbe;
-    private readonly CancellationTokenSource?[] _runningYield =
-        new CancellationTokenSource?[LaneGalleryRead + 1];
     private readonly CancellationTokenSource _shutdown = new();
     private volatile bool _gracefulShutdownRequested;
     public bool GracefulShutdownRequested => _gracefulShutdownRequested;
@@ -156,20 +129,36 @@ public sealed class PCasaScheduler : IAsyncDisposable
         BeginGracefulShutdown();
         // Read the durable journal outside _gate; it owns its own SQLite locks.
         var fileKeys = _durableJournal?.Pending()
-            .Where(p => p.Type is not
-                ("manual-folder-scan-v1" or "manual-scan-all-v1"))
+            .Where(p => !DurablePackageJournal.SurvivesSession(p.Type))
             .Select(p => p.Key).ToHashSet(StringComparer.Ordinal)
             ?? new HashSet<string>(StringComparer.Ordinal);
         Task[] writing;
         lock (_gate)
-            writing = _runningWork
-                .Where(item => fileKeys.Contains(item.Key))
-                .Select(item => item.Completion.Task).ToArray();
+        {
+            // Waiting file jobs must never be dispatched or leave callers
+            // blocked on a frozen queue. Scan requests retain their journal.
+            if (_retireFileJobsOnSessionEnd)
+                foreach (var item in _pending.Where(item => fileKeys.Contains(item.Key)).ToArray())
+                {
+                    _pending.Remove(item);
+                    SetStateUnsafe(item, SchedulerJobState.Canceled);
+                    item.Completion.TrySetCanceled();
+                }
+            var active = _runningWork.Where(item => fileKeys.Contains(item.Key)).ToArray();
+            writing = active.Select(item =>
+                _durableActiveTasks.GetValueOrDefault(item.Key, item.Completion.Task))
+                .ToArray();
+        }
         try { await Task.WhenAll(writing).ConfigureAwait(false); }
         catch (OperationCanceledException) { /* written checkpoint is durable */ }
         catch (Exception ex) { PCasaDiagnostics.Write("Scheduler.GracefulDrain", ex); }
+        // Retire before disposal awaits potentially noninterruptible NAS
+        // reads. The window is allowed to close without waiting for those.
+        // Late journal callbacks cannot reopen terminal rows.
+        if (_retireFileJobsOnSessionEnd)
+            _durableJournal?.RetireUnfinishedFileJobs();
+        NotifyTaskViewChanged();
     }
-    private readonly Task[] _workers;
     private long _nextId;
     private bool _disposed;
     // An OLE FileDrop is an immediate foreground gesture. Keep lower-priority
@@ -177,6 +166,63 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // This lease belongs to the ONE scheduler; no second job/queue is built.
     private int _nativeDragInteractionCount;
     private int _externalEditInteractionCount;
+    private int _maintenancePauseCount;
+
+    private sealed class MaintenanceLease(PCasaScheduler owner) : IDisposable
+    {
+        private PCasaScheduler? _owner = owner;
+        public void Dispose() =>
+            Interlocked.Exchange(ref _owner, null)?.EndMaintenancePause();
+    }
+
+    // Maintenance is not a job: freeze new catalog mutation dispatch and
+    // wait asynchronously for any existing owner to reach a safe boundary.
+    // Local gallery/thumbnail reads remain independent.
+    public async Task<IDisposable> AcquireMaintenancePauseAsync(
+        CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_maintenancePauseCount != 0)
+                throw new InvalidOperationException("Maintenance already active.");
+            _maintenancePauseCount++;
+            SignalController();
+        }
+        var lease = new MaintenanceLease(this);
+        try
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                lock (_gate)
+                {
+                    ObjectDisposedException.ThrowIf(_disposed, this);
+                    if (!_runningWork.Any(IsCatalogMutation))
+                        return lease;
+                }
+                await Task.Delay(25, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
+    }
+
+    private void EndMaintenancePause()
+    {
+        lock (_gate)
+        {
+            if (_maintenancePauseCount > 0) _maintenancePauseCount--;
+            if (!_disposed) SignalController();
+        }
+    }
+
+    private static bool IsCatalogMutation(WorkItem item) =>
+        item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan or
+            SchedulerWorkKind.InitialImport or SchedulerWorkKind.DatabaseBackup;
 
     private sealed class NativeDragLease(PCasaScheduler owner) : IDisposable
     {
@@ -234,62 +280,37 @@ public sealed class PCasaScheduler : IAsyncDisposable
         {
             if (_nativeDragInteractionCount == 0) return;
             if (--_nativeDragInteractionCount != 0) return;
-            // Workers may have consumed their signals while the drag held
-            // background lanes. Wake those that still have pending work.
-            foreach (var lane in new[]
-                { LaneBackground, LaneInitialImport, LaneUserAction, LaneSourceProbe })
-            {
-                if (_pending.Any(item => LaneFor(item.Priority, item.Kind) == lane))
-                    SignalController();
-            }
+            SignalController();
         }
     }
 
     public PCasaScheduler(SourceAvailabilityGate? sourceAvailability = null)
     {
         SourceAvailability = sourceAvailability ?? new SourceAvailabilityGate();
-        // File reading is bounded. UI painting and hit testing never enter a lane.
         _controller = Task.Run(ControlLoopAsync);
-        _workers = new[]
-        {
-            Task.Run(() => RunAsync(LaneBackground)),
-            // Same coordinator, same durable/source fences, separate bounded
-            // capacity. An unfinished first import owns only its own root.
-            Task.Run(() => RunAsync(LaneInitialImport)),
-            Task.Run(() => RunAsync(LaneUserAction)),
-            // A manually requested scan must not wait for blocked initial SMB I/O.
-            Task.Run(() => RunAsync(LaneManual)),
-            Task.Run(() => RunAsync(LaneManualScan)),
-            Task.Run(() => RunAsync(LaneManualBackup)),
-            Task.Run(() => RunAsync(LaneInteractive)),
-            Task.Run(() => RunAsync(LaneViewer)),
-            Task.Run(() => RunAsync(LaneViewer)),
-            Task.Run(() => RunAsync(LaneThumbnail)),
-            Task.Run(() => RunAsync(LaneThumbnail)),
-            Task.Run(() => RunAsync(LaneCatalogRead)),
-            Task.Run(() => RunAsync(LaneCatalogRead)),
-            Task.Run(() => RunAsync(LaneSourceProbe)),
-            Task.Run(() => RunAsync(LaneSourceProbe)),
-            // A disconnected NAS can occupy both automatic probe workers.
-            // User-initiated source I/O has its own bounded capacity but
-            // remains under the SAME scheduler queue and job lifecycle.
-            Task.Run(() => RunAsync(LaneManualSourceProbe)),
-            Task.Run(() => RunAsync(LaneInteractiveSourceProbe)),
-            Task.Run(() => RunAsync(LaneGalleryRead)),
-            Task.Run(() => RunAsync(LaneGalleryRead))
-        };
     }
 
     // Shared by all source-related operations and the existing background
     // monitor. This is a cached readiness decision, never a parallel job lane.
     public SourceAvailabilityGate SourceAvailability { get; }
 
-    public void EnableDurablePackages(LocalDatabase database)
+    private bool _retireFileJobsOnSessionEnd;
+
+    public void EnableDurablePackages(LocalDatabase database,
+        bool retireFileJobsOnSessionEnd = false)
     {
         if (_durableJournal is not null)
             throw new InvalidOperationException("Paketjournal bereits aktiviert.");
         _durableJournal = new DurablePackageJournal(database);
+        _durableJournal.NormalizeLegacyJobPriorities();
+        _retireFileJobsOnSessionEnd = retireFileJobsOnSessionEnd;
+        if (_retireFileJobsOnSessionEnd)
+            _durableJournal.RetireUnfinishedFileJobs();
+        _durableJournal.ReleaseStartupPauses();
         _taskOrderStore = new SchedulerTaskOrderStore(database);
+        _taskOrderStore.NormalizeLegacyJobPriorities();
+        foreach (var key in _taskOrderStore.ReleaseStartupPauses())
+            _releasedStartupExternalTasks.Add(key);
         foreach (var key in _taskOrderStore.ReadPaused())
             _pausedExternalTasks.Add(key);
         foreach (var (key, placement) in _taskOrderStore.ReadAll())
@@ -303,6 +324,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
     public bool PromoteTaskNow(string key)
     {
+        if (key == ContinuousReviewKey) return false;
         var store = _taskOrderStore ??
             throw new InvalidOperationException("Taskmanager-Reihenfolge nicht aktiviert.");
         List<WorkItem> changed = [];
@@ -324,7 +346,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             }
             foreach (var item in _pending.Concat(_runningWork))
             {
-                var identity = TaskIdentityUnsafe(item.Key);
+                var identity = item.Key;
                 if (!_userDispatchOrder.TryGetValue(identity, out var order))
                     continue;
                 var effective = _userPriorityOverrides.GetValueOrDefault(
@@ -379,6 +401,18 @@ public sealed class PCasaScheduler : IAsyncDisposable
     public IReadOnlyList<string> PausedExternalTaskKeys()
     {
         lock (_gate) return _pausedExternalTasks.ToArray();
+    }
+
+    public IReadOnlyList<string> RecoverableExternalTaskKeys()
+    {
+        lock (_gate)
+            return _pausedExternalTasks.Concat(_releasedStartupExternalTasks)
+                .Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    public void AcknowledgeRecoveredExternalTask(string key)
+    {
+        lock (_gate) _releasedStartupExternalTasks.Remove(key);
     }
 
     public bool SetExternalTaskPaused(string key, bool paused)
@@ -457,27 +491,16 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
     }
 
-    public void RegisterTaskAlias(string executorKey, string visibleTaskKey)
-    {
-        lock (_gate)
-            _taskAliases[executorKey] = visibleTaskKey;
-    }
-
-    public void UnregisterTaskAlias(string executorKey)
-    {
-        lock (_gate) _taskAliases.Remove(executorKey);
-    }
-
-    private string TaskIdentityUnsafe(string executorKey) =>
-        _taskAliases.TryGetValue(executorKey, out var identity)
-            ? identity : executorKey;
-
     // No job-type, original-priority or lane restriction. The list must
     // contain all ACTIVE accepted tasks, including ones hidden by filters.
     // The store is the only durable place for user-selected dispatch order.
     public bool MoveTaskGlobally(string key, string targetKey,
         IReadOnlyList<SchedulerTaskOrderItem> acceptedTaskKeys)
     {
+        if (key == ContinuousReviewKey || targetKey == ContinuousReviewKey)
+            return false;
+        acceptedTaskKeys = acceptedTaskKeys.Where(item =>
+            item.Key != ContinuousReviewKey).ToArray();
         var store = _taskOrderStore ??
             throw new InvalidOperationException("Taskmanager-Reihenfolge nicht aktiviert.");
         List<WorkItem> changed = [];
@@ -497,10 +520,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
             foreach (var work in _pending)
             {
                 if (!_userDispatchOrder.TryGetValue(
-                    TaskIdentityUnsafe(work.Key), out var position))
+                    work.Key, out var position))
                     continue;
                 if (_userPriorityOverrides.TryGetValue(
-                        TaskIdentityUnsafe(work.Key), out var chosen))
+                        work.Key, out var chosen))
                     work.Priority = chosen;
                 work.QueueOrder = position;
                 SetStateUnsafe(work, SchedulerJobState.Queued);
@@ -508,13 +531,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
             }
             // Keep the exact rank on live workers as well. A yielded file
             // must reenter the same global position after its safe checkpoint.
-            foreach (var active in _runningPriorityJobs)
+            foreach (var active in _runningWork)
             {
-                if (active is null ||
-                    !_userDispatchOrder.TryGetValue(TaskIdentityUnsafe(active.Key),
+                if (!_userDispatchOrder.TryGetValue(active.Key,
                         out var position)) continue;
                 if (_userPriorityOverrides.TryGetValue(
-                        TaskIdentityUnsafe(active.Key), out var chosen))
+                        active.Key, out var chosen))
                     active.Priority = chosen;
                 active.QueueOrder = position;
                 SetStateUnsafe(active, active.YieldRequested
@@ -627,7 +649,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         lock (_gate)
         {
             _deferredRecoveryReady = true;
-            _nextDeferredProbe = DateTimeOffset.MinValue;
+            Volatile.Write(ref _nextDeferredProbeTick, 0);
             SignalController();
         }
         return unresolved;
@@ -665,67 +687,82 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             PCasaDiagnostics.Write("Scheduler.DeferredReconcile", ex);
                         }
                     }
-                    if (_deferredProbe is null &&
-                        DateTimeOffset.UtcNow >= _nextDeferredProbe)
+                    if (Environment.TickCount64 >= Volatile.Read(ref _nextDeferredProbeTick))
                     {
-                        _nextDeferredProbe = DateTimeOffset.UtcNow.AddSeconds(2);
-                        // Never block priority arbitration on offline SMB I/O.
-                        // Probe merely reports due/reconnected identities.
-                        _deferredProbe = Task.Run(ProbeDeferredPackages);
+                        Volatile.Write(ref _nextDeferredProbeTick, Environment.TickCount64 + 2000);
+                        // Due retries are a local journal decision. A blocked
+                        // reconnect probe for an unrelated source must not
+                        // indefinitely prevent their activation.
+                        try
+                        {
+                            if (_durableJournal is { } retryJournal)
+                                ActivateDeferredPackages((
+                                    retryJournal.DueDeferredKeys().ToHashSet(StringComparer.Ordinal),
+                                    new HashSet<string>(StringComparer.Ordinal)));
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            PCasaDiagnostics.Write("Scheduler.DueRetry", ex);
+                        }
+                        if (_deferredProbe is null)
+                            _deferredProbe = Task.Run(ProbeDeferredPackages);
                     }
                 }
                 var durable = _durableJournal;
-                bool manualWaiting = false, nonIdleWaiting = false;
+                IReadOnlyList<(string Key, SchedulerPriority Priority, long Order)> accepted = [];
+                bool journalUnavailable = false;
                 try
                 {
                     if (durable is not null)
                     {
-                        manualWaiting = durable.HasPendingEffectiveManualActions();
-                        nonIdleWaiting = durable.HasOutstandingNonIdleTasks();
+                        accepted = durable.RunnablePlacements();
                     }
                 }
                 catch (Exception ex) when (ex is IOException or Microsoft.Data.Sqlite.SqliteException)
                 {
                     PCasaDiagnostics.Write("Scheduler.ControlRead", ex);
                     // Never admit P4 on an unverified journal snapshot.
-                    nonIdleWaiting = true;
+                    journalUnavailable = true;
                 }
                 var cancel = new List<CancellationTokenSource>();
                 var viewChanged = false;
                 lock (_gate)
                 {
                     if (_disposed) break;
+                    // Include accepted recipes even if their factory has not
+                    // yet constructed the executable work item. Ignore journal
+                    // rows already represented by a live owner.
+                    var represented = _pending.Concat(_runningWork)
+                        .Select(item => RankOwner(item).Key).ToHashSet(StringComparer.Ordinal);
+                    var preparing = accepted.Where(row => !represented.Contains(row.Key))
+                        .ToArray();
+                    var nonIdleWaiting = journalUnavailable ||
+                        accepted.Any(row => row.Priority < SchedulerPriority.Idle);
                     // Global rank, not per-lane callbacks, decides preemption.
-                    var highest = _pending.OrderBy(p => RankOwner(p).Priority)
+                    var highest = _pending.Where(p => !IsIndependentReadItem(p))
+                        .OrderBy(p => RankOwner(p).Priority)
                         .ThenBy(p => RankOwner(p).QueueOrder)
                         .ThenBy(p => RankOwner(p).Id).FirstOrDefault();
-                    for (var lane = 0; lane < _runningPriorityJobs.Length; lane++)
+                    foreach (var running in _runningWork)
                     {
-                        var running = _runningPriorityJobs[lane];
-                        if (running is null || running.YieldRequested) continue;
-                        // Read-only view requests run on reserved capacity.
-                        // Yielding them for an unrelated P0 scan is a livelock:
-                        // the gallery retry is repeatedly canceled and never
-                        // publishes a first image. They cannot mutate files.
-                        if (running.Kind is SchedulerWorkKind.BrowseRead or
-                            SchedulerWorkKind.ThumbnailRead or
-                            SchedulerWorkKind.ViewerRead)
-                            continue;
-                        if (!((RankOwner(running).Priority == SchedulerPriority.Idle &&
+                        if (running.YieldSource is not { } yield || running.YieldRequested) continue;
+                        // The owning job requests yield. Its dependent steps
+                        // must be allowed to finish the current safe boundary.
+                        if (HasRunningParent(running)) continue;
+                        if (!((_maintenancePauseCount > 0 && IsCatalogMutation(running)) ||
+                              (RankOwner(running).Priority == SchedulerPriority.Idle &&
                                (nonIdleWaiting || _pending.Any(p =>
+                                   !IsIndependentReadItem(p) &&
                                    RankOwner(p).Priority < SchedulerPriority.Idle))) ||
-                              ((_nativeDragInteractionCount > 0 &&
-                                lane is LaneBackground or LaneInitialImport or
-                                    LaneUserAction or LaneSourceProbe) ||
-                               (_externalEditInteractionCount > 0 &&
-                                lane is LaneBackground or LaneInitialImport or
-                                    LaneManualScan or LaneUserAction or LaneSourceProbe)) ||
+                              IsBlockedByInteraction(running) ||
+                              (IsCatalogMutation(running) &&
+                               preparing.Any(row => AcceptedPrecedes(row, running))) ||
                               (highest is not null && Precedes(highest, running))))
                             continue;
                         running.YieldRequested = true;
                         SetStateUnsafe(running, SchedulerJobState.YieldRequested);
                         viewChanged = true;
-                        if (_runningYield[lane] is { } yield) cancel.Add(yield);
+                        cancel.Add(yield);
                     }
                     // Keep filling available bounded capacity in global rank
                     // order. SelectNextJobUnsafe is the sole eligibility check.
@@ -733,47 +770,21 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     while (available && !_gracefulShutdownRequested)
                     {
                         available = false;
-                        for (var lane = 0; lane <= LaneGalleryRead; lane++)
+                        for (var executor = 0; executor <= ExecutorGalleryRead; executor++)
                         {
-                            if (_laneOccupied[lane] >= _laneCapacity[lane]) continue;
-                            var item = SelectNextJobUnsafe(lane,
-                                manualWaiting, nonIdleWaiting);
+                            // Presentation I/O is admitted independently of
+                            // the journal probe and logical job arbitration.
+                            if (executor is ExecutorGalleryRead or ExecutorThumbnail or
+                                ExecutorViewer or ExecutorCatalogRead)
+                                continue;
+                            if (executor != ExecutorCatalog &&
+                                _runningWork.Count(work => work.ExecutionClass == executor) >=
+                                    ReadCapacity[executor]) continue;
+                            var item = SelectNextJobUnsafe(executor,
+                                preparing, nonIdleWaiting);
                             if (item is null) continue;
-                            _pending.Remove(item);
-                            item.YieldRequested = false;
-                            _laneOccupied[lane]++;
-                            if (item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan)
-                            {
-                                if (lane == LaneUserAction) _catalogForegroundRunning++;
-                                if (lane is LaneManual or LaneManualScan)
-                                {
-                                    _catalogForegroundRunning++;
-                                    _catalogManualRunning++;
-                                }
-                                if (lane == LaneInteractive)
-                                {
-                                    _catalogForegroundRunning++;
-                                    _catalogInteractiveRunning++;
-                                }
-                            }
-                            if (lane == LaneManualSourceProbe)
-                            {
-                                _manualSourceProbeRunning++;
-                                _runningManualSourceProbe = item;
-                            }
-                            CancellationTokenSource? yieldRequest = null;
-                            if (lane <= LaneManual ||
-                                lane is LaneInitialImport or LaneManualScan or LaneManualBackup)
-                            {
-                                yieldRequest = new CancellationTokenSource();
-                                _runningPriorityJobs[lane] = item;
-                                _runningYield[lane] = yieldRequest;
-                            }
-                            _runningWork.Add(item);
-                            SetStateUnsafe(item, SchedulerJobState.Running);
+                            StartExecutionUnsafe(item, executor);
                             viewChanged = true;
-                            _assigned[lane].Enqueue((item, yieldRequest));
-                            _signals[lane].Release();
                             available = true;
                         }
                     }
@@ -791,6 +802,48 @@ public sealed class PCasaScheduler : IAsyncDisposable
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
     }
 
+    // Called only under _gate. Read executors share lifetime/cancellation
+    // bookkeeping with the coordinator, but admission is driven by read
+    // capacity, not by logical job rank or the SQLite journal probe.
+    // SourceProbe is deliberately excluded: some existing callers perform
+    // actual filesystem mutations using that kind.
+    private void DispatchIndependentReadsUnsafe()
+    {
+        if (_disposed || _gracefulShutdownRequested || _shutdown.IsCancellationRequested)
+            return;
+        foreach (var executor in new[] { ExecutorGalleryRead, ExecutorThumbnail,
+                     ExecutorViewer, ExecutorCatalogRead })
+        {
+            while (_runningWork.Count(work => work.ExecutionClass == executor) <
+                   ReadCapacity[executor])
+            {
+                var next = _pending.Where(item =>
+                        IsIndependentReadItem(item) &&
+                        ExecutorFor(item.Priority, item.Kind) == executor)
+                    .OrderByDescending(HasRunningParent)
+                    .ThenBy(item => item.Priority)
+                    .ThenBy(item => item.QueueOrder)
+                    .ThenBy(item => item.Id)
+                    .FirstOrDefault();
+                if (next is null) break;
+                StartExecutionUnsafe(next, executor);
+            }
+        }
+    }
+
+    private void StartExecutionUnsafe(WorkItem item, int executor)
+    {
+        _pending.Remove(item);
+        item.YieldRequested = false;
+        item.ExecutionClass = executor;
+        var yieldRequest = IsCatalogMutation(item) ? new CancellationTokenSource() : null;
+        item.YieldSource = yieldRequest;
+        _runningWork.Add(item);
+        SetStateUnsafe(item, SchedulerJobState.Running);
+        _executions.RemoveAll(task => task.IsCompletedSuccessfully);
+        _executions.Add(Task.Run(() => ExecuteAsync(item, yieldRequest)));
+    }
+
     // Passive I/O probe, with no mutation of queue or journal state.
     // An offline SMB path may block; controller arbitration continues.
     private (HashSet<string> Ready, HashSet<string> Reconnected) ProbeDeferredPackages()
@@ -800,7 +853,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
         var journal = _durableJournal;
         if (journal is null || _shutdown.IsCancellationRequested)
             return (ready, reconnected);
-        ready.UnionWith(journal.DueDeferredKeys());
         foreach (var pending in journal.Pending())
         {
             _shutdown.Token.ThrowIfCancellationRequested();
@@ -986,7 +1038,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 queueOrder: record.QueueOrder,
                 isCurrent: () => journal.Pending().Any(item =>
                     item.Key == record.Key &&
-                    item.State is "queued" or "running")).ConfigureAwait(false);
+                    item.State is "queued" or "running"),
+                durableJob: true).ConfigureAwait(false);
             // Recovery may originate from the WPF dispatcher. Journal state
             // must be committed by the scheduler continuation even if the
             // UI thread is blocked or the process is beginning to close.
@@ -997,11 +1050,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
         {
             // Shutdown is a yield, user cancellation is final. Never
             // resurrect a deliberately canceled destructive operation.
+            var endingSession = _shutdown.IsCancellationRequested || _gracefulShutdownRequested;
             journal.SetState(record.Key,
-                _shutdown.IsCancellationRequested || _gracefulShutdownRequested
-                    ? "queued" :
-                journal.Pending().Any(p => p.Key == record.Key && p.State == "paused")
-                    ? "paused" : "canceled",
+                endingSession
+                    ? _retireFileJobsOnSessionEnd &&
+                      !DurablePackageJournal.SurvivesSession(record.Type)
+                        ? "canceled" : "queued"
+                    : journal.Pending().Any(p => p.Key == record.Key && p.State == "paused")
+                        ? "paused" : "canceled",
                 package.CompletedSteps);
             throw;
         }
@@ -1055,36 +1111,48 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
     }
 
-    private static int LaneFor(SchedulerPriority priority, SchedulerWorkKind kind)
+    private static int ExecutorFor(SchedulerPriority priority, SchedulerWorkKind kind)
         => kind switch
         {
-            SchedulerWorkKind.ViewerRead => LaneViewer,
-            SchedulerWorkKind.BrowseRead => LaneGalleryRead,
-            SchedulerWorkKind.CatalogRead => LaneCatalogRead,
-            SchedulerWorkKind.DatabaseBackup => LaneManualBackup,
-            SchedulerWorkKind.ThumbnailRead => LaneThumbnail,
-            SchedulerWorkKind.InitialImport => LaneInitialImport,
-            SchedulerWorkKind.CatalogScan when priority == SchedulerPriority.ManualAction =>
-                LaneManualScan,
+            SchedulerWorkKind.ViewerRead => ExecutorViewer,
+            SchedulerWorkKind.BrowseRead => ExecutorGalleryRead,
+            SchedulerWorkKind.CatalogRead => ExecutorCatalogRead,
+            SchedulerWorkKind.ThumbnailRead => ExecutorThumbnail,
             SchedulerWorkKind.SourceProbe => priority switch
             {
-                SchedulerPriority.ManualAction => LaneManualSourceProbe,
-                SchedulerPriority.Interactive => LaneInteractiveSourceProbe,
-                _ => LaneSourceProbe
+                SchedulerPriority.ManualAction => ExecutorManualSourceProbe,
+                SchedulerPriority.Interactive => ExecutorInteractiveSourceProbe,
+                _ => ExecutorSourceProbe
             },
-            _ => priority switch
-            {
-                SchedulerPriority.ManualAction => LaneManual,
-                SchedulerPriority.Interactive => LaneInteractive,
-                SchedulerPriority.UserAction => LaneUserAction,
-                _ => LaneBackground
-            }
+            _ => ExecutorCatalog
         };
 
-    // Call ONLY under _gate. A manual network mutation has to suspend bulk
-    // scanner scheduling for its entire operation, not merely while queued.
+    // Preserve existing interaction semantics without letting an execution
+    // class determine priority or whether a catalog owner may run.
+    private static bool IsBulkWork(WorkItem item) =>
+        item.Kind == SchedulerWorkKind.InitialImport ||
+        (item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan &&
+         item.Priority >= SchedulerPriority.UserAction);
+
+    private bool IsBlockedByInteraction(WorkItem item)
+    {
+        var bulk = IsBulkWork(item) ||
+            (item.Kind == SchedulerWorkKind.SourceProbe &&
+             item.Priority >= SchedulerPriority.UserAction);
+        return (_nativeDragInteractionCount > 0 && bulk) ||
+               (_externalEditInteractionCount > 0 &&
+                (bulk || (item.Kind == SchedulerWorkKind.CatalogScan &&
+                          item.Priority == SchedulerPriority.ManualAction)));
+    }
+
+    private static bool WaitsForRestoredOrder(WorkItem item) =>
+        item.Kind == SchedulerWorkKind.DatabaseBackup ||
+        (item.Priority == SchedulerPriority.ManualAction &&
+         item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan
+             or SchedulerWorkKind.InitialImport or SchedulerWorkKind.SourceProbe);
+
     private bool HasManualSourceProbeUnsafe()
-        => _manualSourceProbeRunning > 0 ||
+        => _runningWork.Any(item => item.ExecutionClass == ExecutorManualSourceProbe) ||
             _pending.Any(item => item.Kind == SchedulerWorkKind.SourceProbe &&
                 item.Priority == SchedulerPriority.ManualAction);
 
@@ -1094,12 +1162,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
     public Task EnqueuePackageAsync(SchedulerTaskPackage package,
         SchedulerPriority priority, CancellationToken cancellationToken = default,
         SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
-        long? queueOrder = null, Func<bool>? isCurrent = null)
+        long? queueOrder = null, Func<bool>? isCurrent = null,
+        bool durableJob = false)
     {
         ArgumentNullException.ThrowIfNull(package);
         return EnqueueAsync(package.Key, priority, package.ExecuteAsync,
             isCurrent: isCurrent, cancellationToken: cancellationToken,
-            workKind: workKind, queueOrder: queueOrder);
+            workKind: workKind, queueOrder: queueOrder, durableJob: durableJob);
     }
 
     // A dismissed read-only projection must leave no queued scheduler work.
@@ -1162,8 +1231,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     {
         lock (_gate)
             return _pending.Any(item => item.Key == key) ||
-                _runningPriorityJobs.Any(item => item?.Key == key) ||
-                _runningManualSourceProbe?.Key == key;
+                _runningWork.Any(item => item.Key == key);
     }
 
     // The currently executing parent is available only inside its async
@@ -1237,69 +1305,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 return Task.CompletedTask;
             }, isCurrent, cancellationToken, workKind, parentKey: parentKey);
         return result!;
-    }
-
-    // Taskmanager commands remain on the ONE scheduler owner. The journal
-    // persists ranks first; a promoted waiting task then preempts a running
-    // durable peer in its OWN worker lane at the next safe scan checkpoint.
-    // No second scheduler or duplicate scan recipe is created.
-    public bool MoveDurableTask(string key, int direction)
-    {
-        if (direction is not (-1 or 1))
-            throw new ArgumentOutOfRangeException(nameof(direction));
-        var journal = _durableJournal ?? throw new InvalidOperationException("Kein Paketjournal.");
-        var all = journal.Pending();
-        var source = all.FirstOrDefault(row => row.Key == key);
-        if (source is null) return false;
-        var lane = all.Where(row =>
-                row.Priority == source.Priority &&
-                LaneFor(row.Priority, row.WorkKind) ==
-                    LaneFor(source.Priority, source.WorkKind)).ToList();
-        var index = lane.FindIndex(row => row.Key == key);
-        if (index < 0 || index + direction < 0 || index + direction >= lane.Count)
-            return false;
-        return MoveDurableTaskTo(key, lane[index + direction].Key);
-    }
-
-    // Drag/drop and arrow buttons call the same atomic journal mutation.
-    // The drop target denotes the desired final slot in scheduler dispatch
-    // order; it can be the currently running, interruptible durable scan.
-    public bool MoveDurableTaskTo(string key, string targetKey)
-    {
-        var journal = _durableJournal ?? throw new InvalidOperationException("Kein Paketjournal.");
-        lock (_gate)
-        {
-            var rows = journal.Pending();
-            var source = rows.FirstOrDefault(row => row.Key == key);
-            var target = rows.FirstOrDefault(row => row.Key == targetKey);
-            if (source is null || target is null ||
-                source.Priority != target.Priority ||
-                LaneFor(source.Priority, source.WorkKind) !=
-                    LaneFor(target.Priority, target.WorkKind) ||
-                !_pending.Any(item => item.Key == key &&
-                    item.Priority == source.Priority))
-                return false; // never move the live executor or an absent row
-
-            var changed = journal.Reorder(key, targetKey);
-            if (changed is null || changed.Count == 0) return false;
-            foreach (var work in _pending)
-                if (changed.TryGetValue(work.Key, out var rank))
-                    work.QueueOrder = rank;
-            // The active work item is NOT in _pending. It still needs its
-            // new rank, both to detect that a queued peer outranks it and
-            // to resume in the correct position after cooperative yield.
-            foreach (var active in _runningPriorityJobs)
-                if (active is not null &&
-                    changed.TryGetValue(active.Key, out var rank))
-                    active.QueueOrder = rank;
-            if (_runningManualSourceProbe is { } probe &&
-                changed.TryGetValue(probe.Key, out var probeRank))
-                probe.QueueOrder = probeRank;
-
-            SignalController();
-        }
-
-        return true;
     }
 
     // No new retry queue: activate the same durable recipe through the
@@ -1401,6 +1406,24 @@ public sealed class PCasaScheduler : IAsyncDisposable
         var journal = _durableJournal ?? throw new InvalidOperationException("Kein Paketjournal.");
         var record = journal.Pending().FirstOrDefault(item => item.Key == key);
         if (record is null) return false;
+        if (record.Type == "tag-edit-v2")
+        {
+            // Stop all catalog owners at a safe boundary before removing
+            // these revisions. Another tag job can coalesce pending edits
+            // for the same image; it must not race this transaction.
+            using var hold = await AcquireMaintenancePauseAsync().ConfigureAwait(false);
+            var current = journal.Pending().FirstOrDefault(item => item.Key == key);
+            if (current is null) return false;
+            if (current.State != "paused" &&
+                !await PauseDurableTaskAsync(key).ConfigureAwait(false))
+                return false;
+            var canceled = await Task.Run(() => journal.CancelOwnedTagEdits(key))
+                .ConfigureAwait(false);
+            if (canceled) CompleteTaskPromotion(key);
+            NotifyTaskViewChanged();
+            return canceled;
+        }
+        // Legacy and recovery recipes have no exclusive tag ownership.
         // Tag intents are already mirrored into the displayed catalog.
         // Silently canceling them after the first SQLite step would leave
         // pending_tag_edits and wrong keywords. The existing error/discard
@@ -1418,7 +1441,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // The first tag step can be staging SQLite intents while its
             // durable cursor still reads zero. Do not cancel in that gap.
             if (record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
-                _runningPriorityJobs.Any(item => item?.Key == key))
+                _runningWork.Any(item => item.Key == key && IsCatalogMutation(item)))
                 throw new InvalidOperationException(
                     "Ein laufender Tag-Schreibauftrag kann erst nach sicherem " +
                     "Abgleich der vorgemerkten Änderungen entfernt werden.");
@@ -1432,9 +1455,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 WakePendingWorkersUnsafe();
                 return true;
             }
-            running = _runningPriorityJobs.FirstOrDefault(item => item?.Key == key);
-            if (running is null && _runningManualSourceProbe?.Key == key)
-                running = _runningManualSourceProbe;
+            running = _runningWork.FirstOrDefault(item => item.Key == key);
             if (running is null)
             {
                 var canceled = journal.Cancel(key); // deferred; no live executor
@@ -1450,15 +1471,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
         catch (OperationCanceledException) { }
         return true;
     }
-
-    // The scheduler owns the read-only unified task projection. It does
-    // not introduce an executor, queue, or additional source of dispatch
-    // truth; durable and scanner owners merely supply their existing intents.
-    public SchedulerTaskView CreateTaskView(LocalDatabase database,
-        bool canMoveAutomatic, bool canResumeAutomatic,
-        bool canStopAutomatic, bool canRetryFailed, bool canDiscardFailed)
-        => new(this, database, canMoveAutomatic, canResumeAutomatic,
-            canStopAutomatic, canRetryFailed, canDiscardFailed);
 
     public IReadOnlyList<SchedulerJobSnapshot> Snapshot()
     {
@@ -1490,8 +1502,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             };
             _history[index] = snapshot;
 
-            var work = _runningPriorityJobs.FirstOrDefault(item =>
-                item?.Key == key);
+            var work = _runningWork.FirstOrDefault(item => item.Key == key);
             var now = Environment.TickCount64;
             // Every file updates the authoritative snapshot, but only phase
             // transitions / final counts / <=10Hz publish to WPF. A batch
@@ -1518,7 +1529,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         Func<bool>? isCurrent = null,
         CancellationToken cancellationToken = default,
         SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
-        long? queueOrder = null, string? parentKey = null)
+        long? queueOrder = null, string? parentKey = null,
+        bool durableJob = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(operation);
@@ -1526,7 +1538,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var identity = TaskIdentityUnsafe(key);
+            // A recipe factory may finish constructing after shutdown
+            // froze dispatch. Never leave it waiting on a frozen queue.
+            if (_gracefulShutdownRequested && durableJob)
+                return Task.FromCanceled(new CancellationToken(true));
+            var identity = key;
             var existing = _pending.FirstOrDefault(x =>
                 x.Kind == workKind && x.Key == key &&
                 !x.CancellationToken.IsCancellationRequested);
@@ -1547,6 +1563,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 var item = new WorkItem(++_nextId, key, priority, workKind,
                     operation, isCurrent, cancellationToken)
                 {
+                    DurableJob = durableJob,
                     // Ephemeral manual preflight (e.g. GPS eligibility)
                     // must never be buried behind the old durable ledger's
                     // large historical sequence values. Durable ranks remain
@@ -1575,7 +1592,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 completion = item.Completion.Task;
             }
 
-            SignalController();
+            if (IsIndependentRead(workKind))
+                DispatchIndependentReadsUnsafe();
+            else
+                SignalController();
         }
         NotifyTaskViewChanged();
         return completion;
@@ -1605,85 +1625,113 @@ public sealed class PCasaScheduler : IAsyncDisposable
                  (a.QueueOrder == b.QueueOrder && a.Id < b.Id)));
     }
 
-    // Called under _gate. This is the ONE business decision about which
-    // accepted job may start. The physical lane is only an execution-capacity
-    // constraint. A new P0 outranks an older P0 on another blocked SMB lane.
-    // It may start on a free worker while that older worker reaches a safe
-    // interruption boundary. No task's priority is derived from its lane.
-    private WorkItem? SelectNextJobUnsafe(int lane,
-        bool durableManualPending, bool durableNonIdlePending)
+    private static bool IsIndependentRead(SchedulerWorkKind kind) =>
+        kind is SchedulerWorkKind.BrowseRead or SchedulerWorkKind.ThumbnailRead or
+            SchedulerWorkKind.ViewerRead or SchedulerWorkKind.CatalogRead;
+
+    private static bool IsIndependentReadItem(WorkItem item) =>
+        IsIndependentRead(item.Kind);
+
+    // Durable mutation packages and catalog inventories are logical jobs.
+    // A worker lane is not permission to overlap a second logical job.
+    // Owned dependent steps are part of the same job, never a second owner.
+    private bool HasRunningParent(WorkItem item) =>
+        item.Parent is { } parent && _runningWork.Contains(parent);
+
+    // Called under _gate. A new P0 requests a yield from the older owner;
+    // admission follows only after that owner reaches a safe boundary.
+    // Source probes and view presentation are technical operations.
+    private static bool AcceptedPrecedes(
+        (string Key, SchedulerPriority Priority, long Order) accepted, WorkItem item)
     {
-        var candidate = _pending
-            .Where(x => LaneFor(x.Priority, x.Kind) == lane)
-            .OrderBy(x => RankOwner(x).Priority)
+        var owner = RankOwner(item);
+        return accepted.Key != owner.Key &&
+            (accepted.Priority < owner.Priority ||
+             (accepted.Priority == owner.Priority && accepted.Order < owner.QueueOrder));
+    }
+
+    private WorkItem? SelectNextJobUnsafe(int executor,
+        IReadOnlyList<(string Key, SchedulerPriority Priority, long Order)> preparing,
+        bool durableNonIdlePending)
+    {
+        var candidates = _pending
+            .Where(x => ExecutorFor(x.Priority, x.Kind) == executor);
+        if (executor == ExecutorCatalog)
+        {
+            // An active owner can finish its own dependent catalog steps,
+            // but no different owner can start before the safe boundary.
+            candidates = candidates.Where(candidate =>
+                !_runningWork.Any(active => IsCatalogMutation(active) &&
+                    !ReferenceEquals(RankOwner(active), RankOwner(candidate))));
+        }
+        var candidate = candidates
+            .OrderByDescending(HasRunningParent)
+            .ThenBy(x => RankOwner(x).Priority)
             .ThenBy(x => RankOwner(x).QueueOrder)
             .ThenBy(x => RankOwner(x).Id)
             .FirstOrDefault();
         if (candidate is null) return null;
 
-        // Restore the saved journal/order before allowing any restored P0
-        // worker to start. Existing packages are NOT recreated.
-        if (_restoringDurablePackages &&
-            lane is LaneManual or LaneManualScan or LaneManualBackup or LaneManualSourceProbe)
-            return null;
-        if ((_nativeDragInteractionCount > 0 &&
-                                lane is LaneBackground or LaneInitialImport or
-                                    LaneUserAction or LaneSourceProbe) ||
-                               (_externalEditInteractionCount > 0 &&
-                                lane is LaneBackground or LaneInitialImport or
-                                    LaneManualScan or LaneUserAction or LaneSourceProbe))
+        var childOfRunningPackage = HasRunningParent(candidate);
+        var ownedCatalogStep = childOfRunningPackage &&
+            _runningWork.Any(active => IsCatalogMutation(active) &&
+                ReferenceEquals(RankOwner(active), RankOwner(candidate)));
+        if (_maintenancePauseCount > 0 && IsCatalogMutation(candidate) &&
+            !ownedCatalogStep)
             return null;
 
-        // P4 is pure idle work. All waiting/running P0-P3 requests exclude
-        // it, INCLUDING durable 'deferred' packages visible as Wartet in TM.
+        // Dependent work must reach its owner's safe boundary, even when
+        // a higher-ranked task or a maintenance/interaction hold is waiting.
+        if (ownedCatalogStep || (childOfRunningPackage &&
+                                 !IsCatalogMutation(candidate)))
+            return candidate;
+
+        if (_restoringDurablePackages && WaitsForRestoredOrder(candidate))
+            return null;
+        if (IsBlockedByInteraction(candidate))
+            return null;
+
+        // Idle verification yields to runnable requests. Deferred or paused
+        // journal entries remain visible but do not reserve the worker.
         if (RankOwner(candidate).Priority == SchedulerPriority.Idle &&
             (durableNonIdlePending ||
              _pending.Any(other => !ReferenceEquals(other, candidate) &&
+                 !IsIndependentReadItem(other) &&
                  RankOwner(other).Priority < SchedulerPriority.Idle) ||
-             _runningWork.Any(other => RankOwner(other).Priority < SchedulerPriority.Idle)))
+             _runningWork.Any(other => !IsIndependentReadItem(other) &&
+                 RankOwner(other).Priority < SchedulerPriority.Idle)))
             return null;
 
-        // The read-only browse projection is a technical view operation,
-        // not a competing user package. It has bounded read capacity and
-        // cannot write originals or seize a P0 execution lane. In particular,
-        // an offline/slow durable P0 NAS scan must never leave the initial
-        // folder tree and gallery blank on startup.
-        var independentBrowseRead =
-            candidate.Kind is SchedulerWorkKind.BrowseRead or
-                SchedulerWorkKind.ThumbnailRead;
         // One package owns its dependent operations. They must never wait
         // behind an unrelated queued P0 while the owner awaits them.
-        var childOfRunningPackage = candidate.Parent is { } parent &&
-            _runningWork.Contains(parent);
-        if (!childOfRunningPackage && !independentBrowseRead &&
+        if (!childOfRunningPackage &&
             _pending.Any(other => !ReferenceEquals(other, candidate) &&
-                Precedes(other, candidate)))
+                !IsIndependentReadItem(other) && Precedes(other, candidate)))
             return null;
         // Manual P0 packages form an actual LIFO interruption stack.
         // P1-P3 may run on independent read/executor capacity while an
         // older higher-priority operation is already in flight. P4 is
         // explicitly stricter and was checked above against ALL running jobs.
-        if (RankOwner(candidate).Priority == SchedulerPriority.ManualAction &&
+        if (!childOfRunningPackage &&
+            RankOwner(candidate).Priority == SchedulerPriority.ManualAction &&
             _runningWork.Any(active =>
+                !IsIndependentReadItem(active) &&
                 RankOwner(active).Priority == SchedulerPriority.ManualAction &&
                 Precedes(active, candidate)))
             return null;
 
-        // Journal recovery may have an accepted P0 package not yet copied
-        // into the in-memory run queue. It still wins over P2-P4 execution.
-        if (!childOfRunningPackage && !independentBrowseRead &&
-            durableManualPending &&
-            RankOwner(candidate).Priority > SchedulerPriority.ManualAction)
+        // Accepted-but-not-yet-constructed packages reserve their real
+        // rank, not merely a broad P0-versus-background flag. A newer
+        // accepted P0 may therefore overtake an older runnable P0.
+        if (!childOfRunningPackage && IsCatalogMutation(candidate) &&
+            preparing.Any(row => AcceptedPrecedes(row, candidate)))
             return null;
 
-        // Technical safety only: never overlap a foreground catalog mutation
-        // with a lower-priority bulk catalog pass. This does NOT assign order.
-        if (lane is LaneBackground or LaneInitialImport &&
-            (_catalogForegroundRunning > 0 || HasManualSourceProbeUnsafe()))
-            return null;
-        if (lane == LaneUserAction &&
-            (_catalogManualRunning > 0 || _catalogInteractiveRunning > 0 ||
-             HasManualSourceProbeUnsafe()))
+        // Source preflight retains its existing protection while it is
+        // running or queued. Catalog-owner exclusion above replaces the
+        // redundant foreground/background mutation counters.
+        if (!childOfRunningPackage &&
+            IsBulkWork(candidate) && HasManualSourceProbeUnsafe())
             return null;
         return candidate;
     }
@@ -1700,138 +1748,91 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
     private void WakePendingWorkersUnsafe() => SignalController();
 
-    private async Task RunAsync(int lane)
+    private async Task ExecuteAsync(WorkItem item, CancellationTokenSource? yieldRequest)
     {
-        try
+        // The presenter must learn that the worker actually started,
+        // even if the first SQLite/SMB/ExifTool call is still blocked
+        // and has not yet reached its first ReportProgress boundary.
+        PublishState(item);
+        bool interrupted = false, resume = false;
+        using (yieldRequest)
+        using (var linked = yieldRequest is null
+            ? CancellationTokenSource.CreateLinkedTokenSource(
+                _shutdown.Token, item.CancellationToken,
+                item.UserCancellation.Token)
+            : CancellationTokenSource.CreateLinkedTokenSource(
+                _shutdown.Token, item.CancellationToken,
+                item.UserCancellation.Token, yieldRequest.Token))
         {
-            while (true)
+            try
             {
-                await _signals[lane].WaitAsync(_shutdown.Token);
-                WorkItem item;
-                CancellationTokenSource? yieldRequest;
-                lock (_gate)
+                if (_gracefulShutdownRequested)
+                    throw new OperationCanceledException(
+                        "Application exit: preserve pending durable work.");
+                linked.Token.ThrowIfCancellationRequested();
+                if (item.IsCurrent is not null && !item.IsCurrent())
+                    throw new OperationCanceledException();
+                var previousPackage = _currentPackage.Value;
+                _currentPackage.Value = item;
+                try { await item.Operation(linked.Token); }
+                finally { _currentPackage.Value = previousPackage; }
+                linked.Token.ThrowIfCancellationRequested();
+                if (item.IsCurrent is not null && !item.IsCurrent())
+                    throw new OperationCanceledException();
+                SetState(item, SchedulerJobState.Completed);
+                item.Completion.TrySetResult();
+            }
+            catch (OperationCanceledException)
+            {
+                interrupted = true;
+                if (item.YieldRequested && !_gracefulShutdownRequested &&
+                    !_shutdown.IsCancellationRequested &&
+                    !item.CancellationToken.IsCancellationRequested &&
+                    !item.UserCancellation.IsCancellationRequested)
                 {
-                    if (_assigned[lane].Count == 0) continue; // stale signal
-                    (item, yieldRequest) = _assigned[lane].Dequeue();
-                }
-                // The presenter must learn that the worker actually started,
-                // even if the first SQLite/SMB/ExifTool call is still blocked
-                // and has not yet reached its first ReportProgress boundary.
-                PublishState(item);
-                using (yieldRequest)
-                using (var linked = yieldRequest is null
-                    ? CancellationTokenSource.CreateLinkedTokenSource(
-                        _shutdown.Token, item.CancellationToken,
-                        item.UserCancellation.Token)
-                    : CancellationTokenSource.CreateLinkedTokenSource(
-                        _shutdown.Token, item.CancellationToken,
-                        item.UserCancellation.Token, yieldRequest.Token))
-                {
-                    try
-                    {
-                        if (_gracefulShutdownRequested)
-                            throw new OperationCanceledException(
-                                "Application exit: preserve pending durable work.");
-                        linked.Token.ThrowIfCancellationRequested();
-                        if (item.IsCurrent is not null && !item.IsCurrent())
-                            throw new OperationCanceledException();
-                        var previousPackage = _currentPackage.Value;
-                        _currentPackage.Value = item;
-                        try { await item.Operation(linked.Token); }
-                        finally { _currentPackage.Value = previousPackage; }
-                        linked.Token.ThrowIfCancellationRequested();
-                        if (item.IsCurrent is not null && !item.IsCurrent())
-                            throw new OperationCanceledException();
-                        SetState(item, SchedulerJobState.Completed);
-                        item.Completion.TrySetResult();
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        var valid = false;
-                        if (item.YieldRequested && !_shutdown.IsCancellationRequested &&
-                            !item.CancellationToken.IsCancellationRequested)
-                        {
-                            try { valid = item.IsCurrent is null || item.IsCurrent(); }
-                            catch { /* Startup/monitor reconciliation can retry. */ }
-                        }
-                        lock (_gate)
-                        {
-                            if (valid && !_disposed && !_shutdown.IsCancellationRequested &&
-                                !item.CancellationToken.IsCancellationRequested)
-                            {
-                                item.YieldRequested = false;
-                                _pending.Add(item);
-                                SetStateUnsafe(item, SchedulerJobState.Queued);
-                                SignalController();
-                            }
-                            else
-                            {
-                                SetStateUnsafe(item, SchedulerJobState.Canceled);
-                                item.Completion.TrySetCanceled();
-                            }
-                        }
-                        // A cooperative yield can make this same package queued
-                        // again without issuing another progress callback.
-                        PublishState(item);
-                    }
-                    catch (Exception ex)
-                    {
-                        SetState(item, SchedulerJobState.Failed, ex.Message);
-                        item.Completion.TrySetException(ex);
-                    }
-                    finally
-                    {
-                        lock (_gate)
-                        {
-                            _runningWork.Remove(item);
-                            _laneOccupied[lane]--;
-                            // Every completed, canceled or yielded operation
-                            // changes the ONE global eligibility decision.
-                            // Wake each pending lane once; the scheduler will
-                            // choose the next ranked job, never the worker.
-                            WakePendingWorkersUnsafe();
-                            if ((lane <= LaneManual || lane is LaneInitialImport or LaneManualScan or LaneManualBackup) &&
-                                ReferenceEquals(_runningPriorityJobs[lane], item))
-                            {
-                                _runningPriorityJobs[lane] = null;
-                                _runningYield[lane] = null;
-                            }
-                            if (lane == LaneManualSourceProbe)
-                            {
-                                _manualSourceProbeRunning--;
-                                if (ReferenceEquals(_runningManualSourceProbe, item))
-                                    _runningManualSourceProbe = null;
-                            }
-                            if (item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan)
-                            {
-                                if (lane == LaneUserAction) _catalogForegroundRunning--;
-                                if (lane is LaneManual or LaneManualScan)
-                                {
-                                    _catalogForegroundRunning--;
-                                    _catalogManualRunning--;
-                                }
-                                if (lane == LaneInteractive)
-                                {
-                                    _catalogForegroundRunning--;
-                                    _catalogInteractiveRunning--;
-                                }
-                            }
-
-                        }
-                    }
+                    try { resume = item.IsCurrent is null || item.IsCurrent(); }
+                    catch { /* Startup/monitor reconciliation can retry. */ }
                 }
             }
-        }
-        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
-        {
-            lock (_gate)
+            catch (Exception ex)
             {
-                foreach (var item in _pending)
+                SetState(item, SchedulerJobState.Failed, ex.Message);
+                item.Completion.TrySetException(ex);
+            }
+            finally
+            {
+                lock (_gate)
                 {
-                    SetStateUnsafe(item, SchedulerJobState.Canceled);
-                    item.Completion.TrySetCanceled();
+                    _runningWork.Remove(item);
+                    item.YieldSource = null;
+                    item.ExecutionClass = -1;
+                    // Remove the old assignment and requeue under the
+                    // same lock. A priority change can select a different
+                    // executor; it must never see the same item both
+                    // pending and running or lose its new assignment.
+                    if (interrupted)
+                    {
+                        if (resume && !_disposed && !_gracefulShutdownRequested &&
+                            !_shutdown.IsCancellationRequested &&
+                            !item.CancellationToken.IsCancellationRequested &&
+                            !item.UserCancellation.IsCancellationRequested)
+                        {
+                            item.YieldRequested = false;
+                            _pending.Add(item);
+                            SetStateUnsafe(item, SchedulerJobState.Queued);
+                        }
+                        else
+                        {
+                            SetStateUnsafe(item, SchedulerJobState.Canceled);
+                            item.Completion.TrySetCanceled();
+                        }
+                    }
+                    if (IsIndependentReadItem(item))
+                        DispatchIndependentReadsUnsafe();
+                    else
+                        WakePendingWorkersUnsafe();
                 }
-                _pending.Clear();
+                if (interrupted) PublishState(item);
             }
         }
     }
@@ -1907,7 +1908,18 @@ public sealed class PCasaScheduler : IAsyncDisposable
             try { await _deferredProbe; }
             catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
         }
-        await Task.WhenAll(_workers);
+        Task[] executing;
+        lock (_gate)
+        {
+            foreach (var item in _pending)
+            {
+                SetStateUnsafe(item, SchedulerJobState.Canceled);
+                item.Completion.TrySetCanceled();
+            }
+            _pending.Clear();
+            executing = _executions.ToArray();
+        }
+        await Task.WhenAll(executing);
         // Worker completion can unblock the journal continuation AFTER the
         // worker exits. Do not close the app while a checkpoint is in flight.
         Task[] durable;
@@ -1915,8 +1927,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
         try { await Task.WhenAll(durable); }
         catch (OperationCanceledException) { }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+        if (_retireFileJobsOnSessionEnd)
+            _durableJournal?.RetireUnfinishedFileJobs();
         _shutdown.Dispose();
-        foreach (var signal in _signals) signal.Dispose();
         _controllerWake.Dispose();
     }
 
@@ -1929,9 +1942,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
         public string Key { get; } = key;
         public long QueueOrder { get; set; }
         public WorkItem? Parent { get; set; }
+        public bool DurableJob { get; init; }
         public CancellationTokenSource UserCancellation { get; } = new();
         public SchedulerPriority Priority { get; set; } = priority;
         public SchedulerWorkKind Kind { get; } = kind;
+        // Assignment metadata belongs to this running item, not a second
+        // lane-indexed registry of logical jobs. Access under _gate.
+        public int ExecutionClass { get; set; } = -1;
+        public CancellationTokenSource? YieldSource { get; set; }
         public bool YieldRequested { get; set; }
         public long LastProgressNoticeTick { get; set; }
         public Func<CancellationToken, Task> Operation { get; } = operation;

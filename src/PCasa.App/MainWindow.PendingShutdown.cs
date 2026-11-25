@@ -1,4 +1,6 @@
 using System.IO;
+using System.Text.Json;
+using PCasa.App.Data;
 using PCasa.App.Services;
 
 namespace PCasa.App;
@@ -57,14 +59,45 @@ public partial class MainWindow
         finally { _shutdownReviewOpen = false; }
     }
 
-    // Already accepted original writes are durable scheduler work, not
-    // unsaved editor drafts. On Exit they checkpoint and resume on startup;
-    // deliberate cancellation remains exclusively in the Taskmanager.
+    // Show both unsubmitted drafts and accepted file operations. Scan
+    // intents are excluded: their progress survives a normal shutdown.
     private List<ShutdownPendingOperation> SnapshotShutdownOperations(
         IReadOnlyList<TagImageChange> draftTags, long? editId)
     {
         var needed = new HashSet<long>(draftTags.Select(tag => tag.ImageId));
         if (editId is long edited) needed.Add(edited);
+        var operations = new DurablePackageJournal(_database).Pending()
+            .Where(record => record.Type is not
+                ("manual-folder-scan-v1" or "manual-scan-all-v1" or
+                 "import-error-retry-v1" or "transfer-reconcile-v1"))
+            .ToArray();
+        var targets = operations.ToDictionary(record => record.Key,
+            record => ShutdownRecipeTargets(record.Payload), StringComparer.Ordinal);
+        // V2 tag recovery owns the current unparked pending intent set,
+        // not an image list in its empty JSON recipe. Resolve previews
+        // from that same local catalog instead of probing originals.
+        if (operations.Any(record => record.Type == "tag-recovery-v2"))
+        {
+            var parked = _originalWriteFailures.Unresolved()
+                .Where(error => error.Kind == OriginalWriteFailureRepository.Tags)
+                .Select(error => error.ImageId).ToHashSet();
+            var pendingIds = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
+                .Select(edit => edit.ImageId).Distinct().Where(id => !parked.Contains(id))
+                .ToArray();
+            foreach (var record in operations.Where(record => record.Type == "tag-recovery-v2"))
+                targets[record.Key].Ids.UnionWith(pendingIds);
+        }
+        foreach (var record in operations.Where(record => record.Type == "tag-recovery-v1"))
+        {
+            try
+            {
+                targets[record.Key].Ids.UnionWith(
+                    JsonSerializer.Deserialize<long[]>(record.Payload) ?? Array.Empty<long>());
+            }
+            catch (JsonException) { }
+        }
+        foreach (var target in targets.Values)
+            needed.UnionWith(target.Ids);
         var images = new Dictionary<long, ShutdownPendingFile>();
         using var db = _database.OpenConnection();
         foreach (var group in needed.Chunk(400))
@@ -82,6 +115,62 @@ public partial class MainWindow
                     reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2));
         }
         var result = new List<ShutdownPendingOperation>();
+        // Resolve explicit source paths using the catalog, not the original
+        // files. The dialog must also work with disconnected NAS sources.
+        var previews = images.Values.DistinctBy(file => file.Path, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(file => file.Path, StringComparer.OrdinalIgnoreCase);
+        var unresolvedPaths = targets.Values.SelectMany(target => target.Paths)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(path => !previews.ContainsKey(path)).ToArray();
+        foreach (var group in unresolvedPaths.Chunk(300))
+        {
+            using var command = db.CreateCommand();
+            var args = group.Select((_, i) => "$path" + i).ToArray();
+            for (var i = 0; i < group.Length; i++)
+                command.Parameters.AddWithValue(args[i], group[i]);
+            command.CommandText =
+                "SELECT local_path,thumbnail_path FROM images WHERE local_path COLLATE NOCASE IN (" +
+                string.Join(",", args) + ");";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                previews[reader.GetString(0)] = new ShutdownPendingFile(
+                    reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1));
+        }
+        foreach (var record in operations)
+        {
+            var target = targets[record.Key];
+            var files = target.Ids.Where(images.ContainsKey).Select(id => images[id])
+                .Concat(target.Paths.Select(path => previews.GetValueOrDefault(path)
+                    ?? new ShutdownPendingFile(path, null)))
+                .DistinctBy(file => file.Path, StringComparer.OrdinalIgnoreCase).ToArray();
+            var status = record.State switch
+            {
+                "running" => "Läuft",
+                "deferred" => "Fehler",
+                "paused" => "Angehalten",
+                _ => "Wartet"
+            };
+            // Current tag jobs support targeted cancellation; legacy
+            // recovery jobs still require manual reconciliation.
+            var protectedTag = record.Type != "tag-edit-v2" &&
+                record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
+                (record.CompletedSteps > 0 || record.State == "running" ||
+                 record.Type.StartsWith("tag-recovery-", StringComparison.Ordinal));
+            result.Add(new ShutdownPendingOperation(record.Key,
+                SchedulerTaskView.TaskCaption(record), UiLanguage.T(status), files,
+                CanCancel: !protectedTag));
+        }
+        if (_directImageWriteProgress is { CurrentPath: { } path } direct)
+        {
+            using var preview = db.CreateCommand();
+            preview.CommandText = "SELECT thumbnail_path FROM images WHERE local_path=$path COLLATE NOCASE LIMIT 1;";
+            preview.Parameters.AddWithValue("$path", path);
+            result.Add(new ShutdownPendingOperation(direct.Key,
+                direct.Phase ?? UiLanguage.T("Bildbearbeitung speichern"),
+                UiLanguage.T(_directImageWriteStarted ? "Läuft" : "Wartet"),
+                [new ShutdownPendingFile(path, preview.ExecuteScalar() as string)],
+                CanCancel: !_directImageWriteStarted));
+        }
         foreach (var draft in draftTags)
             if (images.TryGetValue(draft.ImageId, out var file))
                 result.Add(new ShutdownPendingOperation("draft:tag:" + draft.ImageId,
@@ -94,9 +183,67 @@ public partial class MainWindow
         return result;
     }
 
+    internal static (HashSet<long> Ids, HashSet<string> Paths) ShutdownRecipeTargets(string payload)
+    {
+        var ids = new HashSet<long>();
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var json = JsonDocument.Parse(payload);
+            Visit(json.RootElement);
+        }
+        catch (JsonException) { }
+        return (ids, paths);
+
+        void Visit(JsonElement node)
+        {
+            if (node.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var element in node.EnumerateArray()) Visit(element);
+                return;
+            }
+            if (node.ValueKind != JsonValueKind.Object) return;
+            foreach (var property in node.EnumerateObject())
+            {
+                if ((property.Name is "ImageId" or "Id") &&
+                    property.Value.ValueKind == JsonValueKind.Number &&
+                    property.Value.TryGetInt64(out var id) && id > 0)
+                    ids.Add(id);
+                else if (property.Name == "ImageIds" &&
+                    property.Value.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var value in property.Value.EnumerateArray())
+                        if (value.ValueKind == JsonValueKind.Number &&
+                            value.TryGetInt64(out var imageId) && imageId > 0)
+                            ids.Add(imageId);
+                }
+                else if (property.Name == "Path" &&
+                    property.Value.ValueKind == JsonValueKind.String &&
+                    property.Value.GetString() is { Length: > 0 } path)
+                    paths.Add(path);
+                else if (property.Name == "Sources" &&
+                    property.Value.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var value in property.Value.EnumerateArray())
+                        if (value.ValueKind == JsonValueKind.String &&
+                            value.GetString() is { Length: > 0 } source)
+                            paths.Add(source);
+                }
+                else if (property.Value.ValueKind is JsonValueKind.Array or JsonValueKind.Object)
+                    Visit(property.Value);
+            }
+        }
+    }
+
     private async Task<bool> CancelShutdownOperationAsync(
         ShutdownPendingOperation item)
     {
+        if (_directImageWriteProgress?.Key == item.Key)
+        {
+            if (_directImageWriteStarted) return false;
+            _directImageWriteCancellation?.Cancel();
+            return true;
+        }
         if (item.Key.StartsWith("draft:tag:", StringComparison.Ordinal) &&
             item.DraftImageId is long imageId)
         {
@@ -143,7 +290,15 @@ public partial class MainWindow
         }
         if (new DurablePackageJournal(_database).Pending()
             .Any(record => record.Key == item.Key))
-            return await _scheduler.DeleteDurableTaskAsync(item.Key);
+        {
+            var canceled = await _scheduler.DeleteDurableTaskAsync(item.Key);
+            if (canceled && item.Key.StartsWith("tags:", StringComparison.Ordinal))
+            {
+                await RefreshTagSidebarAsync();
+                await RefreshPendingTagDotsAsync();
+            }
+            return canceled;
+        }
         return await _scheduler.CancelActiveTaskAsync(item.Key);
     }
 }

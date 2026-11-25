@@ -101,10 +101,55 @@ public sealed class DurablePackageJournal
     // transfer or other file mutation must never reappear as a runnable job
     // after the PCasa process has ended. Keep its history and last error;
     // do NOT delete the DB record or imply that a partial file write finished.
+    // Existing persisted numeric 0/3/4 values remain compatible with
+    // older libraries. Only legacy intermediate user ranks are migrated.
+    public void NormalizeLegacyJobPriorities()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE scheduler_packages
+               SET priority=0,
+                   queue_order=CASE WHEN queue_order<0 THEN queue_order ELSE -sequence END
+             WHERE priority IN (1,2)
+               AND state IN ('queued','running','deferred','paused');
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
+    public static bool SurvivesSession(string type) => type is
+        "manual-folder-scan-v1" or "manual-scan-all-v1" or "import-error-retry-v1";
+
     public int RetireUnfinishedFileJobs()
     {
         using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        // A staged tag projection is not proof of an original-file write.
+        // Preserve its revisions for explicit review and prevent the
+        // automatic tag drain from recreating the abandoned job.
+        using (var park = db.CreateCommand())
+        {
+            park.Transaction = tx;
+            park.CommandText = """
+                INSERT INTO original_write_failures
+                    (kind,image_id,package_key,file_path,attempts,
+                     last_error,last_attempt_utc,resolved)
+                SELECT DISTINCT 'tags',p.image_id,
+                    'tags:session-ended:' || p.image_id,i.local_path,$max,
+                    $error,$now,0
+                FROM pending_tag_edits p JOIN images i ON i.id=p.image_id
+                WHERE 1=1
+                ON CONFLICT(kind,image_id) DO UPDATE SET
+                    attempts=MAX(original_write_failures.attempts,excluded.attempts),
+                    resolved=0;
+                """;
+            park.Parameters.AddWithValue("$max", OriginalWriteFailureRepository.MaximumAttempts);
+            park.Parameters.AddWithValue("$error", "Dateioperation mit der PCasa-Sitzung beendet.");
+            park.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            park.ExecuteNonQuery();
+        }
         using var command = db.CreateCommand();
+        command.Transaction = tx;
         command.CommandText = """
             UPDATE scheduler_packages
                SET state='canceled', retry_after_utc=NULL,
@@ -113,18 +158,22 @@ public sealed class DurablePackageJournal
                        ELSE error END,
                    updated_utc=$now
              WHERE package_type NOT IN
-                   ('manual-folder-scan-v1','manual-scan-all-v1')
+                   ('manual-folder-scan-v1','manual-scan-all-v1','import-error-retry-v1')
                AND state IN ('queued','running','deferred','paused');
             """;
         command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
-        return command.ExecuteNonQuery();
+        var retired = command.ExecuteNonQuery();
+        tx.Commit();
+        return retired;
     }
 
     public DurablePackageRecord Put(string key, string type, string payload,
         SchedulerPriority priority, SchedulerWorkKind workKind)
     {
         using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
         using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             INSERT INTO scheduler_packages
                 (package_key,package_type,payload_json,priority,work_kind,updated_utc)
@@ -137,18 +186,25 @@ public sealed class DurablePackageJournal
         cmd.Parameters.AddWithValue("$priority", (int)priority);
         cmd.Parameters.AddWithValue("$kind", (int)workKind);
         cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
-        cmd.ExecuteNonQuery();
+        var inserted = cmd.ExecuteNonQuery() != 0;
+        var acceptance = inserted && priority == SchedulerPriority.ManualAction
+            ? LocalDatabase.NextSchedulerAcceptanceSequence(db, tx) : 0L;
         using (var rank = db.CreateCommand())
         {
+            rank.Transaction = tx;
             rank.CommandText = """
                 UPDATE scheduler_packages
-                   SET queue_order=CASE WHEN priority=0 THEN -sequence ELSE sequence END
+                   SET queue_order=CASE WHEN priority=0
+                       THEN CASE WHEN $accepted>0 THEN -$accepted ELSE -sequence END
+                       ELSE sequence END
                  WHERE package_key=$key AND queue_order IS NULL;
                 """;
+            rank.Parameters.AddWithValue("$accepted", acceptance);
             rank.Parameters.AddWithValue("$key", key);
             rank.ExecuteNonQuery();
         }
         using var lookup = db.CreateCommand();
+        lookup.Transaction = tx;
         lookup.CommandText = """
             SELECT sequence,priority,work_kind,completed_steps,state,error,
                    package_type,payload_json,COALESCE(queue_order,CASE WHEN priority=0 THEN -sequence ELSE sequence END)
@@ -166,11 +222,14 @@ public sealed class DurablePackageJournal
             reader.GetInt32(2) != (int)workKind)
             throw new InvalidOperationException(
                 "Paketidentität kollidiert mit einem anderen unveränderlichen Auftrag: " + key);
-        return new DurablePackageRecord(key, reader.GetString(6), reader.GetString(7),
+        var result = new DurablePackageRecord(key, reader.GetString(6), reader.GetString(7),
             (SchedulerPriority)reader.GetInt32(1), (SchedulerWorkKind)reader.GetInt32(2),
             reader.GetInt64(0), reader.GetInt32(3), reader.GetString(4),
             reader.IsDBNull(5) ? null : reader.GetString(5))
         { QueueOrder = reader.GetInt64(8) };
+        reader.Close();
+        tx.Commit();
+        return result;
     }
 
     public IReadOnlyList<DurablePackageRecord> Pending()
@@ -223,107 +282,6 @@ public sealed class DurablePackageJournal
         return rows;
     }
 
-    // One persisted ordering authority for the scheduler AND taskmanager.
-    // Reorder by rotating existing ranks inside one SQLite transaction: no
-    // parallel UI priority queue, no rank collisions and no replay of steps.
-    // A running task may be displaced; the scheduler must then yield it
-    // cooperatively before selecting the promoted queued task.
-    public IReadOnlyDictionary<string, long>? Reorder(string key, string targetKey)
-    {
-        if (string.Equals(key, targetKey, StringComparison.Ordinal)) return null;
-        using var db = _database.OpenConnection();
-        using var tx = db.BeginTransaction();
-        var rows = new List<(string Key, long Rank, SchedulerPriority Priority,
-            SchedulerWorkKind Kind, string State)>();
-        using (var read = db.CreateCommand())
-        {
-            read.Transaction = tx;
-            read.CommandText = """
-                SELECT package_key,
-                       COALESCE(queue_order,CASE WHEN priority=0 THEN -sequence ELSE sequence END),
-                       priority, work_kind, state
-                  FROM scheduler_packages
-                 WHERE state IN ('queued','running','deferred')
-                 ORDER BY priority ASC,queue_order ASC,sequence ASC;
-                """;
-            using var reader = read.ExecuteReader();
-            while (reader.Read())
-                rows.Add((reader.GetString(0), reader.GetInt64(1),
-                    (SchedulerPriority)reader.GetInt32(2),
-                    (SchedulerWorkKind)reader.GetInt32(3), reader.GetString(4)));
-        }
-        var source = rows.FindIndex(item => item.Key == key);
-        var target = rows.FindIndex(item => item.Key == targetKey);
-        if (source < 0 || target < 0) return null;
-        var selected = rows[source];
-        var destination = rows[target];
-        if (selected.Priority != destination.Priority ||
-            !SameQueueLane(selected.Kind, destination.Kind))
-            return null;
-        // A moving source must still be queued (or a yielded worker already
-        // back in the queue). The scheduler additionally rejects a live source.
-        var ordered = rows.Where(row =>
-                row.Priority == selected.Priority &&
-                SameQueueLane(row.Kind, selected.Kind))
-            .ToList();
-        source = ordered.FindIndex(row => row.Key == key);
-        target = ordered.FindIndex(row => row.Key == targetKey);
-        if (source == target) return null;
-        var ranks = ordered.Select(row => row.Rank).ToArray();
-        ordered.RemoveAt(source);
-        ordered.Insert(target, selected);
-        var changed = new Dictionary<string, long>(StringComparer.Ordinal);
-        for (var i = 0; i < ordered.Count; i++)
-        {
-            if (ordered[i].Rank == ranks[i]) continue;
-            using var update = db.CreateCommand();
-            update.Transaction = tx;
-            update.CommandText = """
-                UPDATE scheduler_packages
-                   SET queue_order=$rank, updated_utc=$now
-                 WHERE package_key=$key AND state IN ('queued','running','deferred');
-                """;
-            update.Parameters.AddWithValue("$rank", ranks[i]);
-            update.Parameters.AddWithValue("$key", ordered[i].Key);
-            update.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
-            if (update.ExecuteNonQuery() != 1)
-                throw new IOException("Task-Reihenfolge konnte nicht atomar gespeichert werden.");
-            changed.Add(ordered[i].Key, ranks[i]);
-        }
-        tx.Commit();
-        return changed;
-    }
-
-    // A Catalog task and a CatalogScan task share the same worker lane; a
-    // source probe or initial import does not. Preserve that distinction.
-    private static bool SameQueueLane(SchedulerWorkKind a, SchedulerWorkKind b)
-        => a == b || (a is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan &&
-                      b is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan);
-
-    // Keep the existing adjacent API, but route through the same atomic
-    // reorder as mouse drag/drop. There is only ONE mutation code path.
-    public (string OtherKey, long SelectedOrder, long OtherOrder)? Move(
-        string key, int direction)
-    {
-        if (direction is not (-1 or 1))
-            throw new ArgumentOutOfRangeException(nameof(direction));
-        var all = Pending();
-        var source = all.FirstOrDefault(row => row.Key == key);
-        if (source is null) return null;
-        var lane = all.Where(row =>
-                row.Priority == source.Priority &&
-                SameQueueLane(row.WorkKind, source.WorkKind)).ToList();
-        var i = lane.FindIndex(row => row.Key == key);
-        if (i < 0 || i + direction < 0 || i + direction >= lane.Count)
-            return null;
-        var neighbor = lane[i + direction];
-        var changed = Reorder(key, neighbor.Key);
-        if (changed is null || !changed.TryGetValue(key, out var selectedRank) ||
-            !changed.TryGetValue(neighbor.Key, out var neighborRank))
-            return null;
-        return (neighbor.Key, selectedRank, neighborRank);
-    }
-
     public bool Cancel(string key)
     {
         using var db = _database.OpenConnection();
@@ -336,6 +294,99 @@ public sealed class DurablePackageJournal
         cmd.Parameters.AddWithValue("$key", key);
         cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
         return cmd.ExecuteNonQuery() == 1;
+    }
+
+    // A paused tag job has reached its safe file boundary. Remove only its
+    // current, unconfirmed revisions and restore their previous membership.
+    // A superseding owner and a confirmed native write are never reversed.
+    // The projection, pending intents and terminal job state commit together.
+    public bool CancelOwnedTagEdits(string key)
+    {
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        using (var job = db.CreateCommand())
+        {
+            job.Transaction = tx;
+            job.CommandText = """
+                UPDATE scheduler_packages SET state='canceled',retry_after_utc=NULL,
+                    updated_utc=$now
+                WHERE package_key=$key AND package_type='tag-edit-v2'
+                  AND state='paused';
+                """;
+            job.Parameters.AddWithValue("$key", key);
+            job.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            if (job.ExecuteNonQuery() != 1) return false;
+        }
+        var edits = new List<(long Id, string Tag, bool BasePresent)>();
+        using (var read = db.CreateCommand())
+        {
+            read.Transaction = tx;
+            read.CommandText = """
+                SELECT image_id,tag,base_present FROM pending_tag_edits
+                WHERE owner_key=$key ORDER BY image_id;
+                """;
+            read.Parameters.AddWithValue("$key", key);
+            using var rows = read.ExecuteReader();
+            while (rows.Read())
+            {
+                if (rows.IsDBNull(2))
+                    throw new InvalidOperationException(
+                        "Dieser Tag-Auftrag enthält bereits vorgemerkte Änderungen. " +
+                        "Er darf erst nach deren sicherem Abgleich oder Verwerfen gelöscht werden.");
+                edits.Add((rows.GetInt64(0), rows.GetString(1), rows.GetBoolean(2)));
+            }
+        }
+        foreach (var image in edits.GroupBy(edit => edit.Id))
+        {
+            string? words;
+            using (var read = db.CreateCommand())
+            {
+                read.Transaction = tx;
+                read.CommandText = "SELECT keywords FROM image_tags WHERE image_id=$id;";
+                read.Parameters.AddWithValue("$id", image.Key);
+                words = read.ExecuteScalar() as string;
+            }
+            var tags = new HashSet<string>((words ?? string.Empty).Split('\n',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var edit in image)
+            {
+                if (edit.BasePresent) tags.Add(edit.Tag);
+                else tags.Remove(edit.Tag);
+            }
+            using (var update = db.CreateCommand())
+            {
+                update.Transaction = tx;
+                update.CommandText = "UPDATE image_tags SET keywords=$words WHERE image_id=$id;";
+                update.Parameters.AddWithValue("$words", string.Join("\n", tags));
+                update.Parameters.AddWithValue("$id", image.Key);
+                update.ExecuteNonQuery();
+            }
+            using (var remove = db.CreateCommand())
+            {
+                remove.Transaction = tx;
+                remove.CommandText =
+                    "DELETE FROM pending_tag_edits WHERE owner_key=$key AND image_id=$id;";
+                remove.Parameters.AddWithValue("$key", key);
+                remove.Parameters.AddWithValue("$id", image.Key);
+                remove.ExecuteNonQuery();
+            }
+            using (var clear = db.CreateCommand())
+            {
+                clear.Transaction = tx;
+                clear.CommandText = """
+                    DELETE FROM original_write_failures
+                    WHERE kind='tags' AND image_id=$id
+                      AND (package_key=$key OR NOT EXISTS
+                         (SELECT 1 FROM pending_tag_edits WHERE image_id=$id));
+                    """;
+                clear.Parameters.AddWithValue("$key", key);
+                clear.Parameters.AddWithValue("$id", image.Key);
+                clear.ExecuteNonQuery();
+            }
+        }
+        tx.Commit();
+        return true;
     }
 
     // A real persisted HOLD, distinct from a failure/backoff and from
@@ -352,6 +403,21 @@ public sealed class DurablePackageJournal
         cmd.Parameters.AddWithValue("$key", key);
         cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
         return cmd.ExecuteNonQuery() == 1;
+    }
+
+    // Alpha.63: an ordinary manual hold lasts for this application session.
+    // Recovery preserves the original key, queue position, recipe and cursor.
+    public void ReleaseStartupPauses()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE scheduler_packages
+               SET state='queued',error=NULL,retry_after_utc=NULL,updated_utc=$now
+             WHERE state='paused';
+            """;
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        cmd.ExecuteNonQuery();
     }
 
     public DurablePackageRecord? ResumePaused(string key)
@@ -489,12 +555,32 @@ public sealed class DurablePackageJournal
         return migrated;
     }
 
-    // The idle scheduler gate uses ALL outstanding non-idle packages,
-    // including temporarily deferred NAS packages. The Taskmanager must
-    // not display 'Wartet' for P0 while starting an unrelated P4 review.
-    // A deliberately canceled/completed/failed package is not outstanding.
-    // The persisted user priority override is authoritative.
-    public bool HasOutstandingNonIdleTasks()
+    // Lightweight control-plane snapshot: never load recipe JSON merely
+    // to arbitrate the rank of a job which is still being constructed.
+    public IReadOnlyList<(string Key, SchedulerPriority Priority, long Order)> RunnablePlacements()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT p.package_key,COALESCE(o.priority_override,p.priority),
+                   COALESCE(o.dispatch_order,p.queue_order,
+                       CASE WHEN p.priority=0 THEN -p.sequence ELSE p.sequence END)
+              FROM scheduler_packages p
+              LEFT JOIN scheduler_task_order o ON o.task_key=p.package_key
+             WHERE p.state IN ('queued','running');
+            """;
+        using var reader = cmd.ExecuteReader();
+        var result = new List<(string, SchedulerPriority, long)>();
+        while (reader.Read())
+            result.Add((reader.GetString(0), (SchedulerPriority)reader.GetInt32(1),
+                reader.GetInt64(2)));
+        return result;
+    }
+
+    // Only runnable packages may prevent the continuous inventory review.
+    // Deferred packages retain their identity and journal position, but
+    // cannot block an unrelated reachable source while awaiting retry.
+    public bool HasRunnableNonIdleTasks()
     {
         using var db = _database.OpenConnection();
         using var cmd = db.CreateCommand();
@@ -503,7 +589,7 @@ public sealed class DurablePackageJournal
                 SELECT 1 FROM scheduler_packages p
                 LEFT JOIN scheduler_task_order o ON o.task_key=p.package_key
                 WHERE COALESCE(o.priority_override,p.priority) < $idle
-                  AND p.state IN ('queued','running','deferred')
+                  AND p.state IN ('queued','running')
             );
             """;
         cmd.Parameters.AddWithValue("$idle", (int)SchedulerPriority.Idle);

@@ -199,8 +199,8 @@ public sealed class FolderRepository
         // above already establishes its one pending marker. Selecting an
         // existing root must never reopen a completed import or unpause a
         // partially completed one. An explicit refresh uses the scan path.
-        // Give a genuinely NEW pending root a stable tail slot. A manual
-        // reordering of older first imports is never reset by this insert.
+        // A new root is a user request, so allocate its LIFO acceptance
+        // rank from the same sequence as manually submitted packages.
         // Both the source marker and queue position commit atomically.
         if (inserted > 0)
         {
@@ -208,20 +208,56 @@ public sealed class FolderRepository
             rank.Transaction = transaction;
             rank.CommandText = """
                 UPDATE monitored_folders
-                   SET initial_scan_queue_order=(
-                       SELECT MAX(CASE WHEN initial_scan_queue_order>0
-                              THEN initial_scan_queue_order ELSE id END)+1
-                         FROM monitored_folders)
+                   SET initial_scan_queue_order=$accepted
                  WHERE local_path=$path COLLATE NOCASE;
                 """;
+            rank.Parameters.AddWithValue("$accepted",
+                LocalDatabase.NextSchedulerAcceptanceSequence(connection, transaction));
             rank.Parameters.AddWithValue("$path", classification.LocalPath);
             rank.ExecuteNonQuery();
         }
         transaction.Commit();
     }
 
+    // Import state is independent of every scheduler job identity.
+    public sealed record FolderImportState(long FolderId, int CataloguedCount,
+        bool InitialImportComplete, long LastCheckSequence);
+
+    public FolderImportState? GetFolderImportState(long folderId)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT m.id, (SELECT COUNT(*) FROM images i WHERE i.folder_id=m.id),
+                   m.initial_scan_pending=0, m.last_check_sequence
+              FROM monitored_folders m WHERE m.id=$id;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? new FolderImportState(reader.GetInt64(0),
+            reader.GetInt32(1), reader.GetBoolean(2), reader.GetInt64(3)) : null;
+    }
+
+    public int CountCataloguedInDirectory(string directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory) ||
+            !Path.IsPathFullyQualified(directory)) return 0;
+        var prefix = Path.TrimEndingDirectorySeparator(
+            CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(directory)));
+        if (!prefix.EndsWith(Path.DirectorySeparatorChar)) prefix += Path.DirectorySeparatorChar;
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*) FROM images
+             WHERE local_path LIKE $pattern ESCAPE '!';
+            """;
+        cmd.Parameters.AddWithValue("$pattern",
+            prefix.Replace("!", "!!").Replace("%", "!%").Replace("_", "!_") + "%");
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
     public sealed record PendingFirstImport(long FolderId, string Directory,
-        long QueueOrder, bool Paused);
+        long QueueOrder, bool Paused, int CataloguedCount = 0);
 
     public IReadOnlyList<PendingFirstImport> GetPendingFirstImportQueue()
     {
@@ -229,9 +265,12 @@ public sealed class FolderRepository
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             SELECT m.id,m.local_path,
-                   CASE WHEN m.initial_scan_queue_order > 0
+                   CASE WHEN m.initial_scan_queue_order >= 1000000000000
+                        THEN -m.initial_scan_queue_order
+                        WHEN m.initial_scan_queue_order > 0
                         THEN m.initial_scan_queue_order ELSE m.id END,
-                   m.initial_scan_paused
+                   m.initial_scan_paused,
+                   (SELECT COUNT(*) FROM images i WHERE i.folder_id=m.id)
               FROM monitored_folders m
               JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
              WHERE m.initial_scan_pending=1 AND m.initial_scan_deleted=0
@@ -243,7 +282,7 @@ public sealed class FolderRepository
         while (reader.Read())
             pending.Add(new PendingFirstImport(reader.GetInt64(0),
                 reader.GetString(1), reader.GetInt64(2),
-                reader.GetInt64(3) != 0));
+                reader.GetInt64(3) != 0, reader.GetInt32(4)));
         return pending;
     }
 
@@ -262,6 +301,20 @@ public sealed class FolderRepository
     // A held first-import remains pending and retains every committed
     // file receipt. It is visible in Taskmanager until the user resumes it;
     // future process starts must not silently restart an explicitly held job.
+    // Only invoked during application startup, not when a repository or
+    // maintenance connection is opened in the current session.
+    public void ReleaseStartupImportPauses()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE monitored_folders SET initial_scan_paused=0
+             WHERE initial_scan_pending=1 AND initial_scan_paused=1
+               AND initial_scan_deleted=0;
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
     public bool SetPendingFirstImportPaused(long folderId, bool paused)
     {
         using var db = _database.OpenConnection();
@@ -330,8 +383,10 @@ public sealed class FolderRepository
                 JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
                 WHERE m.initial_scan_pending=1
                   AND m.initial_scan_deleted=0 AND s.desired_present=1
-                ORDER BY CASE WHEN m.initial_scan_queue_order>0
-                         THEN m.initial_scan_queue_order ELSE m.id END,m.id;
+                ORDER BY CASE WHEN m.initial_scan_queue_order>=1000000000000
+                         THEN -m.initial_scan_queue_order
+                         WHEN m.initial_scan_queue_order>0
+                         THEN m.initial_scan_queue_order ELSE m.id END ASC,m.id ASC;
                 """;
             using var reader = cmd.ExecuteReader();
             while (reader.Read()) ordered.Add(reader.GetInt64(0));
@@ -437,90 +492,13 @@ public sealed class FolderRepository
         long MonitoredFolderId, string ScanKey, string ScanRoot,
         long SourceGeneration);
 
-    // There is ONE persistent review round across monitored roots. A root
-    // can finish at most once in that round. The next round begins only
-    // AFTER every eligible root has completed (or been removed). A failed
-    // or disconnected root is still unfinished and never silently skipped.
-    //
-    // The caller probes availability separately; this read never accesses
-    // NAS files and cannot consume a file cursor. The DB transaction makes
-    // round advancement atomic across restarts and concurrent completions.
+    // The catalog owns the persistent verification order. Offline and
+    // incomplete roots never block the other roots from being checked again.
+    // utcNow is used only for the existing source-error retry mechanism.
     public IReadOnlyList<long> GetDueRootReviewIds(DateTime utcNow)
     {
         using var db = _database.OpenConnection();
-        using var tx = db.BeginTransaction();
-        long cycle;
-        using (var readCycle = db.CreateCommand())
-        {
-            readCycle.Transaction = tx;
-            readCycle.CommandText = """
-                SELECT current_cycle FROM scan_review_cycle WHERE id=1;
-                """;
-            cycle = Convert.ToInt64(readCycle.ExecuteScalar());
-        }
-
-        long outstanding;
-        long eligible;
-        using (var scan = db.CreateCommand())
-        {
-            scan.Transaction = tx;
-            scan.CommandText = """
-                SELECT COUNT(*),
-                       COALESCE(SUM(CASE WHEN
-                           r.monitored_folder_id IS NULL OR
-                           r.source_generation != s.generation OR
-                           r.completed_cycle < $round
-                           THEN 1 ELSE 0 END),0)
-                  FROM monitored_folders m
-                  JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
-                  LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
-                 WHERE s.desired_present=1 AND m.initial_scan_pending=0;
-                """;
-            scan.Parameters.AddWithValue("$round", cycle);
-            using var reader = scan.ExecuteReader();
-            reader.Read();
-            eligible = reader.GetInt64(0);
-            outstanding = reader.GetInt64(1);
-        }
-
-        // An offline, unfinished first import may not prevent verification
-        // of other sources, but it still belongs to the library's round.
-        // Once those other roots finish, do not spin a second round while
-        // that original import remains unresolved.
-        long pendingFirstImports;
-        using (var pending = db.CreateCommand())
-        {
-            pending.Transaction = tx;
-            pending.CommandText = """
-                SELECT COUNT(*) FROM monitored_folders m
-                JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
-                WHERE m.initial_scan_pending=1
-                  AND m.initial_scan_deleted=0 AND s.desired_present=1;
-                """;
-            pendingFirstImports = Convert.ToInt64(pending.ExecuteScalar());
-        }
-
-        if (eligible > 0 && outstanding == 0 && pendingFirstImports == 0)
-        {
-            // A COMPLETED round has an end. Advance once (persistently)
-            // rather than starting at the first root while another remains
-            // unfinished. No 30-day wall-clock condition is involved.
-            using var advance = db.CreateCommand();
-            advance.Transaction = tx;
-            advance.CommandText = """
-                UPDATE scan_review_cycle SET current_cycle=current_cycle+1,
-                    started_utc=$now WHERE id=1 AND current_cycle=$previous;
-                """;
-            advance.Parameters.AddWithValue("$now",
-                utcNow.ToUniversalTime().ToString("O"));
-            advance.Parameters.AddWithValue("$previous", cycle);
-            if (advance.ExecuteNonQuery() != 1)
-                throw new IOException("Review-round cursor changed unexpectedly.");
-            cycle++;
-        }
-
         using var cmd = db.CreateCommand();
-        cmd.Transaction = tx;
         cmd.CommandText = """
             SELECT m.id
               FROM monitored_folders m
@@ -529,25 +507,82 @@ public sealed class FolderRepository
              WHERE s.desired_present=1 AND m.initial_scan_pending=0
                AND (r.monitored_folder_id IS NULL
                     OR r.source_generation != s.generation
-                    OR r.completed_cycle < $round)
-               AND (r.monitored_folder_id IS NULL
-                    OR r.source_generation != s.generation
                     OR r.retry_after_utc IS NULL
                     OR r.retry_after_utc <= $now)
-             ORDER BY COALESCE(r.requested_priority,4) ASC,
-                      CASE WHEN COALESCE(r.queue_order,0)>0 THEN 0 ELSE 1 END,
-                      r.queue_order ASC,
-                      COALESCE(r.last_completed_utc,'') ASC,
-                      m.local_path COLLATE NOCASE ASC;
+             ORDER BY m.last_check_sequence ASC, m.local_path COLLATE NOCASE ASC;
             """;
-        cmd.Parameters.AddWithValue("$round", cycle);
         cmd.Parameters.AddWithValue("$now", utcNow.ToUniversalTime().ToString("O"));
-        using var dueReader = cmd.ExecuteReader();
-        var due = new List<long>();
-        while (dueReader.Read()) due.Add(dueReader.GetInt64(0));
-        dueReader.Close();
+        using var reader = cmd.ExecuteReader();
+        var ids = new List<long>();
+        while (reader.Read()) ids.Add(reader.GetInt64(0));
+        return ids;
+    }
+
+    private static void AdvanceCheckSequence(
+        Microsoft.Data.Sqlite.SqliteConnection db,
+        Microsoft.Data.Sqlite.SqliteTransaction tx, long folderId)
+    {
+        using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            UPDATE catalog_check_sequence SET last_value=last_value+1 WHERE id=1;
+            UPDATE monitored_folders
+               SET last_check_sequence=(SELECT last_value FROM catalog_check_sequence WHERE id=1)
+             WHERE id=$id;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.ExecuteNonQuery();
+    }
+
+    // Only a fully successful enumeration with the original source fence
+    // can advance the global order. A canceled check never calls this.
+    public bool CompleteRootCheck(long folderId, long generation, long epoch)
+        => CompleteRootCheck(folderId, generation, epoch, []) is not null;
+
+    // The verified source fence, discovered requests and check sequence
+    // commit together. A crash cannot acknowledge a check while losing
+    // its newly detected changes.
+    public IReadOnlyList<AutomaticChangeJob>? CompleteRootCheck(
+        long folderId, long generation, long epoch,
+        IReadOnlyList<BackgroundFolderChange> changes)
+    {
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO scan_root_review
+                (monitored_folder_id,source_generation,last_completed_utc,retry_after_utc)
+            SELECT m.id,s.generation,$now,NULL
+              FROM monitored_folders m
+              JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+             WHERE m.id=$id AND m.initial_scan_pending=0 AND s.desired_present=1
+               AND s.generation=$generation AND s.scan_epoch=$epoch
+            ON CONFLICT(monitored_folder_id) DO UPDATE SET
+                source_generation=excluded.source_generation,
+                last_completed_utc=excluded.last_completed_utc,
+                retry_after_utc=NULL,requested_priority=4;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        cmd.Parameters.AddWithValue("$epoch", epoch);
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        if (cmd.ExecuteNonQuery() != 1) return null;
+        var accepted = new List<AutomaticChangeJob>(changes.Count);
+        foreach (var change in changes)
+        {
+            if (change.MonitoredFolderId != folderId ||
+                change.Kind is not (BackgroundFolderChangeKind.ScanFile or
+                    BackgroundFolderChangeKind.ScanDirectory or BackgroundFolderChangeKind.RemovePath))
+                throw new ArgumentException("Invalid inventory change.", nameof(changes));
+            var path = CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(change.Path));
+            var normalized = change with { Path = path };
+            accepted.Add(AcceptAutomaticChange(db, tx,
+                $"automatic:{folderId}:{change.Kind}:{path}", normalized));
+        }
+        AdvanceCheckSequence(db, tx, folderId);
         tx.Commit();
-        return due;
+        return accepted;
     }
 
     // Stable order of the one existing P4 root-review dispatcher. This
@@ -674,37 +709,6 @@ public sealed class FolderRepository
         return ids;
     }
 
-    public sealed record ReviewRoundStatus(long Round, int Eligible,
-        int Completed, int Deferred);
-
-    public ReviewRoundStatus GetReviewRoundStatus(DateTime utcNow)
-    {
-        using var db = _database.OpenConnection();
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = """
-            SELECT c.current_cycle,
-                   COUNT(m.id),
-                   COALESCE(SUM(CASE WHEN r.source_generation=s.generation
-                       AND r.completed_cycle>=c.current_cycle
-                       THEN 1 ELSE 0 END),0),
-                   COALESCE(SUM(CASE WHEN r.source_generation=s.generation
-                       AND (r.completed_cycle<c.current_cycle)
-                       AND r.retry_after_utc>$now
-                       THEN 1 ELSE 0 END),0)
-              FROM scan_review_cycle c
-              LEFT JOIN monitored_folders m ON m.initial_scan_pending=0
-              LEFT JOIN scheduler_sources s
-                  ON s.canonical_path=m.canonical_path AND s.desired_present=1
-              LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
-             WHERE c.id=1 AND (m.id IS NULL OR s.canonical_path IS NOT NULL);
-            """;
-        cmd.Parameters.AddWithValue("$now", utcNow.ToUniversalTime().ToString("O"));
-        using var reader = cmd.ExecuteReader();
-        reader.Read();
-        return new ReviewRoundStatus(reader.GetInt64(0),
-            reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3));
-    }
-
     public DateTime? GetLastCompletedRootReview(long monitoredFolderId)
     {
         using var db = _database.OpenConnection();
@@ -823,6 +827,125 @@ public sealed class FolderRepository
         return result;
     }
 
+    // Remove the request, not the catalog. Shallow and recursive
+    // receipts share one external task key.
+    public void DeleteAutomaticDirectoryInventory(long folderId, string directory)
+    {
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            DELETE FROM scan_resume_directories WHERE scan_key IN (
+                SELECT scan_key FROM scan_resume_jobs
+                WHERE monitored_folder_id=$id AND scan_root=$root COLLATE NOCASE
+                  AND scan_key LIKE 'background:inventory:%:ScanDirectory:%');
+            DELETE FROM scan_resume_jobs
+                WHERE monitored_folder_id=$id AND scan_root=$root COLLATE NOCASE
+                  AND scan_key LIKE 'background:inventory:%:ScanDirectory:%';
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$root", directory);
+        cmd.ExecuteNonQuery();
+        tx.Commit();
+    }
+
+    public sealed record AutomaticChangeJob(string Key, long Order,
+        string Revision, BackgroundFolderChange Change);
+
+    // Queue identity survives before the first worker starts. Coalescing
+    // preserves FIFO position, but a new event has a new revision so a
+    // completing older worker cannot acknowledge it.
+    public AutomaticChangeJob AcceptAutomaticChange(string key,
+        BackgroundFolderChange change)
+    {
+        using var db = _database.OpenConnection();
+        return AcceptAutomaticChange(db, null, key, change);
+    }
+
+    private static AutomaticChangeJob AcceptAutomaticChange(
+        SqliteConnection db, SqliteTransaction? tx, string key,
+        BackgroundFolderChange change)
+    {
+        using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO automatic_change_jobs
+                (task_key,monitored_folder_id,local_path,kind,recursive,
+                 force_exif_refresh,revision)
+            VALUES ($key,$id,$path,$kind,$recursive,$force,$revision)
+            ON CONFLICT(task_key) DO UPDATE SET
+                recursive=MAX(automatic_change_jobs.recursive,excluded.recursive),
+                force_exif_refresh=MAX(automatic_change_jobs.force_exif_refresh,
+                    excluded.force_exif_refresh),
+                revision=excluded.revision
+            RETURNING queue_order,revision,recursive,force_exif_refresh;
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.Parameters.AddWithValue("$id", change.MonitoredFolderId);
+        cmd.Parameters.AddWithValue("$path", change.Path);
+        cmd.Parameters.AddWithValue("$kind", (int)change.Kind);
+        cmd.Parameters.AddWithValue("$recursive", change.Recursive ? 1 : 0);
+        cmd.Parameters.AddWithValue("$force", change.ForceExifRefresh ? 1 : 0);
+        cmd.Parameters.AddWithValue("$revision", Guid.NewGuid().ToString("N"));
+        using var row = cmd.ExecuteReader();
+        if (!row.Read()) throw new InvalidOperationException("Automatic request was not stored.");
+        return new AutomaticChangeJob(key, row.GetInt64(0), row.GetString(1),
+            change with { Recursive = row.GetBoolean(2), ForceExifRefresh = row.GetBoolean(3) });
+    }
+
+    public IReadOnlyList<AutomaticChangeJob> GetPendingAutomaticChanges()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT task_key,queue_order,revision,monitored_folder_id,local_path,
+                   kind,recursive,force_exif_refresh
+            FROM automatic_change_jobs ORDER BY queue_order;
+            """;
+        using var row = cmd.ExecuteReader();
+        var result = new List<AutomaticChangeJob>();
+        while (row.Read())
+            result.Add(new AutomaticChangeJob(row.GetString(0), row.GetInt64(1),
+                row.GetString(2), new BackgroundFolderChange(row.GetInt64(3),
+                    row.GetString(4), (BackgroundFolderChangeKind)row.GetInt32(5),
+                    row.GetBoolean(6), row.GetBoolean(7))));
+        return result;
+    }
+
+    // A worker interruption is not a new watcher notification. Resolve the
+    // current durable receipt without allocating a replacement revision.
+    public AutomaticChangeJob? GetPendingAutomaticChange(string key)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT task_key,queue_order,revision,monitored_folder_id,local_path,
+                   kind,recursive,force_exif_refresh
+              FROM automatic_change_jobs WHERE task_key=$key;
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        using var row = cmd.ExecuteReader();
+        return row.Read() ? new AutomaticChangeJob(row.GetString(0),
+            row.GetInt64(1), row.GetString(2), new BackgroundFolderChange(
+                row.GetInt64(3), row.GetString(4),
+                (BackgroundFolderChangeKind)row.GetInt32(5),
+                row.GetBoolean(6), row.GetBoolean(7))) : null;
+    }
+
+    public bool RetireAutomaticChange(string key, string? revision = null)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM automatic_change_jobs WHERE task_key=$key
+              AND ($revision IS NULL OR revision=$revision);
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.Parameters.AddWithValue("$revision", (object?)revision ?? DBNull.Value);
+        return cmd.ExecuteNonQuery() != 0;
+    }
+
     public sealed record RegularScanCheckpoint(
         long Generation, long Epoch, int Checked,
         HashSet<string> Completed, Dictionary<string, string> Cursors);
@@ -848,7 +971,8 @@ public sealed class FolderRepository
     // inventory epoch. Recovered packages reuse their old identity/epoch.
     public RegularScanCheckpoint BeginOrResumeRegularScan(
         string scanKey, long folderId, string scanRoot,
-        string sourceCanonicalPath, bool beginManualEpoch)
+        string sourceCanonicalPath, bool beginManualEpoch,
+        bool loadLegacyProgress = true)
     {
         using var connection = _database.OpenConnection();
         using var tx = connection.BeginTransaction();
@@ -935,6 +1059,7 @@ public sealed class FolderRepository
         }
         var completed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var cursors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (loadLegacyProgress)
         using (var rows = connection.CreateCommand())
         {
             rows.Transaction = tx;
@@ -953,8 +1078,8 @@ public sealed class FolderRepository
             }
         }
         tx.Commit();
-        return new RegularScanCheckpoint(generation, epoch, checkedCount,
-            completed, cursors);
+        return new RegularScanCheckpoint(generation, epoch,
+            loadLegacyProgress ? checkedCount : 0, completed, cursors);
     }
 
     // This is the durable *first-pass* frontier per physical directory.
@@ -1228,6 +1353,7 @@ public sealed class FolderRepository
             verified.Parameters.AddWithValue("$generation", generation);
             verified.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
             verified.ExecuteNonQuery();
+            AdvanceCheckSequence(connection, tx, completedRoot.Value);
         }
 
         using var clear = connection.CreateCommand();
@@ -1337,6 +1463,7 @@ public sealed class FolderRepository
         var completed = update.ExecuteNonQuery() == 1;
         if (completed)
         {
+            AdvanceCheckSequence(connection, transaction, folderId);
             // Checkpoints have no purpose once the initial import is done.
             // Remove them atomically with the durable completion marker.
             using var cleanup = connection.CreateCommand();

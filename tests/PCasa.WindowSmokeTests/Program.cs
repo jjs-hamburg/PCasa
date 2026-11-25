@@ -1419,13 +1419,13 @@ internal static class Program
                 ?? throw new Exception("Separate red circled clear button is missing.");
             var attributeSelector = window.FindName("GalleryAttributeFilterSelectorButton") as Button
                 ?? throw new Exception("Property filter selection is missing.");
-            if (attributeSelector.ContextMenu?.Items.Count != 7 ||
-                 !new[] { "None", "VideoPhotos", "Video", "Gps", "Tags", "Raw" }
+            if (attributeSelector.ContextMenu?.Items.Count != 8 ||
+                 !new[] { "None", "VideoPhotos", "Video", "Gps", "Tags", "Raw", "ImportError" }
                      .All(tag => attributeSelector.ContextMenu.Items.OfType<MenuItem>()
                          .Any(item => item.Tag is string actual && actual == tag)) ||
                 attributeInvert.IsEnabled || attributeClear.IsEnabled ||
                 attributeLabel.Text != "Filter")
-                throw new Exception("Property filter initial state and six media/property choices are incorrect.");
+                throw new Exception("Property filter initial state and seven media/property choices (including import errors) are incorrect.");
             var navigationBar = window.FindName("GalleryNavigationBar") as Border
                 ?? throw new Exception("Navigation bar must be outside the scrollable gallery.");
             var navigationNames = new[] { "FolderStart", "FolderEnd",
@@ -1762,6 +1762,13 @@ internal static class Program
                 !IsMatch(photoEntry, "None", false))
                 throw new Exception("All media/photos/videos filtering produced incorrect matches.");
             Console.WriteLine("PASS: All media, photos and video share the existing gallery property filter.");
+            var brokenEntry = photoEntry with { HasImportError = true };
+            if (!IsMatch(brokenEntry, "ImportError", false) ||
+                IsMatch(brokenEntry, "ImportError", true) ||
+                IsMatch(photoEntry, "ImportError", false) ||
+                !IsMatch(photoEntry, "ImportError", true))
+                throw new Exception("Import error filter did not use the authoritative indexed flag.");
+            Console.WriteLine("PASS: Import errors and their inverse use the same gallery property projection.");
 
             // A property toggle must preserve a matching current image and
             // otherwise choose the nearest following/preceding match.

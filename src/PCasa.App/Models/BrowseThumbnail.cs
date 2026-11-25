@@ -69,7 +69,8 @@ public sealed record BrowseThumbnailIndexEntry(
     int OriginalWidth = 0,
     int OriginalHeight = 0,
     string? LegacyThumbnailPath = null,
-    bool HasRestore = false);
+    bool HasRestore = false,
+    bool HasImportError = false);
 
 public sealed record BrowseCacheCandidate(
     long ImageId,

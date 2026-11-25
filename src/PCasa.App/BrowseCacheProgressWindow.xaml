@@ -7,7 +7,7 @@
         MinHeight="76" MaxHeight="76"
         ResizeMode="NoResize" WindowStyle="None"
         WindowStartupLocation="Manual"
-        ShowInTaskbar="False"
+        ShowInTaskbar="False" ShowActivated="False"
         Background="{DynamicResource PcasaPanelBrush}" Foreground="{DynamicResource PcasaTextBrush}">
     <Window.Resources>
         <Style TargetType="{x:Type TextBlock}">

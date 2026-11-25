@@ -142,37 +142,10 @@ public partial class MainWindow
         await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
         if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
 
-        // Recovery is a scheduler operation, not an alternative scanner.
-        // It may perform slow SMB probes without blocking WPF startup.
-        // If any durable move is recovered, the SAME gallery publication
-        // owner will bring the new catalog state into the current view.
-        // Reconciliation is queued after registering and restoring durable P0 packages.
-
-        // Durable user imports enter the scheduler BEFORE background legacy
-        // repair. Both use the SAME catalog and generation guards.
-        // Recovered user edits must be queued BEFORE background folder scans.
-        // Upgrade legacy recovery before reconstructing ANY worker.
-        // The old fixed-list cursor stopped on the first offline NAS image
-        // and could starve reachable C: photos indefinitely. This migration
-        // retains the journal identity/order and does not touch pending tags.
-        var packageJournal = new DurablePackageJournal(_database);
-        // Alpha.58: outstanding original-file writes must retain the SAME
-        // identity, recipe, priority, order and confirmed step on restart.
-        // RecoverDurablePackages below is the single replay authority.
-        packageJournal.UpgradeLegacyTagRecovery();
-        // Legacy one-intent checks are not transfers. An unresolved attempt
-        // is NOT a reason to create two new P0 jobs on every application
-        // start. Retire only these obsolete probes, leaving all relocation
-        // intents and original-file identities in SQLite for manual review.
-        packageJournal.RetireLegacyTransferReconciliationPackages();
-        // Restore the read-only view of already journaled P0 tag writes
-        // BEFORE the scheduler starts replaying them. This is the same
-        // progress presenter used by ordinary manual file operations.
-        RestoreVisiblePendingTagPackages();
-        // Recovered manual scans are real P0 work, too. Reconstruct their
-        // read-only progress projection before the scheduler starts replay.
-        // Otherwise an older pending Tag package appears to be stuck on
-        // "Warte auf Scheduler" while a newer P0 scan actually owns the lane.
+        // Only read/import recipes survive a PCasa session. The scheduler
+        // has already retired unfinished file operations and parked any
+        // unconfirmed tag intents for explicit review. Restore the scan
+        // presenter before admitting those existing read jobs.
         RestoreVisiblePendingManualScans();
         var unresolvedPackages = _scheduler.RecoverDurablePackages(
             ObserveRecoveredDurablePackage);
@@ -189,11 +162,8 @@ public partial class MainWindow
                 $"Priority={unresolved.Priority}; Step={unresolved.CompletedSteps}; " +
                 $"Error={unresolved.Error ?? "(no error recorded)"}");
         }
-        // Recoverable file writes resume automatically; intentionally
-        // deferred failures remain available for explicit Taskmanager retry.
-        // Unresolved legacy file-transfer intents remain stored, but must
-        // not preempt imports with fresh P0 reconciliation packages. No
-        // filesystem probe or transfer is performed merely by app startup.
+        // Unresolved original-file intents remain available for explicit
+        // review. Startup never creates new reconciliation file operations.
         _ = ReportPendingLegacyTransfersAsync();
         // Unreadable or unsupported recipes remain durable and are retried
         // centrally, but cannot permanently prevent all catalog work.

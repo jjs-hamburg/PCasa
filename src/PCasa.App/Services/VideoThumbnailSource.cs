@@ -1,7 +1,5 @@
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Text;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -23,48 +21,30 @@ public static class VideoThumbnailSource
     public static string Resolve(string path, CancellationToken token = default,
         bool forceRefresh = false)
     {
-        if (!VideoFormats.IsVideo(path)) return path;
-        token.ThrowIfCancellationRequested();
-        var info = new FileInfo(path);
-        var key = $"{Path.GetFullPath(path)}\n{info.Length}\n{info.LastWriteTimeUtc.Ticks}";
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
-        var root = Path.Combine(PcasaDataPaths.SharedDataRoot, "video-previews", hash[..2]);
-        var target = Path.Combine(root, hash + ".jpg");
+        return VideoPreviewCache.Resolve(path, WriteFrame, token, forceRefresh);
+    }
+
+    private static void WriteFrame(string path, string temporary, bool forceRefresh,
+        CancellationToken token)
+    {
+        BitmapSource frame;
+        try { frame = GetWindowsThumbnail(path, requireFrame: forceRefresh); }
+        catch (Exception ex) when (ex is COMException or NotSupportedException
+            or InvalidOperationException or ExternalException)
         {
-            if (!forceRefresh && File.Exists(target) && new FileInfo(target).Length > 0)
-                return target;
-            Directory.CreateDirectory(root);
-            var temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                token.ThrowIfCancellationRequested();
-                BitmapSource frame;
-                try { frame = GetWindowsThumbnail(path, requireFrame: forceRefresh); }
-                catch (Exception ex) when (ex is COMException or NotSupportedException
-                    or InvalidOperationException or ExternalException)
-                {
-                    // The Shell can provide only a generic icon for some
-                    // playable videos. During an explicit manual refresh try
-                    // PCasa's second built-in Windows media decoder first.
-                    // An unsupported codec still gets a visible placeholder.
-                    PCasaDiagnostics.Write("Video.ShellThumbnail", ex);
-                    frame = forceRefresh
-                        ? VideoFrameFallback.TryCapture(path, token) ??
-                            CreatePlaceholder()
-                        : CreatePlaceholder();
-                }
-                var encoder = new JpegBitmapEncoder { QualityLevel = 85 };
-                encoder.Frames.Add(BitmapFrame.Create(frame));
-                using (var output = File.Create(temporary)) encoder.Save(output);
-                token.ThrowIfCancellationRequested();
-                File.Move(temporary, target, overwrite: true);
-                return target;
-            }
-            finally
-            {
-                if (File.Exists(temporary)) File.Delete(temporary);
-            }
+            // The Shell can provide only a generic icon for some
+            // playable videos. During an explicit manual refresh try
+            // PCasa's second built-in Windows media decoder first.
+            // An unsupported codec still gets a visible placeholder.
+            PCasaDiagnostics.Write("Video.ShellThumbnail", ex);
+            frame = forceRefresh
+                ? VideoFrameFallback.TryCapture(path, token) ??
+                    CreatePlaceholder()
+                : CreatePlaceholder();
         }
+        var encoder = new JpegBitmapEncoder { QualityLevel = 85 };
+        encoder.Frames.Add(BitmapFrame.Create(frame));
+        using (var output = File.Create(temporary)) encoder.Save(output);
     }
 
     private static BitmapSource GetWindowsThumbnail(string path, bool requireFrame)

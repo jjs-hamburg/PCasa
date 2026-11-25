@@ -412,7 +412,8 @@ public sealed class CatalogScanSession : IDisposable
                    (SELECT json_extract(x.exif_json, '$.SourceFile')
                       FROM image_exif x WHERE x.image_id = i.id
                         AND x.source_modified_utc_ticks = i.modified_utc_ticks
-                        AND x.source_file_size = i.file_size)
+                        AND x.source_file_size = i.file_size),
+                   i.import_error
             FROM images i WHERE i.canonical_path = $canonicalPath;
             """;
         _selectState.Parameters.Add("$canonicalPath", SqliteType.Text);
@@ -494,7 +495,7 @@ public sealed class CatalogScanSession : IDisposable
                 width,
                 height,
                 thumbnail_path,
-                indexed_utc
+                indexed_utc, import_error, import_attempt_utc
             )
             VALUES (
                 $folderId,
@@ -509,7 +510,7 @@ public sealed class CatalogScanSession : IDisposable
                 $width,
                 $height,
                 $thumbnailPath,
-                $indexedUtc
+                $indexedUtc, $importError, $indexedUtc
             )
             ON CONFLICT(canonical_path) DO UPDATE SET
                 folder_id = excluded.folder_id,
@@ -523,7 +524,9 @@ public sealed class CatalogScanSession : IDisposable
                 width = excluded.width,
                 height = excluded.height,
                 thumbnail_path = excluded.thumbnail_path,
-                indexed_utc = excluded.indexed_utc;
+                indexed_utc = excluded.indexed_utc,
+                import_error = excluded.import_error,
+                import_attempt_utc = excluded.import_attempt_utc;
             """;
 
         _upsert.Parameters.Add("$folderId", SqliteType.Integer);
@@ -539,6 +542,7 @@ public sealed class CatalogScanSession : IDisposable
         _upsert.Parameters.Add("$height", SqliteType.Integer);
         _upsert.Parameters.Add("$thumbnailPath", SqliteType.Text);
         _upsert.Parameters.Add("$indexedUtc", SqliteType.Text);
+        _upsert.Parameters.Add("$importError", SqliteType.Text);
     }
 
     public CatalogImageState? GetState(string canonicalPath)
@@ -561,7 +565,8 @@ public sealed class CatalogScanSession : IDisposable
             reader.GetInt32(5) != 0 && (reader.IsDBNull(7) ||
                 ImageExifReader.IsSameSourcePath(reader.GetString(7),
                     reader.GetString(4))),
-            reader.IsDBNull(6) ? null : reader.GetInt64(6));
+            reader.IsDBNull(6) ? null : reader.GetInt64(6),
+            reader.IsDBNull(8) ? null : reader.GetString(8));
     }
 
     public long GetOrCreatePhotoFolder(
@@ -609,9 +614,9 @@ public sealed class CatalogScanSession : IDisposable
             ?? throw new ArgumentException("Destination has no parent directory.",
                 nameof(destinationPath));
         var canonicalDirectory =
-            FolderScanner.ResolveCanonicalFullPath(targetRoot, directory);
+            CatalogPathPolicy.ResolveCanonicalFullPath(targetRoot, directory);
         var canonicalDestination =
-            FolderScanner.ResolveCanonicalFullPath(targetRoot, destinationPath);
+            CatalogPathPolicy.ResolveCanonicalFullPath(targetRoot, destinationPath);
         // Check the source before creating any target directory catalog row.
         long? oldPhotoFolderId;
         using (var source = _connection.CreateCommand())
@@ -778,6 +783,8 @@ public sealed class CatalogScanSession : IDisposable
         _upsert.Parameters["$height"].Value = image.Height;
         _upsert.Parameters["$thumbnailPath"].Value = image.ThumbnailPath;
         _upsert.Parameters["$indexedUtc"].Value = DateTime.UtcNow.ToString("O");
+        _upsert.Parameters["$importError"].Value =
+            (object?)image.ImportError ?? DBNull.Value;
         _upsert.ExecuteNonQuery();
         RegisterWrite();
     }

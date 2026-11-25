@@ -79,12 +79,13 @@ internal static class GalleryFileOperationFlow
                 Until(window, () => entered.Task.IsCompleted,
                     "Background scheduler worker never started.");
                 Transfer(window, [original], second, move: false);
-                var job = scheduler.Snapshot().LastOrDefault(item =>
-                    item.Key.StartsWith("gallery:file-transfer:", StringComparison.Ordinal));
-                if (job is null || job.Priority != SchedulerPriority.ManualAction ||
-                    job.StartedAt is null || background.IsCompleted)
+                if (scheduler.Snapshot().Any(item =>
+                        item.Key.StartsWith("gallery:file-transfer:", StringComparison.Ordinal)) ||
+                    new DurablePackageJournal(db).Pending().Any(item =>
+                        item.Type == "gallery-transfer-v1") ||
+                    background.IsCompleted)
                     throw new Exception(
-                        "Manual copy waited for background job or bypassed highest scheduler priority.");
+                        "Single manual copy entered the scheduler or did not yield background work.");
             }
             catch (Exception ex)
             {
@@ -664,15 +665,17 @@ internal static class GalleryFileOperationFlow
             var uncachedSource = Path.Combine(first, "physical-first.jpg");
             var uncachedDestination = Path.Combine(third, "physical-first.jpg");
             WriteJpeg(uncachedSource);
+            SchedulerJobSnapshot? DirectProgress() =>
+                (SchedulerJobSnapshot?)typeof(PCasa.App.MainWindow)
+                    .GetField("_directImageWriteProgress", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .GetValue(window);
             Task deferredIndexing;
             lock (SourceFileLocks.ForPath(uncachedDestination))
             {
                 deferredIndexing = StartTransfer(window, [uncachedSource], third, move: true);
-                Until(window, () => scheduler.Snapshot().Any(job =>
-                        job.Key.StartsWith("gallery:file-transfer:") &&
-                        job.State == SchedulerJobState.Running &&
+                Until(window, () => DirectProgress() is { State: SchedulerJobState.Running } job &&
                         string.Equals(job.CurrentPath, uncachedSource,
-                            StringComparison.OrdinalIgnoreCase)),
+                            StringComparison.OrdinalIgnoreCase),
                     "Uncatalogued move never reached destination lock.");
                 // A scanner cannot read a partially moved/replaced destination.
                 if (deferredIndexing.IsCompleted ||
@@ -697,12 +700,16 @@ internal static class GalleryFileOperationFlow
             var secondQueuedTarget = Path.Combine(third, "two-transfers-b.jpg");
             WriteJpeg(firstQueuedSource);
             WriteJpeg(secondQueuedSource);
+            var firstBatchSibling = Path.Combine(first, "two-transfers-a-sibling.jpg");
+            var secondBatchSibling = Path.Combine(first, "two-transfers-b-sibling.jpg");
+            WriteJpeg(firstBatchSibling);
+            WriteJpeg(secondBatchSibling);
             Task firstQueuedTransfer;
             Task secondQueuedTransfer;
             lock (SourceFileLocks.ForPath(firstQueuedSource))
             {
                 firstQueuedTransfer = StartTransfer(window,
-                    [firstQueuedSource], third, move: true);
+                    [firstQueuedSource, firstBatchSibling], third, move: true);
                 Until(window, () => scheduler.Snapshot().Any(job =>
                         job.Key.StartsWith("gallery:file-transfer:") &&
                         job.State == SchedulerJobState.Running &&
@@ -718,7 +725,7 @@ internal static class GalleryFileOperationFlow
                         StringComparison.Ordinal))
                     .Select(job => job.Id).ToHashSet();
                 secondQueuedTransfer = StartTransfer(window,
-                    [secondQueuedSource], third, move: true);
+                    [secondQueuedSource, secondBatchSibling], third, move: true);
                 Until(window, () => scheduler.Snapshot().Any(job =>
                         job.Key.StartsWith("gallery:file-transfer:",
                             StringComparison.Ordinal) &&
@@ -760,7 +767,10 @@ internal static class GalleryFileOperationFlow
             firstQueuedTransfer.GetAwaiter().GetResult();
             secondQueuedTransfer.GetAwaiter().GetResult();
             if (File.Exists(firstQueuedSource) || File.Exists(secondQueuedSource) ||
-                !File.Exists(firstQueuedTarget) || !File.Exists(secondQueuedTarget))
+                !File.Exists(firstQueuedTarget) || !File.Exists(secondQueuedTarget) ||
+                File.Exists(firstBatchSibling) || File.Exists(secondBatchSibling) ||
+                !File.Exists(Path.Combine(third, Path.GetFileName(firstBatchSibling))) ||
+                !File.Exists(Path.Combine(third, Path.GetFileName(secondBatchSibling))))
                 throw new Exception(
                     "Queued manual moves did not physically relocate both source files. " +
                     $"A source={File.Exists(firstQueuedSource)}, target={File.Exists(firstQueuedTarget)}; " +
@@ -841,11 +851,9 @@ internal static class GalleryFileOperationFlow
             lock (SourceFileLocks.ForPath(progressSource))
             {
                 progressTask = StartTransfer(window, [progressSource], third, move: true);
-                Until(window, () => scheduler.Snapshot().Any(x =>
-                        x.Key.StartsWith("gallery:file-transfer:") &&
-                        x.State == SchedulerJobState.Running &&
-                        x.Phase == "Bilder verschieben"),
-                    "Manual move was not visible as a running scheduler job.");
+                Until(window, () => DirectProgress() is { State: SchedulerJobState.Running,
+                    Phase: "Bilder verschieben" },
+                    "Manual move was not visible as a running direct action.");
                 var presenter = typeof(PCasa.App.MainWindow).GetField(
                     "_visibleManualWindow",
                     BindingFlags.NonPublic | BindingFlags.Instance)!
@@ -868,12 +876,10 @@ internal static class GalleryFileOperationFlow
             Until(window, () => progressTask.IsCompleted,
                 "Foreground operation did not finish.");
             progressTask.GetAwaiter().GetResult();
-            var mostRecent = scheduler.Snapshot().Last(item =>
-                item.Key.StartsWith("gallery:file-transfer:"));
-            if (mostRecent.State != SchedulerJobState.Completed ||
-                mostRecent.Phase != "Galerie aktualisiert")
-                throw new Exception("Scheduler reports Completed before gallery publication.");
-            Console.WriteLine("PASS: Progress and completion use the same scheduler job, ahead of scan status.");
+            if (DirectProgress() is not null || File.Exists(progressSource) ||
+                !CatalogContains(db, Path.Combine(third, Path.GetFileName(progressSource))))
+                throw new Exception("Direct move finished before catalog publication.");
+            Console.WriteLine("PASS: Single move progress and completion are independent of the scheduler.");
 
             // Simulate a crash AFTER File.Move and BEFORE SQLite relocation.
             // Startup recovery must retain image identity, cache and metadata

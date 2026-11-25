@@ -71,6 +71,14 @@ public partial class MainWindow
                 _dragTargetValidity.Clear();
                 PromoteExplorerMonitoredPath(directory);
             }
+            // A newly registered root already owns a durable initial:<id>
+            // request. Use its shared admission rank, not a second manual
+            // scan identity that competes with the very same import.
+            if (registration.CreatedRoot)
+            {
+                ReconsiderInitialImportOrder();
+                return;
+            }
             BrowseScanCurrentFolder_Click(new ExplorerRegisteredScan(directory,
                 registration.RootId, registration.CreatedRoot,
                 registration.AcknowledgeTargetedPending), e);
@@ -333,14 +341,15 @@ public partial class MainWindow
         long? expectedMonitoredFolderId = null,
         bool requirePendingInitialImport = false,
         string? operationKey = null,
-        bool acknowledgeTargetedPending = false)
+        bool acknowledgeTargetedPending = false,
+        long? queueOrder = null)
     {
         var key = operationKey ?? $"catalog:complete-scan:{Guid.NewGuid():N}:{directory}";
         var schedulerProgress = new ScanJobProgress(_scheduler, key, progress);
         using var step = new CompleteFolderScanStep(this, directory,
             schedulerProgress, expectedMonitoredFolderId, requirePendingInitialImport,
             acknowledgeTargetedPending, key);
-        if (priority == SchedulerPriority.ManualAction)
+        if (priority == SchedulerPriority.ManualAction && !requirePendingInitialImport)
         {
             var package = new SchedulerTaskPackage(key);
             package.AddStep(step.ExecuteAsync);
@@ -359,10 +368,10 @@ public partial class MainWindow
         {
             await _scheduler.EnqueueAsync(key, priority, step.ExecuteAsync,
                 cancellationToken: cancellationToken,
-                workKind: requirePendingInitialImport &&
-                    priority == SchedulerPriority.Background
+                workKind: requirePendingInitialImport
                     ? SchedulerWorkKind.InitialImport
-                    : SchedulerWorkKind.CatalogScan);
+                    : SchedulerWorkKind.CatalogScan,
+                queueOrder: queueOrder);
         }
         return step.Result ?? throw new OperationCanceledException();
     }
@@ -441,13 +450,11 @@ public partial class MainWindow
                         owner._folderRepository.BeginOrResumeRegularScan(
                             durableScanKey, folder.Id,
                             Path.GetFullPath(directory).Replace('/', '\\'),
-                            folder.CanonicalPath, beginManualEpoch: true);
+                            folder.CanonicalPath, beginManualEpoch: true,
+                            loadLegacyProgress: false);
                     _manualScanEpoch = checkpoint.Epoch;
-                    // Restore the durable count BEFORE first UI progress. A
-                    // process restart creates a fresh in-memory scan step.
-                    if (_resume.Enumerator is null)
-                        _resume.ImageFilesSeen =
-                            Math.Max(_resume.ImageFilesSeen, checkpoint.Checked);
+                    // The receipt preserves identity and the source fence,
+                    // not the amount of imported catalog data.
                 }
                 _manualGenerationStarted = true;
             }
@@ -464,16 +471,14 @@ public partial class MainWindow
                 _resume.CacheRepaired));
             try
             {
-                // Preserve the per-directory first-pass frontier even when
-                // the root is already complete. FolderScanner discovers
-                // unindexed additions in completed directories by comparing
-                // file names against its catalog snapshot; existing originals
-                // remain for P4 reconciliation, not this P0 import.
+                // Both first import and manual reread reconcile the current
+                // filesystem against the catalog, not an old filename cursor.
                 Result = owner._folderScanner.ScanDirectory(
                     folder, directory, recursive: true, progress, token, _resume,
                     durableInitialImport: requirePendingInitialImport,
                     durableScanKey: requirePendingInitialImport ? null : durableScanKey,
-                    preferFirstPass: !requirePendingInitialImport);
+                    catalogOwnedProgress: true,
+                    retryFailedFiles: !requirePendingInitialImport);
                 owner._scheduler.SourceAvailability.ConfirmAvailable(directory);
             }
             catch (IOException)

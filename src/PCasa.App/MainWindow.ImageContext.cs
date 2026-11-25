@@ -30,14 +30,31 @@ public partial class MainWindow
         AddContextAction(menu, "Dateipfad kopieren",
             () => _ = CopyImagePathToClipboardAsync(id));
         AddContextAction(menu, "Eigenschaften", () => ShowFileProperties(id));
+        if (_displayedBrowseIndex.Any(image => image.ImageId == id && image.HasImportError))
+        {
+            AddContextAction(menu, "Einlesefehler anzeigen",
+                () => _ = ShowImportErrorAsync(id));
+            AddContextAction(menu, "Mit Standardprogramm öffnen",
+                () => _ = OpenImportErrorOriginalAsync(id));
+        }
         // Available for EVERY photograph and video, regardless of whether
         // the cached thumbnail is already present. The selection is captured
         // once on right-click; no new gallery scan or additional selection.
         var thumbnailIds = SelectThumbnailIds(id, _selectedImageIds,
             _displayedBrowseIndex);
-        if (thumbnailIds.Length > 0)
+        var selectedSet = thumbnailIds.ToHashSet();
+        var errorIds = _displayedBrowseIndex.Where(image =>
+            image.HasImportError && selectedSet.Contains(image.ImageId))
+            .Select(image => image.ImageId).ToArray();
+        if (errorIds.Length > 0)
+            AddContextAction(menu, "Erneut einlesen",
+                () => _ = RetryImportErrorsAsync(errorIds));
+        var errorSet = errorIds.ToHashSet();
+        var validThumbnailIds = thumbnailIds.Where(imageId =>
+            !errorSet.Contains(imageId)).ToArray();
+        if (validThumbnailIds.Length > 0)
         {
-            var captured = thumbnailIds;
+            var captured = validThumbnailIds;
             AddContextAction(menu, captured.Length > 1
                 ? "Vorschaubilder aktualisieren"
                 : "Vorschaubild aktualisieren",
@@ -241,6 +258,115 @@ public partial class MainWindow
             if (key is not null && !Dispatcher.HasShutdownStarted)
                 EndVisibleManualOperation(key);
         }
+    }
+
+    private sealed record ImportErrorRetryRecipe(long[] ImageIds);
+
+    // A targeted catalogue update is a manual import job, not a thumbnail
+    // repair or a scan of the surrounding folder. The immutable selection
+    // and completed steps survive restart.
+    private SchedulerTaskPackage BuildImportErrorRetryPackage(string key, string payload)
+    {
+        var recipe = System.Text.Json.JsonSerializer.Deserialize<ImportErrorRetryRecipe>(payload)
+            ?? throw new InvalidDataException("Invalid import retry recipe.");
+        var package = new SchedulerTaskPackage(key);
+        foreach (var id in recipe.ImageIds.Distinct())
+        {
+            var imageId = id;
+            package.AddStep(token =>
+            {
+                token.ThrowIfCancellationRequested();
+                string? path;
+                using (var db = _database.OpenConnection())
+                using (var cmd = db.CreateCommand())
+                {
+                    cmd.CommandText = """
+                        SELECT local_path FROM images
+                        WHERE id=$id AND import_error IS NOT NULL;
+                        """;
+                    cmd.Parameters.AddWithValue("$id", imageId);
+                    path = cmd.ExecuteScalar() as string;
+                }
+                // It may already have been repaired by a watcher or removed.
+                if (path is null) return Task.CompletedTask;
+                var folder = ResolveMonitoredFolder(path);
+                if (folder is null) return Task.CompletedTask;
+                if (!_scheduler.SourceAvailability.CanAccess(path, token))
+                    throw new IOException("Source temporarily unavailable: " + path);
+                if (!File.Exists(path))
+                    throw new IOException("File temporarily unavailable: " + path);
+                _folderScanner.ScanFile(folder, path, cancellationToken: token,
+                    forceExifRefresh: true);
+                return Task.CompletedTask;
+            });
+        }
+        return package;
+    }
+
+    private async Task RetryImportErrorsAsync(long[] imageIds)
+    {
+        if (imageIds.Length == 0 || _shutdownStarted) return;
+        var key = "catalog:retry-import:" + Guid.NewGuid().ToString("N");
+        try
+        {
+            var payload = System.Text.Json.JsonSerializer.Serialize(
+                new ImportErrorRetryRecipe(imageIds));
+            var completion = _scheduler.EnqueueDurableRecipeAsync(key,
+                "import-error-retry-v1", payload, SchedulerPriority.ManualAction,
+                SchedulerWorkKind.CatalogScan);
+            _taskManagerWindow?.RequestRefresh();
+            await completion;
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
+                await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
+                ShowFileActionError(ex);
+        }
+    }
+
+    private async Task ShowImportErrorAsync(long id)
+    {
+        try
+        {
+            var detail = await _galleryCatalogReader.ReadAsync(token =>
+            {
+                token.ThrowIfCancellationRequested();
+                using var db = _database.OpenConnection();
+                using var cmd = db.CreateCommand();
+                cmd.CommandText = """
+                    SELECT local_path, import_error, import_attempt_utc FROM images
+                    WHERE id=$id AND import_error IS NOT NULL;
+                    """;
+                cmd.Parameters.AddWithValue("$id", id);
+                using var row = cmd.ExecuteReader();
+                if (!row.Read()) return (Path: "", Error: "", Attempt: "");
+                return (Path: row.GetString(0), Error: row.GetString(1),
+                    Attempt: row.IsDBNull(2) ? "" : row.GetString(2));
+            });
+            if (Dispatcher.HasShutdownStarted || detail.Error.Length == 0) return;
+            var attempt = DateTimeOffset.TryParse(detail.Attempt, out var time)
+                ? time.ToLocalTime().ToString("g") : detail.Attempt;
+            PcasaDialog.Show(this, detail.Path + Environment.NewLine +
+                UiLanguage.Format("Letzter Einleseversuch: {0}", attempt) +
+                Environment.NewLine + Environment.NewLine + detail.Error,
+                UiLanguage.T("Einlesefehler"), MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { ShowFileActionError(ex); }
+    }
+
+    private async Task OpenImportErrorOriginalAsync(long id)
+    {
+        try
+        {
+            var paths = await SelectedGalleryPathsAsync([id]);
+            if (paths.Length == 0 || Dispatcher.HasShutdownStarted) return;
+            Process.Start(new ProcessStartInfo { FileName = paths[0], UseShellExecute = true });
+        }
+        catch (Exception ex) { ShowFileActionError(ex); }
     }
 
     private async Task UpdateRestoreContextAsync(MenuItem menu, long imageId)

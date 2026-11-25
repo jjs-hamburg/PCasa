@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <InternalsVisibleTo Include="PCasa.App" />
+    <InternalsVisibleTo Include="PCasa.Imaging" />
+    <InternalsVisibleTo Include="PCasa.CatalogTests" />
+    <InternalsVisibleTo Include="PCasa.WindowSmokeTests" />
+  </ItemGroup>
+  <!-- Transitional links preserve existing source-level regression checks.
+       These implementations are compiled ONLY into the portable assembly. -->
+  <ItemGroup>
+    <Compile Include="../PCasa.App/Data/LocalDatabase.cs" Link="Data/LocalDatabase.cs" />
+    <Compile Include="../PCasa.App/Data/OriginalWriteFailureRepository.cs" Link="Data/OriginalWriteFailureRepository.cs" />
+    <Compile Include="../PCasa.App/Services/PcasaDataPaths.cs" Link="Services/PcasaDataPaths.cs" />
+    <Compile Include="../PCasa.App/Services/PCasaDiagnostics.cs" Link="Services/PCasaDiagnostics.cs" />
+    <Compile Include="../PCasa.App/Services/SourceAvailabilityGate.cs" Link="Services/SourceAvailabilityGate.cs" />
+    <Compile Include="../PCasa.App/Services/SchedulerTaskPackage.cs" Link="Services/SchedulerTaskPackage.cs" />
+    <Compile Include="../PCasa.App/Services/PCasaScheduler.cs" Link="Services/PCasaScheduler.cs" />
+    <Compile Include="../PCasa.App/Services/DurablePackageJournal.cs" Link="Services/DurablePackageJournal.cs" />
+    <Compile Include="../PCasa.App/Services/SchedulerTaskOrderStore.cs" Link="Services/SchedulerTaskOrderStore.cs" />
+    <Compile Include="../PCasa.App/Services/DurableGalleryTransferJournal.cs" Link="Services/DurableGalleryTransferJournal.cs" />
+    <Compile Include="../PCasa.App/Data/FolderRepository.cs" Link="Data/FolderRepository.cs" />
+    <Compile Include="../PCasa.App/Data/FolderManagerSelection.cs" Link="Data/FolderManagerSelection.cs" />
+    <Compile Include="../PCasa.App/Data/FolderManagerSelectionService.cs" Link="Data/FolderManagerSelectionService.cs" />
+    <Compile Include="../PCasa.App/Data/ImageCatalogRepository.cs" Link="Data/ImageCatalogRepository.cs" />
+    <Compile Include="../PCasa.App/Data/CatalogChanges.cs" Link="Data/CatalogChanges.cs" />
+    <Compile Include="../PCasa.App/Data/BrowseCacheRepository.cs" Link="Data/BrowseCacheRepository.cs" />
+    <Compile Include="../PCasa.App/Data/BrowseThumbnailProfileRepository.cs" Link="Data/BrowseThumbnailProfileRepository.cs" />
+    <Compile Include="../PCasa.App/Data/ImageViewerRepository.cs" Link="Data/ImageViewerRepository.cs" />
+    <Compile Include="../PCasa.App/Models/MonitoredFolder.cs" Link="Models/MonitoredFolder.cs" />
+    <Compile Include="../PCasa.App/Models/CatalogImage.cs" Link="Models/CatalogImage.cs" />
+    <Compile Include="../PCasa.App/Models/BrowseThumbnail.cs" Link="Models/BrowseThumbnail.cs" />
+    <Compile Include="../PCasa.App/Services/FolderExclusionRules.cs" Link="Services/FolderExclusionRules.cs" />
+    <Compile Include="../PCasa.App/Services/CatalogInventoryCheck.cs" Link="Services/CatalogInventoryCheck.cs" />
+    <Compile Include="../PCasa.App/Services/BackgroundFolderMonitor.cs" Link="Services/BackgroundFolderMonitor.cs" />
+    <Compile Include="../PCasa.App/Services/VideoFormats.cs" Link="Services/VideoFormats.cs" />
+    <Compile Include="../PCasa.App/Services/PathClassifier.cs" Link="Services/PathClassifier.cs" />
+    <Compile Include="../PCasa.App/Services/SourceFilePresence.cs" Link="Services/SourceFilePresence.cs" />
+    <Compile Include="../PCasa.App/Services/SourceFileLocks.cs" Link="Services/SourceFileLocks.cs" />
+    <Compile Include="../PCasa.App/Services/OriginalFileMutationReceipts.cs" Link="Services/OriginalFileMutationReceipts.cs" />
+    <Compile Include="../PCasa.App/Services/CatalogRemovalService.cs" Link="Services/CatalogRemovalService.cs" />
+    <Compile Include="../PCasa.App/Services/BackgroundScanSettings.cs" Link="Services/BackgroundScanSettings.cs" />
+    <Compile Include="../PCasa.App/Services/ImageExifReader.cs" Link="Services/ImageExifReader.cs" />
+    <Compile Include="../PCasa.App/Services/ExifToolProcessRegistry.cs" Link="Services/ExifToolProcessRegistry.cs" />
+    <Compile Include="../PCasa.App/Services/FolderScanner.cs" Link="Services/FolderScanner.cs" />
+    <Compile Include="../PCasa.App/Services/ExifToolKeywordWriter.cs" Link="Services/ExifToolKeywordWriter.cs" />
+    <Compile Include="../PCasa.App/Services/AdaptiveMetadataWriteTimeout.cs" Link="Services/AdaptiveMetadataWriteTimeout.cs" />
+    <Compile Include="../PCasa.App/Services/ServerSideFileMover.cs" Link="Services/ServerSideFileMover.cs" />
+    <Compile Include="../PCasa.App/Services/CatalogRenameService.cs" Link="Services/CatalogRenameService.cs" />
+    <Compile Include="../PCasa.App/Services/FolderExclusionService.cs" Link="Services/FolderExclusionService.cs" />
+    <Compile Include="../PCasa.App/Services/ExternalCopyNames.cs" Link="Services/ExternalCopyNames.cs" />
+    <Compile Include="../PCasa.App/Data/GpsSourceIntegrityAudit.cs" Link="Data/GpsSourceIntegrityAudit.cs" />
+    <Compile Include="../PCasa.App/Services/DatabaseMaintenance.cs" Link="Services/DatabaseMaintenance.cs" />
+    <Compile Include="../PCasa.App/Services/FolderScanStatusTracker.cs" Link="Services/FolderScanStatusTracker.cs" />
+    <Compile Include="../PCasa.App/Services/GalleryCatalogReader.cs" Link="Services/GalleryCatalogReader.cs" />
+    <Compile Include="../PCasa.App/Services/ForegroundReadService.cs" Link="Services/ForegroundReadService.cs" />
+  </ItemGroup>
+  <Import Project="../../PCasa.Version.props" />
+</Project>

@@ -33,8 +33,8 @@ public sealed class CatalogRemovalService
         string? sourceCanonicalPath = null, long? expectedGeneration = null,
         bool deferCleanup = false)
     {
-        var normalized = Path.GetFullPath(localPath).Replace('/', '\\');
-        var prefix = Path.TrimEndingDirectorySeparator(normalized) + "\\";
+        var normalized = CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(localPath));
+        var prefix = Path.TrimEndingDirectorySeparator(normalized) + Path.DirectorySeparatorChar;
         return Remove(monitoredFolderId, normalized, prefix, removeRoot: false, progress,
             cancellationToken: cancellationToken, deferCleanup: deferCleanup,
             sourceCanonicalPath: sourceCanonicalPath, expectedGeneration: expectedGeneration);
@@ -96,8 +96,8 @@ public sealed class CatalogRemovalService
         IProgress<string>? progress = null, CancellationToken cancellationToken = default,
         string? sourceCanonicalPath = null, long? expectedGeneration = null)
     {
-        var normalized = Path.GetFullPath(localPath).Replace('/', '\\');
-        var prefix = Path.TrimEndingDirectorySeparator(normalized) + "\\";
+        var normalized = CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(localPath));
+        var prefix = Path.TrimEndingDirectorySeparator(normalized) + Path.DirectorySeparatorChar;
         return Remove(monitoredFolderId, normalized, prefix,
             removeRoot: false, progress, deferCleanup: true,
             requireExcludedPath: normalized, cancellationToken: cancellationToken,
@@ -261,8 +261,8 @@ public sealed class CatalogRemovalService
         string? sourceCanonicalPath = null, long? expectedGeneration = null,
         long? expectedScanEpoch = null)
     {
-        var normalized = Path.GetFullPath(localDirectory).Replace('/', '\\');
-        var prefix = Path.TrimEndingDirectorySeparator(normalized) + "\\";
+        var normalized = CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(localDirectory));
+        var prefix = Path.TrimEndingDirectorySeparator(normalized) + Path.DirectorySeparatorChar;
         // Reconciliation is a catalog operation, not a pack-compaction job.
         // Schedule physical cache reclamation for the idle worker; a full scan
         // must never monopolize CacheLock while copying large pack files.

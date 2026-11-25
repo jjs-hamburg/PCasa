@@ -382,6 +382,7 @@ public partial class MainWindow
     // NAS scan until a manual scheduler worker actually begins execution.
     private bool ScanMayReplaceWaitingManualPresentation()
         => _visibleManualOperations.Count > 0 &&
+            _directImageWriteProgress?.State != SchedulerJobState.Running &&
             !_scheduler.Snapshot().Any(job =>
                 _visibleManualOperations.ContainsKey(job.Key) &&
                 job.State == SchedulerJobState.Running);
@@ -396,6 +397,8 @@ public partial class MainWindow
 
     private string? PreferredVisibleManualOperation()
     {
+        if (_directImageWriteProgress is { State: SchedulerJobState.Running } direct)
+            return direct.Key;
         // Actual work ALWAYS wins. A yielded worker is already giving up the
         // lane and must not be shown as running in another UI projection.
         var running = _scheduler.Snapshot()
@@ -435,7 +438,8 @@ public partial class MainWindow
         // never reappear after the window is reset.
         _lastManualThumbnailPath = null;
         _visibleManualWindow?.BeginManualOperation(item.Title, item.Total);
-        var latest = _scheduler.Snapshot().LastOrDefault(snapshot => snapshot.Key == key);
+        var latest = _directImageWriteProgress is { } direct && direct.Key == key
+            ? direct : _scheduler.Snapshot().LastOrDefault(snapshot => snapshot.Key == key);
         if (latest is not null)
         {
             if (IsTagSeriesKey(key)) UpdateVisibleTagSeries(latest);
@@ -714,9 +718,17 @@ public partial class MainWindow
                 move ? "Bilder verschieben" : "Bilder kopieren", requested.Length);
             var package = BuildDurableGalleryTransferPackage(
                 key, payload, recovered: false);
-            await _scheduler.EnqueueDurablePackageAsync(
-                package, "gallery-transfer-v1", payload,
-                SchedulerPriority.ManualAction);
+            if (requested.Length == 1 && !neverReplace)
+            {
+                await StartDirectImageWrite(key,
+                    UiLanguage.T(move ? "Bilder verschieben" : "Bilder kopieren"),
+                    requested[0], package, folderId: 0, reindexOriginal: false);
+                _durableGalleryTransfers.PruneDirectCompleted(key);
+            }
+            else
+                await _scheduler.EnqueueDurablePackageAsync(
+                    package, "gallery-transfer-v1", payload,
+                    SchedulerPriority.ManualAction);
             _durableGalleryTransfers.PruneCompleted();
         }
         catch (OperationCanceledException)
@@ -905,8 +917,13 @@ public partial class MainWindow
             var payload = System.Text.Json.JsonSerializer.Serialize(
                 selected.Select(image => new DurableDeleteItem(image.Id, image.Path)).ToArray());
             var package = BuildDurableDeletePackage(key, payload, succeeded, errors);
-            await _scheduler.EnqueueDurablePackageAsync(package,
-                "gallery-delete-v1", payload, SchedulerPriority.ManualAction);
+            if (selected.Length == 1)
+                await StartDirectImageWrite(key, UiLanguage.T("Bilder löschen"),
+                    selected[0].Path, package, folderId: 0, reindexOriginal: false);
+            else
+                await _scheduler.EnqueueDurablePackageAsync(package,
+                    "gallery-delete-v1", payload, SchedulerPriority.ManualAction);
+            if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
             _selectedImageIds.ExceptWith(succeeded);
             if (_selectedImageIds.Count == 0) _gallerySelection.Reset();
             await RefreshBrowseGalleryAsync(forceIndexReload: true);

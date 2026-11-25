@@ -212,10 +212,11 @@ public sealed class CatalogRenameService(LocalDatabase database)
                 SET {column} = $new || substr({column},length($old)+1)
                 WHERE {column}=$old COLLATE NOCASE
                     OR substr({column},1,length($old)+1)
-                       = ($old || char(92)) COLLATE NOCASE;
+                       = ($old || $separator) COLLATE NOCASE;
                 """;
             command.Parameters.AddWithValue("$old", previous);
             command.Parameters.AddWithValue("$new", replacement);
+            command.Parameters.AddWithValue("$separator", Path.DirectorySeparatorChar.ToString());
             command.ExecuteNonQuery();
         }
         using (var folderName = db.CreateCommand())

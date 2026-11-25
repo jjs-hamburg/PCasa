@@ -137,11 +137,9 @@ internal static class GlobalTaskOrderFlow
             var tags = scheduler.EnqueueDurablePackageAsync(
                 WriteRecipe("tag:edit:waiting", "{}"),
                 "global-write-test", "{}", SchedulerPriority.ManualAction);
-            const string actualScan = "background-scan:88:1:C:\\TestRoot";
-            const string reviewKey = "automatic:88:RescanRoot:C:\\TestRoot";
-            scheduler.RegisterTaskAlias(actualScan, reviewKey);
-            var review = scheduler.EnqueueAsync(actualScan,
-                SchedulerPriority.Idle, token =>
+            const string reviewKey = "automatic:88:ScanDirectory:C:\\TestRoot";
+            var review = scheduler.EnqueueAsync(reviewKey,
+                SchedulerPriority.Background, token =>
                 {
                     token.ThrowIfCancellationRequested();
                     lock (sync) executed.Add(reviewKey);
@@ -154,8 +152,8 @@ internal static class GlobalTaskOrderFlow
                 scheduler, database,
                 automaticScans: () => [
                     new PCasa.App.AutomaticScanTask(
-                        reviewKey, "Bestand überprüfen", @"C:\TestRoot",
-                        "–", "Wartet", 4, 90)
+                        reviewKey, "Neue Fotos einsammeln", @"C:\TestRoot",
+                        "–", "Wartet", 3, 90)
                 ],
                 moveGlobalTask: (source,target,keys) => Task.FromResult(
                     scheduler.MoveTaskGlobally(source,target,keys)));
@@ -164,7 +162,7 @@ internal static class GlobalTaskOrderFlow
             AwaitWithPump(() =>
                 grid.Items.Cast<object>().Any(item => RowKey(item) == "gps:edit:filmstrip") &&
                 grid.Items.Cast<object>().Any(item => RowKey(item) == reviewKey),
-                "GPS or queued root review is invisible before factory completion.");
+                "GPS or queued directory scan is invisible before factory completion.");
             var gpsRow = grid.Items.Cast<object>().Single(item =>
                 RowKey(item) == "gps:edit:filmstrip");
             if (!Equals(gpsRow.GetType().GetProperty("Title")?.GetValue(gpsRow),
@@ -173,7 +171,7 @@ internal static class GlobalTaskOrderFlow
             var initial = VisibleKeys(grid);
             var reviewIndex = Array.IndexOf(initial, reviewKey);
             if (reviewIndex < 1)
-                throw new Exception("Expected idle review below P0 jobs initially.");
+                throw new Exception("Expected directory scan below P0 jobs initially.");
             grid.SelectedItem = grid.Items.Cast<object>()
                 .Single(item => RowKey(item) == reviewKey);
             Pump(manager);
@@ -200,17 +198,17 @@ internal static class GlobalTaskOrderFlow
             var all = VisibleKeys(grid);
             var firstKey = all[0];
             if (!scheduler.MoveTaskGlobally(reviewKey,firstKey,VisibleOrders(grid)))
-                throw new Exception("Cross-type scheduler move rejected a root review above P0.");
+                throw new Exception("Cross-type scheduler move rejected a directory scan above P0.");
             AwaitWithPump(() => VisibleKeys(grid).FirstOrDefault() == reviewKey,
                 "Scheduler rank change did not refresh the Taskmanager.");
             var persisted = new SchedulerTaskOrderStore(database).ReadAll();
             if (!persisted.TryGetValue(reviewKey, out var reviewStored) ||
                 persisted[firstKey].Order <= reviewStored.Order)
                 throw new Exception("Global order did not persist in SQLite.");
-            // The original executor alias receives the SAME rank when
-            // admitted, not a second watcher task created by Taskmanager.
+            // The same accepted task receives the persisted rank directly,
+            // without any separate executor key or alias.
             var placement = scheduler.EffectiveTaskPlacement(
-                reviewKey, SchedulerPriority.Idle, 90);
+                reviewKey, SchedulerPriority.Background, 90);
             if (placement.Priority != SchedulerPriority.ManualAction ||
                 placement.QueueOrder != reviewStored.Order)
                 throw new Exception("Physical scanner did not inherit user-selected rank.");
@@ -227,7 +225,7 @@ internal static class GlobalTaskOrderFlow
                         string.Join(" -> ", executed));
             }
             AssertDefaultP0AndBackgroundSafety(root);
-            AssertBlockedManualScanCannotStarveGps(root);
+            AssertManualScanYieldsBeforeGps(root);
             AssertOwnedMetadataChangeStaysInItsPackage(root);
             AssertReorderNeverWaitsForNetworkCancellation();
             Console.WriteLine("PASS: GPS accepted before eligibility, visible in TM; " +
@@ -333,7 +331,7 @@ internal static class GlobalTaskOrderFlow
     // accepted P0 original-file mutation must begin on its own scheduler
     // capacity WITHOUT waiting for that inventory's cancellation callback.
     // Both requests still belong to the same scheduler and durable journal.
-    private static void AssertBlockedManualScanCannotStarveGps(string parent)
+    private static void AssertManualScanYieldsBeforeGps(string parent)
     {
         var database = new LocalDatabase(Path.Combine(parent, "blocked-manual-scan.db"));
         database.Initialize();
@@ -379,15 +377,18 @@ internal static class GlobalTaskOrderFlow
             var gps = engine.EnqueueDurableRecipeAsync(
                 "gps:edit:regression-blocked-nas", "gps-edit-v2", "{}",
                 SchedulerPriority.ManualAction);
-            AwaitWithPump(() => gpsStarted.Task.IsCompleted || gps.IsFaulted,
-                "New GPS P0 package is starved by an uninterruptible manual NAS scan.");
-            if (gps.IsFaulted) gps.GetAwaiter().GetResult();
-            if (!gpsStarted.Task.IsCompleted || scan.IsCompleted)
-                throw new Exception("GPS did not run independently of the blocked scan.");
+            AwaitWithPump(() => engine.Snapshot().Any(x =>
+                x.Key == "catalog:scan:regression-blocked-manual-nas" &&
+                x.State == SchedulerJobState.YieldRequested),
+                "New GPS P0 did not request a safe yield from the running scan.");
+            if (gpsStarted.Task.IsCompleted || scan.IsCompleted)
+                throw new Exception("Two durable jobs executed before the scan released its safe boundary.");
             releaseScan.TrySetResult();
             AwaitWithPump(() => Task.WhenAll(scan, gps).IsCompleted,
                 "Manual NAS scan did not finish after release.");
             Task.WhenAll(scan, gps).GetAwaiter().GetResult();
+            if (!gpsStarted.Task.IsCompleted)
+                throw new Exception("GPS did not run after the scan reached its safe boundary.");
         }
         finally
         {

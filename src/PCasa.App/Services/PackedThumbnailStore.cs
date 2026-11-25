@@ -4,7 +4,7 @@ using PCasa.App.Models;
 
 namespace PCasa.App.Services;
 
-public sealed class PackedThumbnailStore : IDisposable
+public sealed class PackedThumbnailStore : IImportThumbnailStore
 {
     private const long MaxPackBytes = 256L * 1024 * 1024;
 
@@ -21,6 +21,19 @@ public sealed class PackedThumbnailStore : IDisposable
     }
 
     public string CacheRoot => _cacheRoot;
+
+    IReadOnlyList<ImportThumbnailTier> IImportThumbnailStore.PrepareTiers(
+        string sourcePath, BrowseThumbnailProfile profile, CancellationToken cancellationToken,
+        string? originalSourcePath)
+        => PrepareTiers(sourcePath, profile, cancellationToken, originalSourcePath)
+            .Select(tier => new ImportThumbnailTier(tier.Tier, tier.Bytes, tier.Width, tier.Height))
+            .ToArray();
+
+    IReadOnlyList<PackedThumbnailLocation> IImportThumbnailStore.AppendPrepared(
+        IReadOnlyList<ImportThumbnailTier> prepared, CancellationToken cancellationToken)
+        => AppendPrepared(prepared.Select(tier =>
+            new PreparedThumbnailTier(tier.Tier, tier.Bytes, tier.Width, tier.Height))
+            .ToArray(), cancellationToken);
 
     public static void ResetPackFiles()
     {
@@ -74,7 +87,7 @@ public sealed class PackedThumbnailStore : IDisposable
         // source and subsequent tiers can then fail. Instead, decode the source once
         // to the largest required browse size and materialize that small image in RAM.
         var largestTier = tiers[^1];
-        using var largestPipeline = RawImageSource.LoadDisplayThumbnail(
+        using var largestPipeline = VipsImageSource.LoadDisplayThumbnail(
             sourcePath, originalSourcePath, largestTier, largestTier,
             cancellationToken);
         largestPipeline.SetProgress(new Progress<int>(_ => { }), cancellationToken);

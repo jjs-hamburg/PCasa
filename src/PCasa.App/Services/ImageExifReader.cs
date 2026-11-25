@@ -15,7 +15,7 @@ public sealed record ImageExifData(string Json, string? CameraMake,
     string? CameraModel, string? DateTimeOriginal,
     double? GpsLatitude, double? GpsLongitude, double? GpsAltitude);
 
-public sealed class ImageExifReader : IDisposable
+public sealed class ImageExifReader : IImportExifReader
 {
     private Process? _process;
     private int _nextRequestId;
@@ -131,8 +131,7 @@ public sealed class ImageExifReader : IDisposable
         try
         {
             static string Normalize(string p) =>
-                Path.TrimEndingDirectorySeparator(Path.GetFullPath(p))
-                    .Replace('/', '\\');
+                CatalogPathPolicy.NormalizeSeparators(Path.TrimEndingDirectorySeparator(Path.GetFullPath(p)));
             return string.Equals(Normalize(sourcePath), Normalize(expectedPath),
                 StringComparison.OrdinalIgnoreCase);
         }
@@ -232,8 +231,11 @@ public sealed class ImageExifReader : IDisposable
         if (_process is not null) return;
         var executable = Environment.GetEnvironmentVariable("PCASA_EXIFTOOL_PATH");
         if (string.IsNullOrWhiteSpace(executable))
-            executable = Path.Combine(AppContext.BaseDirectory, "exiftool", "exiftool.exe");
-        if (!File.Exists(executable))
+            executable = OperatingSystem.IsWindows()
+                ? Path.Combine(AppContext.BaseDirectory, "exiftool", "exiftool.exe")
+                : "exiftool";
+        if ((OperatingSystem.IsWindows() || Path.IsPathFullyQualified(executable)) &&
+            !File.Exists(executable))
             throw new FileNotFoundException("ExifTool für den EXIF-Katalog fehlt.", executable);
 
         var start = new ProcessStartInfo(executable)

@@ -7,7 +7,8 @@ public sealed record CatalogImageState(
     long? PhotoFolderId,
     string LocalPath,
     bool HasCurrentExif = false,
-    long? CreatedUtcTicks = null);
+    long? CreatedUtcTicks = null,
+    string? ImportError = null);
 
 public sealed record CatalogImageData(
     long FolderId,
@@ -21,7 +22,8 @@ public sealed record CatalogImageData(
     int Width,
     int Height,
     string ThumbnailPath,
-    long? CreatedUtcTicks = null);
+    long? CreatedUtcTicks = null,
+    string? ImportError = null);
 
 public sealed record PhotoFolderSummary(
     long Id,

@@ -252,7 +252,8 @@ public partial class MainWindow
     private void UpdateGalleryFolderVisibility(bool preserveGalleryAnchor = true)
     {
         IReadOnlySet<long> hidden =
-            !string.IsNullOrWhiteSpace(TagSearchBox?.Text)
+            !string.IsNullOrWhiteSpace(TagSearchBox?.Text) ||
+                (CurrentAttributeFilter == "ImportError" && !_appearance.GalleryAttributeFilterInverted)
                 ? new HashSet<long>()
                 : GetGalleryHiddenFolderIds();
 

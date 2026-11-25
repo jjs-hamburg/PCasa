@@ -88,6 +88,67 @@ public sealed class SchedulerTaskOrderStore
         }
     }
 
+    // The old P1/P2 user/interactive ranks are no longer logical
+    // priority classes. Preserve the accepted order and promotion history
+    // while mapping the affected user jobs to P0.
+    public void NormalizeLegacyJobPriorities()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE scheduler_task_order
+               SET priority_override=CASE WHEN priority_override IN (1,2)
+                       THEN 0 ELSE priority_override END,
+                   previous_priority=CASE WHEN previous_priority IN (1,2)
+                       THEN 0 ELSE previous_priority END
+             WHERE priority_override IN (1,2) OR previous_priority IN (1,2);
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
+    // Release ordinary automatic requests on restart, returning their
+    // identities for reconstruction by the watcher owner. Old per-root
+    // review holds are migrated to the permanent review identity.
+    public IReadOnlyList<string> ReleaseStartupPauses()
+    {
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        var keys = new List<string>();
+        using (var read = db.CreateCommand())
+        {
+            read.Transaction = tx;
+            read.CommandText = """
+                SELECT task_key FROM scheduler_task_order
+                 WHERE paused=1 AND task_key NOT GLOB 'automatic:*:RescanRoot:*'
+                   AND task_key!='automatic:continuous-review';
+                """;
+            using var reader = read.ExecuteReader();
+            while (reader.Read()) keys.Add(reader.GetString(0));
+        }
+        using (var release = db.CreateCommand())
+        {
+            release.Transaction = tx;
+            release.CommandText = """
+                INSERT INTO scheduler_task_order(task_key,dispatch_order,paused,updated_utc)
+                SELECT 'automatic:continuous-review',9223372036854775807,1,
+                       strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                  WHERE EXISTS (SELECT 1 FROM scheduler_task_order
+                      WHERE paused=1 AND task_key GLOB 'automatic:*:RescanRoot:*')
+                ON CONFLICT(task_key) DO UPDATE SET paused=1;
+                DELETE FROM scheduler_task_order
+                 WHERE task_key GLOB 'automatic:*:RescanRoot:*';
+                UPDATE scheduler_task_order SET paused=0
+                 WHERE paused=1 AND task_key!='automatic:continuous-review';
+                DELETE FROM scheduler_task_order
+                 WHERE paused=0 AND dispatch_order=9223372036854775807
+                   AND priority_override IS NULL AND promoted_now=0;
+                """;
+            release.ExecuteNonQuery();
+        }
+        tx.Commit();
+        return keys;
+    }
+
     public IReadOnlySet<string> ReadPaused()
     {
         using var db = _database.OpenConnection();

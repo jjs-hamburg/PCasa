@@ -21,6 +21,21 @@ internal static class TaskManagerFlow
         TaskCompletionSource? releaseStagedJob = null;
         try
         {
+            // The exit review must resolve all affected sources from
+            // accepted recipes without opening any original image.
+            var targetReader = typeof(PCasa.App.MainWindow).GetMethod(
+                "ShutdownRecipeTargets",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var targets = ((HashSet<long> Ids, HashSet<string> Paths))
+                targetReader.Invoke(null, new object[] { """
+                    {"ImageIds":[17,23,17],"Items":[{"ImageId":41,"Path":"C:\\Photo.jpg"}],
+                     "Sources":["S:\\NAS\\source.jpg","s:\\nas\\SOURCE.jpg"],
+                     "Destination":"C:\\Copy","FolderId":999}
+                    """ })!;
+            if (!targets.Ids.SetEquals(new long[] { 17, 23, 41 }) ||
+                !targets.Paths.SetEquals(new[] { @"C:\Photo.jpg", @"S:\NAS\source.jpg" }))
+                throw new Exception("Exit review lost sources or included a destination.");
             var app = new PCasa.App.App();
             app.InitializeComponent();
             app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -171,9 +186,10 @@ internal static class TaskManagerFlow
                 string.Equals(item.Directory, firstA, StringComparison.OrdinalIgnoreCase));
             var initialB = firstQueue.Single(item =>
                 string.Equals(item.Directory, firstB, StringComparison.OrdinalIgnoreCase));
-            if (!firstRepo.MovePendingFirstImport(initialB.FolderId, initialA.FolderId) ||
+            if (firstQueue[0].FolderId != initialB.FolderId ||
+                initialB.QueueOrder >= initialA.QueueOrder ||
                 !firstRepo.SetPendingFirstImportPaused(initialA.FolderId, true))
-                throw new Exception("First-import queue cannot be reordered/paused.");
+                throw new Exception("New first-import requests did not use user LIFO order.");
             // Re-selecting an unfinished root must retain pause and rank.
             firstRepo.Add(firstA);
             database.Initialize();
@@ -210,21 +226,24 @@ internal static class TaskManagerFlow
                 item.Type == "taskmanager-test-v1").Select(item => item.Key).ToArray();
             if (!order.SequenceEqual(new[] { "taskmanager:c", "taskmanager:b", "taskmanager:a" }))
                 throw new Exception("Existing P0 newest-first order was lost.");
-            if (!scheduler.MoveDurableTask("taskmanager:a", -1))
+            if (!scheduler.MoveTaskGlobally("taskmanager:a", "taskmanager:b",
+                    order.Select(key => new SchedulerTaskOrderItem(
+                        key, SchedulerPriority.ManualAction)).ToArray()))
                 throw new Exception("Task manager could not move a queued durable job.");
-            order = new DurablePackageJournal(database).Pending()
-                .Where(item => item.Type == "taskmanager-test-v1")
-                .Select(item => item.Key).ToArray();
-            if (!order.SequenceEqual(new[] { "taskmanager:c", "taskmanager:a", "taskmanager:b" }))
-                throw new Exception("Moved task order did not persist in the SQLite journal.");
+            var orderStore = new SchedulerTaskOrderStore(database);
+            var storedOrder = orderStore.ReadAll();
+            if (!order.OrderBy(key => storedOrder[key].Order)
+                    .SequenceEqual(new[] { "taskmanager:c", "taskmanager:a", "taskmanager:b" }))
+                throw new Exception("Moved task order did not persist in the global SQLite ledger.");
 
             if (!scheduler.DeleteDurableTaskAsync("taskmanager:b").GetAwaiter().GetResult() ||
                 journal.Pending().Any(item => item.Key == "taskmanager:b"))
                 throw new Exception("Deleting a queued task did not durably cancel it.");
 
-            // A started tag package is allowed to hold user-visible tag
-            // intent in SQLite. Deleting it must NOT silently orphan data.
-            journal.Put("taskmanager:protected", "tag-edit-v2", "{}",
+            // Legacy tag recipes without ownership must remain protected.
+            // Current owned tag cancellation is exercised against the real
+            // catalog in DurablePauseFlow.
+            journal.Put("taskmanager:protected", "tag-edit-v1", "{}",
                 SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
             journal.SetState("taskmanager:protected", "running", 1);
             var refused = false;
@@ -301,14 +320,6 @@ internal static class TaskManagerFlow
                     return Task.FromResult(key == autoKey);
                 },
                 idleScanStatus: null,
-                moveAutomaticScan: (source, target) => Task.FromResult(
-                    source.StartsWith("initial:", StringComparison.Ordinal)
-                        ? firstRepo.MovePendingFirstImport(
-                            long.Parse(source.AsSpan("initial:".Length)),
-                            long.Parse(target.AsSpan("initial:".Length)))
-                        : firstRepo.MoveRootReview(
-                            long.Parse(source.Split(':')[1]),
-                            long.Parse(target.Split(':')[1]))),
                 resumeAutomaticScan: _ => Task.FromResult(true),
                 startAutomaticNow: key => Task.FromResult(
                     firstRepo.RequestRootReviewNow(
@@ -362,7 +373,7 @@ internal static class TaskManagerFlow
                 throw new Exception("Held first import lost its status or persisted dispatch order.");
 
             // An explicitly paused import is STILL a position in its
-            // persistent P2 queue. Up/down must change its real dispatch
+            // persistent P0 queue. Up/down must change its real dispatch
             // rank and the visual order, even while it remains held.
             // Status-group sorting previously hid a successful move.
             grid.SelectedItem = pausedRow;
@@ -371,8 +382,8 @@ internal static class TaskManagerFlow
                 Equals(button.Content, "Nach oben"));
             var moveDown = Descendants<Button>(manager).Single(button =>
                 Equals(button.Content, "Nach unten"));
-            if (!moveUp.IsEnabled || moveDown.IsEnabled)
-                throw new Exception("Paused import move buttons do not reflect its actual queue neighbors.");
+            if (!moveUp.IsEnabled)
+                throw new Exception("Paused import cannot move ahead of its visible predecessor.");
             moveUp.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, moveUp));
             Until(manager, () =>
             {
@@ -383,8 +394,15 @@ internal static class TaskManagerFlow
                 return importKeys.SequenceEqual(new[] {
                     $"initial:{initialA.FolderId}", $"initial:{initialB.FolderId}" });
             }, "Moving a held first import did not update visible queue order.");
-            if (firstRepo.GetPendingFirstImportQueue()[0].FolderId != initialA.FolderId)
-                throw new Exception("Move up changed only the visible order, not SQLite.");
+            bool ImportBefore(long first, long second)
+            {
+                var saved = new SchedulerTaskOrderStore(database).ReadAll();
+                return saved[$"initial:{first}"].Order < saved[$"initial:{second}"].Order;
+            }
+            if (!ImportBefore(initialA.FolderId, initialB.FolderId) ||
+                !firstRepo.GetPendingFirstImportQueue().Single(row =>
+                    row.FolderId == initialA.FolderId).Paused)
+                throw new Exception("Move up did not persist the global order and preserve the pause.");
             // Return to original persisted order for the subsequent tests.
             Until(manager, () => moveDown.IsEnabled,
                 "Down control is disabled after a successful move.");
@@ -393,7 +411,7 @@ internal static class TaskManagerFlow
                 "_acting", System.Reflection.BindingFlags.NonPublic |
                            System.Reflection.BindingFlags.Instance)!;
             Until(manager, () =>
-                firstRepo.GetPendingFirstImportQueue()[0].FolderId == initialB.FolderId &&
+                ImportBefore(initialB.FolderId, initialA.FolderId) &&
                 !(bool)actingField.GetValue(manager)!,
                 "Move down did not finish its UI refresh and persisted order.");
 
@@ -417,8 +435,8 @@ internal static class TaskManagerFlow
             if (!Equals(grid.SelectedItem?.GetType().GetProperty("Key")
                     ?.GetValue(grid.SelectedItem), selectedReviewKey))
                 throw new Exception("Selecting P4 task was reset by stale async refresh.");
-            if (!moveUp.IsEnabled || moveDown.IsEnabled)
-                throw new Exception("Waiting P4 reordering buttons are disabled.");
+            if (!moveUp.IsEnabled)
+                throw new Exception("Waiting P4 reordering button is disabled.");
             moveUp.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, moveUp));
             Until(manager, () => grid.Items.Cast<object>()
                 .Select(item => item.GetType().GetProperty("Key")?.GetValue(item)?.ToString())
@@ -427,17 +445,15 @@ internal static class TaskManagerFlow
                 "P4 move did not update visible task order.");
             var expectedFirst = originalReviews[1] == reviewOneKey
                 ? finishedFolder.Id : reviewedB.Id;
-            var otherReview = expectedFirst == finishedFolder.Id
-                ? reviewedB.Id : finishedFolder.Id;
-            var storedReviewOrder = firstRepo.GetRootReviewQueueOrder().ToList();
-            if (storedReviewOrder.IndexOf(expectedFirst) >=
-                storedReviewOrder.IndexOf(otherReview))
-                throw new Exception("P4 move did not persist in SQLite.");
+            bool ReviewOrderPersisted()
+            {
+                var saved = new SchedulerTaskOrderStore(database).ReadAll();
+                return saved[originalReviews[1]].Order < saved[originalReviews[0]].Order;
+            }
+            if (!ReviewOrderPersisted())
+                throw new Exception("P4 move did not persist in the global SQLite ledger.");
             database.Initialize();
-            var reopenedReviews = new FolderRepository(database)
-                .GetRootReviewQueueOrder().ToList();
-            if (reopenedReviews.IndexOf(expectedFirst) >=
-                reopenedReviews.IndexOf(otherReview))
+            if (!ReviewOrderPersisted())
                 throw new Exception("P4 order was lost after SQLite reopen.");
 
             // A waiting root review may be explicitly requested NOW. The
@@ -541,7 +557,10 @@ internal static class TaskManagerFlow
                 == "taskmanager:failed-original");
             Pump(manager);
             var retry = Descendants<Button>(manager).Single(button =>
-                Equals(button.Content, "Neu starten"));
+                Equals(button.Content, "Jetzt ausführen"));
+            if (Descendants<Button>(manager).Any(button =>
+                    Equals(button.Content, "Neu starten")))
+                throw new Exception("Obsolete Restart action remains in Taskmanager.");
             var discard = Descendants<Button>(manager).Single(button =>
                 Equals(button.Content, "Löschen"));
             if (!retry.IsEnabled || !discard.IsEnabled)

@@ -177,7 +177,7 @@ public sealed class BackgroundFolderMonitor : IDisposable
             return;
         }
 
-        if (!FolderScanner.IsSupportedImagePath(path))
+        if (!CatalogMediaFormats.IsSupported(path))
         {
             return;
         }
@@ -189,7 +189,8 @@ public sealed class BackgroundFolderMonitor : IDisposable
             state.Folder.Id,
             path,
             BackgroundFolderChangeKind.ScanFile,
-            Recursive: false));
+            Recursive: false,
+            ForceExifRefresh: !created));
     }
 
     private void OnDeleted(WatcherState state, string path)
@@ -242,7 +243,7 @@ public sealed class BackgroundFolderMonitor : IDisposable
             return;
         }
 
-        if (FolderScanner.IsSupportedImagePath(e.FullPath))
+        if (CatalogMediaFormats.IsSupported(e.FullPath))
         {
             // The destination FILE (not its parent) owns this inventory.
             // Its source metadata and packed thumbnail will be checked via

@@ -91,8 +91,8 @@ internal static class Program
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
         Run("P4 catalog verify yields to every nonidle task and resumes after work", SchedulerIdleVerifyOnlyWhenOtherWorkFinished, failures);
         Run("Native drag interrupts background only through the central controller", NativeDragYieldIsControllerOwned, failures);
-        Run("P4 never starts while an accepted NAS P0 package remains deferred", DeferredP0BlocksP4Admission, failures);
-        Run("Newly deferred NAS P0 interrupts an already running P4 verification", DeferredP0PreemptsAlreadyRunningP4, failures);
+        Run("Deferred NAS P0 does not block reachable idle verification", DeferredP0AllowsP4Admission, failures);
+        Run("Newly deferred NAS P0 does not interrupt running verification", DeferredP0DoesNotPreemptP4, failures);
         Run("Manual P0 package may await nested read while older P0 is queued", NestedPackageCatalogReadDoesNotDeadlockLifo, failures);
         Run("Preempted manual scan waits for requested file mutation then resumes", ManualMutationOvertakesYieldingManualScan, failures);
         Run("Newest manual package runs first, older packages resume at their saved step", DynamicPackagesResumeLifo, failures);
@@ -100,25 +100,31 @@ internal static class Program
         Run("Canceled scanner resumes enumeration instead of starting again", ScannerCheckpointRetainsEnumeration, failures);
         Run("Durable first-import checkpoints survive restart without unsafe pruning", DurableInitialImportRestartSafe, failures);
         Run("Restart resumes within unfinished directory after last committed image", DurableFileCursorRestartSafe, failures);
-        Run("Unreadable photo is skipped; cursor advances and no automatic re-scan is scheduled", SkippedImageAdvancesDurableCursor, failures);
+        Run("Unreadable photo is catalogued; cursor advances and no automatic re-scan is scheduled", SkippedImageAdvancesDurableCursor, failures);
         Run("All ordinary scans resume inside a directory after a process restart",
             RegularScanRestartSafe, failures);
         Run("Manual scans retain a first-pass cursor per directory across separate jobs while background checks changes",
             FirstPassDirectorySurvivesJobs, failures);
+        Run("Catalog-owned import reconciles changed and missing files across job identities",
+            CatalogOwnedDirectoryReconciliation, failures);
+        Run("Database maintenance drains catalog work without enqueuing a job",
+            DatabaseMaintenancePauseDrainsCatalogWork, failures);
+        Run("Gallery presentation does not yield or block a catalog job",
+            GalleryPresentationDoesNotCompeteWithCatalogJobs, failures);
         Run("Changed monitoring invalidates old scan without implicit restart", SourceChangeRejectsOldScanCheckpoint, failures);
         Run("Yield while waiting for image lock does not count same file twice", ScannerYieldBeforeSourceLockDoesNotDoubleCount, failures);
         Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
         Run("Canceled source-lock waiter releases its scheduler lane", SourceLockWaitCanYield, failures);
         Run("Two-endpoint source locks serialize opposite transfers", PairedSourceLocksAreOrdered, failures);
-        Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
+        Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveWaitsForSafeBoundary, failures);
         Run("Visible originals and Explorer enumeration survive blocked durable P0",
             ForegroundUiReadsIgnoreSchedulerBlock, failures);
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
         Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
         Run("Startup browse projection is visible beside blocked or deferred durable P0 without admitting P4",
             StartupBrowseReadSurvivesDurableP0, failures);
-        Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanDoesNotWaitForBlockedBackground, failures);
-        Run("Explicit manual scan overtakes blocked initial import", SchedulerManualOvertakesBlockedInitialImport, failures);
+        Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanWaitsForSafeBoundary, failures);
+        Run("Explicit manual scan waits for initial import safe boundary", SchedulerManualWaitsForInitialImportBoundary, failures);
         Run("Running durable first import yields to manual Tag P0 and resumes", InitialImportYieldsToManualTag, failures);
         Run("Scheduler announces a running manual write before any file callback", SchedulerPublishesRunningManualState, failures);
         Run("Manual and interactive source probes bypass blocked background probes", SchedulerManualBypassesBlockedSourceProbe, failures);
@@ -126,9 +132,10 @@ internal static class Program
         Run("Canceled all-folders toggle immediately retires queued scheduler probe", CanceledAllFoldersScopeRetiresQueuedProbe, failures);
         Run("Manual folder creation preempts and safely resumes network scan", SchedulerManualFolderCreateYieldsScan, failures);
         Run("Canceled queued thumbnail page is re-requestable", CanceledQueuedThumbnailPageCanBeReloaded, failures);
-        Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
+        Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalWaitsForSafeBoundary, failures);
         Run("Source locks serialize one photo without globally blocking other photos", SourceFileLocksAreScoped, failures);
         Run("Running user work yields to interactive work", SchedulerInteractivePreemptsUserWork, failures);
+        Run("A yielding catalog owner finishes its dependent catalog step before another owner", SchedulerNestedCatalogStepSharesOwner, failures);
         Run("Enqueue does not synchronously check source validity on UI thread", SchedulerEnqueueDoesNotProbeSource, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
         Run("Failed image decoding does not block safe rename pruning", DecodeFailureStillReconcilesKnownMissingPaths, failures);
@@ -831,7 +838,7 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void DeferredP0PreemptsAlreadyRunningP4()
+    private static void DeferredP0DoesNotPreemptP4()
     {
         static async Task Check()
         {
@@ -842,7 +849,7 @@ internal static class Program
             scheduler.EnableDurablePackages(db);
             var started = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            var resumed = new TaskCompletionSource(
+            var finish = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             var attempts = 0;
             var idle = scheduler.EnqueueAsync("test:already-running-p4",
@@ -851,9 +858,8 @@ internal static class Program
                     if (Interlocked.Increment(ref attempts) == 1)
                     {
                         started.TrySetResult();
-                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                        await finish.Task.WaitAsync(token);
                     }
-                    else resumed.TrySetResult();
                 }, workKind: SchedulerWorkKind.CatalogScan);
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var journal = new DurablePackageJournal(db);
@@ -867,24 +873,20 @@ internal static class Program
             journal.Defer(p0, 0, "Quelle vorübergehend offline",
                 TimeSpan.FromMinutes(30));
             scheduler.RecoverDurablePackages();
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(8);
-            while (DateTime.UtcNow < deadline &&
-                   !scheduler.Snapshot().Any(x => x.Key == "test:already-running-p4"
-                       && x.State is SchedulerJobState.Queued or
-                           SchedulerJobState.YieldRequested))
-                await Task.Delay(30);
-            if (!scheduler.Snapshot().Any(x => x.Key == "test:already-running-p4"
-                 && x.State is SchedulerJobState.Queued or
-                     SchedulerJobState.YieldRequested))
-                throw new Exception("Deferred NAS P0 did not interrupt active P4.");
-            if (resumed.Task.IsCompleted)
-                throw new Exception("P4 resumed while deferred P0 was still waiting.");
-            if (!journal.Cancel(p0))
-                throw new Exception("Could not release the waiting NAS package.");
-            await resumed.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            try
+            {
+                await Task.Delay(500);
+                if (scheduler.Snapshot().Any(x => x.Key == "test:already-running-p4" &&
+                    x.State == SchedulerJobState.YieldRequested) || attempts != 1)
+                    throw new Exception("Deferred NAS work interrupted reachable verification.");
+                if (!journal.Pending().Any(x => x.Key == p0 && x.State == "deferred"))
+                    throw new Exception("Deferred task identity was lost.");
+            }
+            finally { finish.TrySetResult(); }
             await idle.WaitAsync(TimeSpan.FromSeconds(8));
-            if (attempts != 2)
-                throw new Exception("P4 lost its resumable job identity.");
+            if (attempts != 1)
+                throw new Exception("Unrelated deferred task forced an inventory restart.");
+            journal.Cancel(p0);
         }
         Check().GetAwaiter().GetResult();
     }
@@ -935,7 +937,7 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void DeferredP0BlocksP4Admission()
+    private static void DeferredP0AllowsP4Admission()
     {
         static async Task Check()
         {
@@ -952,8 +954,9 @@ internal static class Program
                 }), SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
             journal.Defer(key, 0, "Quelle vorübergehend offline",
                 TimeSpan.FromMinutes(30));
-            if (!journal.HasOutstandingNonIdleTasks())
-                throw new Exception("P0 deferred package vanished from scheduler's global list.");
+            if (journal.HasRunnableNonIdleTasks() ||
+                !journal.Pending().Any(x => x.Key == key && x.State == "deferred"))
+                throw new Exception("Deferred P0 must remain in the journal without blocking idle work.");
 
             await using var scheduler = new PCasaScheduler();
             scheduler.EnableDurablePackages(db);
@@ -965,20 +968,11 @@ internal static class Program
                     idleStarted.TrySetResult();
                     return Task.CompletedTask;
                 }, workKind: SchedulerWorkKind.CatalogScan);
-            await Task.Delay(200);
-            if (idleStarted.Task.IsCompleted)
-                throw new Exception("P4 started while NAS P0 was visibly waiting.");
-
-            if (!journal.Cancel(key))
-                throw new Exception("Could not dismiss deferred test package.");
-            // The next ordinary scheduler state change wakes ALL job lanes.
-            await scheduler.EnqueueAsync("test:interactive-event",
-                SchedulerPriority.Interactive, _ => Task.CompletedTask,
-                workKind: SchedulerWorkKind.CatalogRead)
-                .WaitAsync(TimeSpan.FromSeconds(5));
             await idle.WaitAsync(TimeSpan.FromSeconds(5));
-            if (!idleStarted.Task.IsCompleted)
-                throw new Exception("P4 stayed blocked after last nonidle job finished.");
+            if (!idleStarted.Task.IsCompleted ||
+                !journal.Pending().Any(x => x.Key == key && x.State == "deferred"))
+                throw new Exception("Idle verification blocked or discarded deferred NAS work.");
+            journal.Cancel(key);
         }
         Check().GetAwaiter().GetResult();
     }
@@ -1008,12 +1002,12 @@ internal static class Program
                     else idleResumed.TrySetResult();
                 }, workKind: SchedulerWorkKind.CatalogScan);
             await idleStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            var higher = scheduler.EnqueueAsync("regression:foreground-read",
-                SchedulerPriority.Interactive, async token =>
+            var higher = scheduler.EnqueueAsync("regression:user-catalog-job",
+                SchedulerPriority.ManualAction, async token =>
                 {
                     higherStarted.TrySetResult();
                     await releaseHigher.Task.WaitAsync(token);
-                }, workKind: SchedulerWorkKind.CatalogRead);
+                }, workKind: SchedulerWorkKind.Catalog);
             try
             {
                 await higherStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -1755,7 +1749,8 @@ internal static class Program
         using var stop = new CancellationTokenSource();
         var callback = new InlineProgress<ScanProgress>(p =>
         {
-            if (p.DiscoveredPhotoFolderId is not null)
+            if (p.DiscoveredPhotoFolderId is not null &&
+                p.CurrentFile?.EndsWith("b-good.jpg", StringComparison.OrdinalIgnoreCase) == true)
                 stop.Cancel(); // after committing the next valid photo
         });
         try
@@ -1786,8 +1781,8 @@ internal static class Program
         var finished = restarted.ScanDirectory(root, root.LocalPath,
             recursive:true, durableScanKey:key);
         if (finished.ImageFilesSeen != 3 || finished.Failed != 0 ||
-            new ImageCatalogRepository(db).CountAll() != 2)
-            throw new Exception("Restart retried skipped photo or lost confirmed good images.");
+            new ImageCatalogRepository(db).CountAll() != 3)
+            throw new Exception("Restart retried skipped photo or lost confirmed catalog records.");
         using var connection = db.OpenConnection();
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM scan_resume_jobs WHERE scan_key=$key;";
@@ -1882,6 +1877,42 @@ internal static class Program
             pending[0].ScanRoot != root.LocalPath)
             throw new Exception("Startup recovery did not find the original unfinished root scan.");
 
+        // Deleting a directory request must remove only its restart
+        // identity, leaving both a different request and indexed photos.
+        var firstChange = new BackgroundFolderChange(root.Id,
+            Path.Combine(directory, "photo-0000.jpg"), BackgroundFolderChangeKind.ScanFile, false);
+        var secondChange = firstChange with { Path = Path.Combine(directory, "photo-0001.jpg") };
+        var accepted = folders.AcceptAutomaticChange("first", firstChange);
+        var second = folders.AcceptAutomaticChange("second", secondChange);
+        var latest = folders.AcceptAutomaticChange("first", firstChange with { ForceExifRefresh = true });
+        var reopened = new FolderRepository(db);
+        var persisted = reopened.GetPendingAutomaticChanges();
+        // Interruption or late publication resolves the newest accepted
+        // revision without changing the original FIFO rank.
+        var resumedReceipt = reopened.GetPendingAutomaticChange("first");
+        if (resumedReceipt is null || resumedReceipt.Revision != latest.Revision ||
+            resumedReceipt.Order != accepted.Order || !resumedReceipt.Change.ForceExifRefresh ||
+            reopened.GetPendingAutomaticChange("nonexistent") is not null)
+            throw new Exception("Watcher retry did not resolve the current accepted receipt.");
+        if (persisted.Count != 2 || persisted[0].Key != "first" ||
+            latest.Order != accepted.Order || second.Order <= accepted.Order ||
+            latest.Revision == accepted.Revision || !persisted[0].Change.ForceExifRefresh ||
+            folders.RetireAutomaticChange("first", accepted.Revision) ||
+            !folders.RetireAutomaticChange("first", latest.Revision) ||
+            reopened.GetPendingAutomaticChange("first") is not null ||
+            !folders.RetireAutomaticChange("second"))
+            throw new Exception("Automatic FIFO acceptance, recovery or revision-safe acknowledgement failed.");
+
+        var directoryKey = $"background:inventory:{root.Id}:{generation}:ScanDirectory:True:{directory}";
+        folders.BeginOrResumeRegularScan(directoryKey, root.Id, directory,
+            root.CanonicalPath, beginManualEpoch: false);
+        var beforeDeletion = new ImageCatalogRepository(db).CountAll();
+        folders.DeleteAutomaticDirectoryInventory(root.Id, directory);
+        var surviving = new FolderRepository(db).GetPendingAutomaticInventories();
+        if (surviving.Count != 1 || surviving[0].ScanKey != key ||
+            new ImageCatalogRepository(db).CountAll() != beforeDeletion)
+            throw new Exception("Deleted automatic request survived or changed catalog contents.");
+
         // A partial directory inventory MUST NOT authorize deletion of the
         // photo that the new process skipped using its persisted cursor.
         File.Delete(Path.Combine(directory, "photo-0000.jpg"));
@@ -1906,85 +1937,107 @@ internal static class Program
                 .ContainsKey(directory))
             throw new Exception("Completed full scan failed to record its root and directory dates.");
         var nextDue = verified.GetDueRootReviewIds(DateTime.UtcNow);
-        if (nextDue.Contains(root.Id) || !nextDue.Contains(other.Id))
-            throw new Exception("Completed root restarted before another root finished.");
-        // Even a year later, no time-based rule may restart root while
-        // the other monitored folder is still unfinished.
-        var yearLater = verified.GetDueRootReviewIds(now.AddYears(1));
-        if (yearLater.Contains(root.Id) || !yearLater.Contains(other.Id))
-            throw new Exception("Elapsed time incorrectly reset an unfinished review round.");
-        var roundBeforeRestart = verified.GetReviewRoundStatus(DateTime.UtcNow);
-        if (roundBeforeRestart.Round != 1 ||
-            roundBeforeRestart.Eligible != 2 ||
-            roundBeforeRestart.Completed != 1)
-            throw new Exception("Whole-library round completion was not recorded.");
+        if (!nextDue.SequenceEqual(new[] { other.Id, root.Id }))
+            throw new Exception("Oldest completed folder must be next.");
+        if (!verified.GetDueRootReviewIds(now.AddYears(1)).SequenceEqual(nextDue))
+            throw new Exception("Clock change altered review order.");
         db.Initialize();
-        var restoredRound = new FolderRepository(db).GetReviewRoundStatus(DateTime.UtcNow);
-        if (restoredRound != roundBeforeRestart)
-            throw new Exception("Restart lost the already-completed root's round membership.");
+        if (!new FolderRepository(db).GetDueRootReviewIds(now).SequenceEqual(nextDue))
+            throw new Exception("Restart lost persistent check sequence.");
 
-        // Finish the second root. Only now may a new review round begin.
-        var otherKey = $"background:inventory:{other.Id}:{otherGeneration}:RescanRoot:True:{other.LocalPath}";
-        var finishedOther = nextProcess.ScanDirectory(other, other.LocalPath,
-            recursive: true, durableScanKey: otherKey);
-        if (finishedOther.Failed != 0)
-            throw new Exception("Second root could not complete its round.");
-        // The third monitored root still has an uncompleted first import.
-        // It may be offline, but a brand-new review round must NOT restart
-        // the two completed roots while that root is still outstanding.
-        var beforeInitialFinishes = verified.GetDueRootReviewIds(DateTime.UtcNow);
-        if (beforeInitialFinishes.Count != 0 ||
-            verified.GetReviewRoundStatus(DateTime.UtcNow).Round != 1)
-            throw new Exception("Offline pending first import caused endless repeat scans.");
+        // An incomplete unrelated import must never block further checks.
+        var otherEpoch = folders.GetScanEpoch(other.CanonicalPath);
+        if (!verified.CompleteRootCheck(other.Id, otherGeneration, otherEpoch))
+            throw new Exception("Valid review receipt rejected.");
+        if (!verified.GetDueRootReviewIds(now).SequenceEqual(new[] { root.Id, other.Id }))
+            throw new Exception("Completed review did not move behind older roots.");
+        if (verified.CompleteRootCheck(root.Id, generation + 1,
+                folders.GetScanEpoch(root.CanonicalPath)))
+            throw new Exception("Superseded source advanced review order.");
+        if (!verified.GetDueRootReviewIds(now).SequenceEqual(new[] { root.Id, other.Id }))
+            throw new Exception("Failed review changed persistent order.");
+
         var pendingGeneration = folders.GetSourceState(
             firstImportPending.CanonicalPath)!.Value.Generation;
-        if (!folders.CompleteInitialScan(firstImportPending.Id,
-                pendingGeneration,
+        if (!folders.CompleteInitialScan(firstImportPending.Id, pendingGeneration,
                 folders.GetScanEpoch(firstImportPending.CanonicalPath)))
             throw new Exception("Pending third root failed its initial import.");
-        var dueLastRoot = verified.GetDueRootReviewIds(DateTime.UtcNow);
-        if (dueLastRoot.Count != 1 || dueLastRoot[0] != firstImportPending.Id)
-            throw new Exception("Finished first import was not given its turn in the round.");
-        var pendingKey = $"background:inventory:{firstImportPending.Id}:{pendingGeneration}:RescanRoot:True:{firstImportPending.LocalPath}";
-        if (nextProcess.ScanDirectory(firstImportPending,
-                firstImportPending.LocalPath,
-                recursive: true, durableScanKey: pendingKey).Failed != 0)
-            throw new Exception("Third root could not finish its full review.");
-        var nextRound = verified.GetDueRootReviewIds(DateTime.UtcNow);
-        if (!nextRound.Contains(root.Id) ||
-            !nextRound.Contains(other.Id) ||
-            !nextRound.Contains(firstImportPending.Id) ||
-            verified.GetReviewRoundStatus(DateTime.UtcNow).Round != 2)
-            throw new Exception("Next round did not start after ALL roots completed.");
+        if (!verified.GetDueRootReviewIds(now).SequenceEqual(
+                new[] { root.Id, other.Id, firstImportPending.Id }))
+            throw new Exception("Completed initial import was not assigned the newest check value.");
 
-        // Unreachable root: retain its round membership and cursor and
-        // suppress retries until the saved backoff expires. Other eligible
-        // roots are still allowed to work during that interval.
-        verified.DeferRootReview(root.Id, generation, now.AddHours(6));
-        var beforeRetry = verified.GetDueRootReviewIds(now.AddHours(1));
-        if (beforeRetry.Contains(root.Id) || !beforeRetry.Contains(other.Id))
-            throw new Exception("Deferred source delayed another root or retried immediately.");
+        // The verification service must not touch catalog/thumbnail data,
+        // even when it finds missing or newly added originals.
+        var addedPath = Path.Combine(directory, "new-review.jpg");
+        WriteJpeg(addedPath);
+        var beforeCheck = new ImageCatalogRepository(db).CountAll();
+        var comparison = new CatalogInventoryCheck(db).Check(root,
+            Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None);
+        if (!comparison.Changes.Any(c => c.Kind == BackgroundFolderChangeKind.ScanFile &&
+                c.Path == addedPath) ||
+            !comparison.Changes.Any(c => c.Kind == BackgroundFolderChangeKind.RemovePath &&
+                c.Path == Path.Combine(directory, "photo-0000.jpg")) ||
+            new ImageCatalogRepository(db).CountAll() != beforeCheck)
+            throw new Exception("Metadata-only review missed differences or mutated the catalog.");
+        // Detected differences must survive a process exit immediately
+        // after acknowledging the review, before the UI receives them.
+        var epoch = folders.GetScanEpoch(root.CanonicalPath);
+        var beforeReceipt = verified.GetDueRootReviewIds(now);
+        if (verified.CompleteRootCheck(root.Id, generation + 1, epoch,
+                comparison.Changes) is not null ||
+            verified.GetPendingAutomaticChanges().Count != 0 ||
+            !verified.GetDueRootReviewIds(now).SequenceEqual(beforeReceipt))
+            throw new Exception("Stale review accepted changes or advanced the check sequence.");
+        try
+        {
+            verified.CompleteRootCheck(root.Id, generation, epoch,
+                comparison.Changes.Append(comparison.Changes[0] with
+                    { MonitoredFolderId = other.Id }).ToArray());
+            throw new Exception("Invalid review change was accepted.");
+        }
+        catch (ArgumentException) { }
+        if (verified.GetPendingAutomaticChanges().Count != 0 ||
+            !verified.GetDueRootReviewIds(now).SequenceEqual(beforeReceipt))
+            throw new Exception("Review transaction did not roll back all changes.");
+        var committed = verified.CompleteRootCheck(root.Id, generation, epoch,
+            comparison.Changes);
+        if (committed is null || committed.Count != comparison.Changes.Count)
+            throw new Exception("Completed review did not accept its discoveries.");
         db.Initialize();
-        if (!new FolderRepository(db).GetDueRootReviewIds(
-                now.AddHours(7)).Contains(root.Id))
-            throw new Exception("Deferred incomplete root was lost across restart.");
-        // A confirmed NAS reconnect overrides the OLD deadline immediately.
-        // The completed round and each saved file receipt must not change.
-        verified.DeferRootReview(root.Id, generation, now.AddHours(10));
-        if (verified.GetDueRootReviewIds(now.AddHours(1)).Contains(root.Id))
-            throw new Exception("NAS retry was not deferred before reconnect.");
-        var currentRound = verified.GetReviewRoundStatus(now);
+        var reopenedChanges = new FolderRepository(db).GetPendingAutomaticChanges();
+        if (reopenedChanges.Count != committed.Count ||
+            !committed.All(job => reopenedChanges.Any(saved =>
+                saved.Key == job.Key && saved.Revision == job.Revision)) ||
+            verified.GetDueRootReviewIds(now).Last() != root.Id ||
+            new ImageCatalogRepository(db).CountAll() != beforeCheck)
+            throw new Exception("Review discoveries and completion did not persist together.");
+        foreach (var job in committed)
+            verified.RetireAutomaticChange(job.Key, job.Revision);
+        // Restore the previous relative order for the retry checks below.
+        if (!verified.CompleteRootCheck(other.Id, otherGeneration, otherEpoch) ||
+            !verified.CompleteRootCheck(firstImportPending.Id, pendingGeneration,
+                folders.GetScanEpoch(firstImportPending.CanonicalPath)))
+            throw new Exception("Could not prepare the next verification sequence.");
+        File.Delete(addedPath);
+        using (var canceled = new CancellationTokenSource())
+        {
+            canceled.Cancel();
+            try
+            {
+                new CatalogInventoryCheck(db).Check(root, Array.Empty<string>(),
+                    Array.Empty<string>(), canceled.Token);
+                throw new Exception("Review ignored cancellation.");
+            }
+            catch (OperationCanceledException) { }
+        }
+
+        verified.DeferRootReview(root.Id, generation, now.AddSeconds(10));
+        if (verified.GetDueRootReviewIds(now).Contains(root.Id) ||
+            !verified.GetDueRootReviewIds(now).Contains(other.Id))
+            throw new Exception("Unavailable root blocked another folder.");
         if (!verified.ReleaseRootReviewRetryOnReconnect(root.Id) ||
-            !verified.GetDueRootReviewIds(now.AddHours(1)).Contains(root.Id))
-            throw new Exception("Confirmed NAS return did not release the old retry deadline.");
-        var reconnectedRound = verified.GetReviewRoundStatus(now);
-        if (reconnectedRound.Round != currentRound.Round ||
-            reconnectedRound.Eligible != currentRound.Eligible ||
-            reconnectedRound.Completed != currentRound.Completed ||
-            reconnectedRound.Deferred >= currentRound.Deferred)
-            throw new Exception("Reconnecting unexpectedly reset round progress, or retained its deferral.");
-        if (verified.ReleaseRootReviewRetryOnReconnect(root.Id))
-            throw new Exception("Idempotent reconnect released an already-cleared retry.");
+            verified.GetDueRootReviewIds(now).First() != root.Id)
+            throw new Exception("Reconnect did not restore oldest root without advancing it.");
 
         // The completed inventory releases its checkpoint. A genuinely
         // NEW complete inventory must visit the whole directory and may
@@ -2002,6 +2055,60 @@ internal static class Program
         if (fresh.ImageFilesSeen != 8 || fresh.Removed != 1 ||
             new ImageCatalogRepository(db).CountAll() != 8)
             throw new Exception("A new full inventory did not reconcile the deleted image.");
+    }
+
+    private static void CatalogOwnedDirectoryReconciliation()
+    {
+        using var sandbox = new Sandbox();
+        var dir = Path.Combine(sandbox.Images, "Album");
+        Directory.CreateDirectory(dir);
+        var removed = Path.Combine(dir, "b.jpg");
+        var changed = Path.Combine(dir, "c.jpg");
+        WriteJpeg(removed);
+        WriteJpeg(changed);
+        var (db, root, scanner) = sandbox.Prepare();
+        var folders = new FolderRepository(db);
+        var first = scanner.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: "manual:catalog:first", catalogOwnedProgress: true);
+        if (first.Updated != 2 ||
+            folders.GetFolderImportState(root.Id) is not
+                { CataloguedCount: 2, InitialImportComplete: true })
+            throw new Exception("Catalog state was not committed by the import.");
+
+        File.Delete(removed);
+        File.SetLastWriteTimeUtc(changed, DateTime.UtcNow.AddMinutes(-10));
+        WriteJpeg(Path.Combine(dir, "a.jpg"));
+        db.Initialize();
+        var reopened = new FolderRepository(db);
+        var scanner2 = new FolderScanner(new ImageCatalogRepository(db),
+            new ThumbnailCache(), reopened, new BrowseThumbnailProfileRepository(db));
+        var next = scanner2.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: "manual:catalog:second", catalogOwnedProgress: true);
+        if (next.Updated != 2 || next.Removed != 1 ||
+            reopened.GetFolderImportState(root.Id)?.CataloguedCount != 2 ||
+            reopened.CountCataloguedInDirectory(dir) != 2)
+            throw new Exception("New job failed to reconcile catalog-owned file state.");
+        // An old automatic directory receipt may still contain a filename
+        // cursor that would hide a newly arrived earlier file. Its identity
+        // is retained, but its old progress is deliberately ignored.
+        var source = reopened.GetSourceState(root.CanonicalPath)!.Value;
+        var automaticKey = $"background:inventory:{root.Id}:{source.Generation}:ScanDirectory:True:{dir}";
+        var oldReceipt = reopened.BeginOrResumeRegularScan(automaticKey, root.Id,
+            dir, root.CanonicalPath, beginManualEpoch: false);
+        if (!reopened.SaveRegularScanFile(automaticKey, dir, "z.jpg", 999,
+                source.Generation, oldReceipt.Epoch))
+            throw new Exception("Could not seed legacy automatic receipt.");
+        WriteJpeg(Path.Combine(dir, "0.jpg"));
+        var recovered = scanner2.ScanDirectory(root, dir, true,
+            durableScanKey: automaticKey, catalogOwnedProgress: true);
+        if (recovered.Updated != 1 || recovered.ImageFilesSeen != 3 ||
+            reopened.GetFolderImportState(root.Id)?.CataloguedCount != 3)
+            throw new Exception("Automatic recovery trusted stale filename progress.");
+        var repeated = scanner2.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: "manual:catalog:third", catalogOwnedProgress: true);
+        if (repeated.Updated != 0 || repeated.Removed != 0 ||
+            reopened.GetFolderImportState(root.Id)?.CataloguedCount != 3)
+            throw new Exception("Unchanged images were reimported or folder count reset.");
     }
 
     private static void FirstPassDirectorySurvivesJobs()
@@ -2454,6 +2561,61 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
+    private static void SchedulerNestedCatalogStepSharesOwner()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var yieldRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var order = new List<string>();
+            var attempts = 0;
+            var owner = scheduler.EnqueueAsync("test:catalog-owner",
+                SchedulerPriority.Background, async token =>
+                {
+                    if (Interlocked.Increment(ref attempts) == 1)
+                    {
+                        using var registration = token.Register(() => yieldRequested.TrySetResult());
+                        started.TrySetResult();
+                        // A safe file boundary may have to complete a dependent
+                        // catalog step even after the owner was asked to yield.
+                        await release.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                        await scheduler.EnqueueAsync("test:catalog-dependent",
+                            SchedulerPriority.Background,
+                            _ =>
+                            {
+                                order.Add("dependent");
+                                return Task.CompletedTask;
+                            }, workKind: SchedulerWorkKind.Catalog)
+                            .WaitAsync(TimeSpan.FromSeconds(5));
+                        token.ThrowIfCancellationRequested();
+                        throw new Exception("Owner did not observe its requested yield.");
+                    }
+                    order.Add("resumed");
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var competitor = scheduler.EnqueueAsync("test:catalog-competitor",
+                SchedulerPriority.ManualAction, _ =>
+                {
+                    order.Add("competitor");
+                    return Task.CompletedTask;
+                }, workKind: SchedulerWorkKind.Catalog);
+            try
+            {
+                await yieldRequested.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                if (competitor.IsCompleted)
+                    throw new Exception("A different catalog owner crossed the safe boundary.");
+            }
+            finally { release.TrySetResult(); }
+            await Task.WhenAll(owner, competitor).WaitAsync(TimeSpan.FromSeconds(10));
+            if (attempts != 2 ||
+                !order.SequenceEqual(["dependent", "competitor", "resumed"]))
+                throw new Exception("Dependent catalog work did not preserve owner and queue order.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
     private static void SchedulerInteractivePreemptsUserWork()
     {
         static async Task Check()
@@ -2509,7 +2671,7 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void SchedulerInteractiveDoesNotWaitForBlockedBackground()
+    private static void SchedulerInteractiveWaitsForSafeBoundary()
     {
         static async Task Check()
         {
@@ -2522,11 +2684,16 @@ internal static class Program
             {
                 await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 var ran = false;
-                await scheduler.EnqueueAsync("remove-folder", SchedulerPriority.Interactive,
-                    _ => { ran = true; return Task.CompletedTask; })
-                    .WaitAsync(TimeSpan.FromSeconds(5));
-                if (!ran || worker.IsCompleted)
-                    throw new Exception("Interactive catalog lane was blocked by background work.");
+                var next = scheduler.EnqueueAsync("remove-folder",
+                    SchedulerPriority.Interactive,
+                    _ => { ran = true; return Task.CompletedTask; });
+                await Task.Delay(400);
+                if (ran || next.IsCompleted || worker.IsCompleted)
+                    throw new Exception("A second catalog owner bypassed a noninterruptible safe boundary.");
+                release.TrySetResult();
+                await next.WaitAsync(TimeSpan.FromSeconds(5));
+                if (!ran)
+                    throw new Exception("Higher priority catalog operation did not run after the boundary.");
             }
             finally
             {
@@ -2554,14 +2721,16 @@ internal static class Program
             {
                 await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 var readCompleted = false;
+                var competing = scheduler.EnqueueAsync("newer-user-job",
+                    SchedulerPriority.ManualAction, _ => Task.CompletedTask);
                 await scheduler.EnqueueAsync("gallery-catalog-read", SchedulerPriority.Interactive,
                     _ =>
                     {
                         readCompleted = true;
                         return Task.CompletedTask;
                     }, workKind: SchedulerWorkKind.CatalogRead).WaitAsync(TimeSpan.FromSeconds(5));
-                if (!readCompleted || scanner.IsCompleted)
-                    throw new Exception("UI catalog read waited behind a network scan.");
+                if (!readCompleted || scanner.IsCompleted || competing.IsCompleted)
+                    throw new Exception("UI catalog read waited behind a running or queued catalog job.");
             }
             finally
             {
@@ -2723,6 +2892,110 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
+    private static void DatabaseMaintenancePauseDrainsCatalogWork()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var yielded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var resumed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var attempts = 0;
+            var scan = scheduler.EnqueueAsync("test:maintenance-scan",
+                SchedulerPriority.Background, async token =>
+                {
+                    if (Interlocked.Increment(ref attempts) == 1)
+                    {
+                        entered.TrySetResult();
+                        try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+                        finally { yielded.TrySetResult(); }
+                    }
+                    else resumed.TrySetResult();
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using (await scheduler.AcquireMaintenancePauseAsync()
+                .WaitAsync(TimeSpan.FromSeconds(5)))
+            {
+                if (!yielded.Task.IsCompleted || resumed.Task.IsCompleted)
+                    throw new Exception("Maintenance overlapped or restarted a catalog scan.");
+                await scheduler.EnqueueAsync("test:maintenance-gallery",
+                    SchedulerPriority.Interactive, _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.BrowseRead)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                if (resumed.Task.IsCompleted ||
+                    scheduler.Snapshot().Any(job =>
+                        job.WorkKind == SchedulerWorkKind.DatabaseBackup))
+                    throw new Exception("Maintenance blocked gallery or appeared as a scheduler job.");
+            }
+            await scan.WaitAsync(TimeSpan.FromSeconds(5));
+            if (attempts != 2 || !resumed.Task.IsCompleted)
+                throw new Exception("Original scan did not resume after maintenance.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void GalleryPresentationDoesNotCompeteWithCatalogJobs()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var running = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var galleryRunning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var galleryRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var attempts = 0;
+            var review = scheduler.EnqueueAsync("test:review-gallery-independent",
+                SchedulerPriority.Idle, async token =>
+                {
+                    Interlocked.Increment(ref attempts);
+                    running.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            try
+            {
+                await running.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var gallery = scheduler.EnqueueAsync("test:independent-gallery",
+                    SchedulerPriority.Interactive, async token =>
+                    {
+                        galleryRunning.TrySetResult();
+                        await galleryRelease.Task.WaitAsync(token);
+                    }, workKind: SchedulerWorkKind.BrowseRead);
+                // Admission of a presentation read is synchronous with
+                // submission, even while the logical scheduler is occupied.
+                // It must not wait for the next journal/controller probe.
+                if (scheduler.Snapshot().Single(job =>
+                        job.Key == "test:independent-gallery").State != SchedulerJobState.Running)
+                    throw new Exception("Gallery admission still depends on scheduler arbitration.");
+                await galleryRunning.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var thumbnail = scheduler.EnqueueAsync("test:visible-thumb",
+                    SchedulerPriority.Idle, _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.ThumbnailRead);
+                var catalogRead = scheduler.EnqueueAsync("test:visible-catalog",
+                    SchedulerPriority.Idle, _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.CatalogRead);
+                var viewerRead = scheduler.EnqueueAsync("test:visible-original",
+                    SchedulerPriority.Idle, _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.ViewerRead);
+                await Task.WhenAll(thumbnail, catalogRead, viewerRead)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                await Task.Delay(300);
+                if (attempts != 1 || scheduler.Snapshot().Any(x =>
+                    x.Key == "test:review-gallery-independent" &&
+                    x.State == SchedulerJobState.YieldRequested))
+                    throw new Exception("Independent presentation or catalog reads yielded the active inventory.");
+                release.TrySetResult();
+                await review.WaitAsync(TimeSpan.FromSeconds(5));
+                await scheduler.EnqueueAsync("test:next-review", SchedulerPriority.Idle,
+                    _ => Task.CompletedTask, workKind: SchedulerWorkKind.CatalogScan)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                galleryRelease.TrySetResult();
+                await gallery.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            finally { release.TrySetResult(); galleryRelease.TrySetResult(); }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
     private static void SchedulerViewerReadIsIndependent()
     {
         static async Task Check()
@@ -2808,7 +3081,7 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void SchedulerManualScanDoesNotWaitForBlockedBackground()
+    private static void SchedulerManualScanWaitsForSafeBoundary()
     {
         static async Task Check()
         {
@@ -2821,13 +3094,17 @@ internal static class Program
             try
             {
                 await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                var manualRan = false;
-                await scheduler.EnqueueAsync("manual-folder-scan",
+                var ran = false;
+                var next = scheduler.EnqueueAsync("manual-folder-scan",
                     SchedulerPriority.UserAction,
-                    _ => { manualRan = true; return Task.CompletedTask; })
-                    .WaitAsync(TimeSpan.FromSeconds(5));
-                if (!manualRan || background.IsCompleted)
-                    throw new Exception("Manual scan waited behind non-cancelable background IO.");
+                    _ => { ran = true; return Task.CompletedTask; });
+                await Task.Delay(400);
+                if (ran || next.IsCompleted || background.IsCompleted)
+                    throw new Exception("A second catalog owner bypassed a noninterruptible safe boundary.");
+                release.TrySetResult();
+                await next.WaitAsync(TimeSpan.FromSeconds(5));
+                if (!ran)
+                    throw new Exception("Higher priority catalog operation did not run after the boundary.");
             }
             finally
             {
@@ -2838,7 +3115,7 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void SchedulerManualOvertakesBlockedInitialImport()
+    private static void SchedulerManualWaitsForInitialImportBoundary()
     {
         static async Task Check()
         {
@@ -2851,13 +3128,17 @@ internal static class Program
             try
             {
                 await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                var executed = false;
-                await scheduler.EnqueueAsync("manual:chosen-directory",
+                var ran = false;
+                var next = scheduler.EnqueueAsync("manual:chosen-directory",
                     SchedulerPriority.ManualAction,
-                    _ => { executed = true; return Task.CompletedTask; })
-                    .WaitAsync(TimeSpan.FromSeconds(5));
-                if (!executed || initial.IsCompleted)
-                    throw new Exception("Manual scan waited for blocked initial import.");
+                    _ => { ran = true; return Task.CompletedTask; });
+                await Task.Delay(400);
+                if (ran || next.IsCompleted || initial.IsCompleted)
+                    throw new Exception("A second catalog owner bypassed a noninterruptible safe boundary.");
+                release.TrySetResult();
+                await next.WaitAsync(TimeSpan.FromSeconds(5));
+                if (!ran)
+                    throw new Exception("Higher priority catalog operation did not run after the boundary.");
             }
             finally
             {
@@ -3175,7 +3456,7 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void FolderRemovalBypassesBlockedBackground()
+    private static void FolderRemovalWaitsForSafeBoundary()
     {
         static async Task Check()
         {
@@ -3194,17 +3475,21 @@ internal static class Program
             try
             {
                 await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                await scheduler.EnqueueAsync("remove-root", SchedulerPriority.Interactive,
+                var remove = scheduler.EnqueueAsync("remove-root", SchedulerPriority.Interactive,
                     _ =>
                     {
                         new FolderRepository(db).Remove(root.Id);
                         return Task.CompletedTask;
-                    }).WaitAsync(TimeSpan.FromSeconds(5));
+                    });
+                await Task.Delay(400);
+                if (remove.IsCompleted)
+                    throw new Exception("Removal overlapped an active catalog owner.");
+                Require(db, 1);
+                release.TrySetResult();
+                await remove.WaitAsync(TimeSpan.FromSeconds(5));
                 Require(db, 0);
                 if (!File.Exists(imagePath))
                     throw new Exception("Removing monitored folder touched original file.");
-                if (background.IsCompleted)
-                    throw new Exception("Test background operation was not actually blocked.");
             }
             finally
             {
@@ -3755,16 +4040,38 @@ internal static class Program
         var result = scanner.Scan(root);
         if (result.Failed != 1 || result.Removed != 1)
             throw new Exception($"Failed-image reconciliation: failed={result.Failed}, removed={result.Removed}");
-        Require(db, 1);
+        Require(db, 2);
         using var conn = db.OpenConnection();
         using var query = conn.CreateCommand();
-        query.CommandText = "SELECT local_path FROM images";
+        query.CommandText = "SELECT local_path FROM images WHERE import_error IS NULL";
         if (!string.Equals(query.ExecuteScalar() as string, retained,
             StringComparison.OrdinalIgnoreCase))
             throw new Exception("Old name survived despite complete directory inventory.");
         if (new BrowseCacheRepository(db).GetIndex(96).Any(entry =>
             string.Equals(entry.FileName, "renamed-original.jpg", StringComparison.OrdinalIgnoreCase)))
             throw new Exception("Old name survived in browse index.");
+        query.CommandText = "SELECT thumbnail_path FROM images WHERE import_error IS NOT NULL";
+        if (query.ExecuteScalar() is not string placeholder || !File.Exists(placeholder))
+            throw new Exception("Failed file has no durable placeholder.");
+        var errorEntries = new BrowseCacheRepository(db).GetGalleryIndex(96)
+            .Where(entry => entry.HasImportError).ToArray();
+        if (errorEntries.Length != 1 || errorEntries[0].FileName != "broken.jpg")
+            throw new Exception("Gallery did not project the persistent import error.");
+        var unchanged = scanner.ScanDirectory(root, root.LocalPath, true,
+            catalogOwnedProgress: true);
+        if (unchanged.Failed != 0 || unchanged.Updated != 0)
+            throw new Exception("Unchanged import error was retried.");
+        var inventory = new CatalogInventoryCheck(db).Check(root, [], [],
+            CancellationToken.None);
+        if (inventory.Changes.Count != 0)
+            throw new Exception("Passive inventory repeatedly requested failed image.");
+        WriteJpeg(broken);
+        var repaired = scanner.ScanFile(root, broken, forceExifRefresh: true);
+        query.CommandText = "SELECT COUNT(*) FROM images WHERE import_error IS NOT NULL";
+        if (repaired.Updated != 1 || Convert.ToInt32(query.ExecuteScalar()) != 0)
+            throw new Exception("Successful reread did not clear persistent import error.");
+        if (new BrowseCacheRepository(db).GetGalleryIndex(96).Any(entry => entry.HasImportError))
+            throw new Exception("Repaired image remained in the error projection.");
     }
 
     private static void ExcludedSubtreeIsRemoved()

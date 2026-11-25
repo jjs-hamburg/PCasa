@@ -78,7 +78,7 @@ public sealed class BrowseCacheRepository
             SELECT id,photo_folder_id,local_path,thumbnail_path,
                    modified_utc_ticks,width,height
             FROM images
-            WHERE id=$id AND photo_folder_id IS NOT NULL;
+            WHERE id=$id AND photo_folder_id IS NOT NULL AND import_error IS NULL;
             """;
         command.Parameters.AddWithValue("$id", imageId);
         using var reader = command.ExecuteReader();
@@ -144,8 +144,10 @@ public sealed class BrowseCacheRepository
                 -- Legacy JPEG fallbacks are unsafe for PSD: they may
                 -- represent an embedded crop in the wrong orientation.
                 -- Show no fallback until the merged-composite tier is ready.
-                CASE WHEN te.image_id IS NULL AND LOWER(i.extension) <> '.psd'
-                     THEN i.thumbnail_path ELSE NULL END
+                CASE WHEN te.image_id IS NULL AND
+                    (LOWER(i.extension) <> '.psd' OR i.import_error IS NOT NULL)
+                     THEN i.thumbnail_path ELSE NULL END,
+                CASE WHEN i.import_error IS NOT NULL THEN 1 ELSE 0 END
             FROM images i
             INNER JOIN photo_folders pf ON pf.id = i.photo_folder_id
             """ + (includeMissing ? " LEFT JOIN " : " INNER JOIN ") + """
@@ -196,7 +198,8 @@ public sealed class BrowseCacheRepository
                     ? null : ParseCaptureTime(reader.GetString(15)),
                 reader.GetInt32(16),
                 reader.GetInt32(17),
-                reader.IsDBNull(18) ? null : reader.GetString(18)));
+                reader.IsDBNull(18) ? null : reader.GetString(18),
+                HasImportError: reader.GetInt32(19) != 0));
         }
 
         return result;
@@ -239,8 +242,8 @@ public sealed class BrowseCacheRepository
             "NOT EXISTS (SELECT 1 FROM thumbnail_entries te WHERE te.image_id = i.id " +
             "AND te.tier = " + name +
             " AND te.source_modified_utc_ticks = i.modified_utc_ticks)"));
-        var predicate = "EXISTS (SELECT 1 FROM browse_cache_jobs j WHERE j.image_id = i.id)" +
-            " OR (" + missingTiers + ")";
+        var predicate = "i.import_error IS NULL AND (EXISTS (SELECT 1 FROM browse_cache_jobs j WHERE j.image_id = i.id)" +
+            " OR (" + missingTiers + "))";
 
         command.CommandText = countOnly
             ? $"SELECT COUNT(*) FROM images i WHERE i.photo_folder_id IS NOT NULL AND {predicate};"

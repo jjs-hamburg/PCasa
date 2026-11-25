@@ -40,16 +40,6 @@ public sealed record ScanResult(
 
 public sealed class FolderScanner
 {
-    private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".gif",
-        ".webp", ".heic", ".heif", ".avif", ".jxl", ".psd",
-        ".arw", ".nef", ".nrw", ".cr2", ".cr3", ".dng",
-        ".raf", ".rw2", ".orf", ".pef", ".srw", ".crw"
-    };
-
-    static FolderScanner() => SupportedExtensions.UnionWith(VideoFormats.SupportedExtensions);
-
     /// <summary>
     /// Durable-for-this-session enumeration cursor. Scanner yields may restart
     /// the worker delegate, but never restart already traversed NAS folders.
@@ -103,24 +93,27 @@ public sealed class FolderScanner
     }
 
     private readonly ImageCatalogRepository _catalog;
-    private readonly ThumbnailCache _thumbnailCache;
+    private readonly IFolderImportMedia _thumbnailCache;
+    private readonly Func<IImportExifReader> _exifReaderFactory;
     private readonly FolderRepository _folderRepository;
     private readonly BrowseThumbnailProfileRepository _browseProfile;
 
     public FolderScanner(
         ImageCatalogRepository catalog,
-        ThumbnailCache thumbnailCache,
+        IFolderImportMedia thumbnailCache,
         FolderRepository? folderRepository = null,
-        BrowseThumbnailProfileRepository? profileRepository = null)
+        BrowseThumbnailProfileRepository? profileRepository = null,
+        Func<IImportExifReader>? exifReaderFactory = null)
     {
         _browseProfile = profileRepository ?? new BrowseThumbnailProfileRepository(new LocalDatabase());
         _catalog = catalog;
         _thumbnailCache = thumbnailCache;
+        _exifReaderFactory = exifReaderFactory ?? (() => new ImageExifReader());
         _folderRepository = folderRepository ?? new FolderRepository(new LocalDatabase());
     }
 
     public static bool IsSupportedImagePath(string path)
-        => SupportedExtensions.Contains(Path.GetExtension(path));
+        => CatalogMediaFormats.IsSupported(path);
 
     public ScanResult Scan(
         MonitoredFolder folder,
@@ -142,12 +135,16 @@ public sealed class FolderScanner
         ScanResumeState? resume = null,
         bool durableInitialImport = false,
         string? durableScanKey = null,
-        bool preferFirstPass = false)
+        bool preferFirstPass = false,
+        bool catalogOwnedProgress = false,
+        bool retryFailedFiles = false)
     {
         return ScanDirectoryLocked(
             folder, localDirectory, recursive, progress, cancellationToken,
             resume: resume, durableInitialImport: durableInitialImport,
-            durableScanKey: durableScanKey, preferFirstPass: preferFirstPass);
+            durableScanKey: durableScanKey, preferFirstPass: preferFirstPass,
+            catalogOwnedProgress: catalogOwnedProgress,
+            retryFailedFiles: retryFailedFiles);
     }
 
     public ScanResult ScanFile(
@@ -179,9 +176,11 @@ public sealed class FolderScanner
         bool durableInitialImport = false,
         string? durableScanKey = null,
         bool forceExifRefresh = false,
-        bool preferFirstPass = false)
+        bool preferFirstPass = false,
+        bool catalogOwnedProgress = false,
+        bool retryFailedFiles = false)
     {
-        var scanRoot = Path.GetFullPath(localDirectory).Replace('/', '\\');
+        var scanRoot = CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(localDirectory));
         EnsureInsideMonitoredFolder(folder, scanRoot);
 
         if (!Directory.Exists(scanRoot))
@@ -207,28 +206,33 @@ public sealed class FolderScanner
             throw new OperationCanceledException(
                 "The scan source configuration changed during a paused inventory.");
         }
+        // Validate current exclusions before allocating a durable scan receipt.
+        // A stale watcher event must not leave an orphan inventory for a
+        // directory excluded since the event was queued.
+        var exclusions = _folderRepository.GetExcludedPaths(folder.Id);
+        var inclusions = _folderRepository.GetIncludedPaths(folder.Id);
+        if (FolderExclusionRules.IsExcluded(scanRoot, exclusions, inclusions) &&
+            !FolderExclusionRules.MayContainIncludedDescendant(scanRoot, inclusions))
+            return new ScanResult(0, 0, 0, 0);
         if (resume is not null) resume.SourceGeneration = generation;
         // Same scanner and traversal for every inventory. The durable key
         // belongs to one scan request; completed requests erase their receipt.
         var regularCheckpoint = durableScanKey is not null
             ? _folderRepository.BeginOrResumeRegularScan(
                 durableScanKey, folder.Id, scanRoot, folder.CanonicalPath,
-                beginManualEpoch: false)
+                beginManualEpoch: false,
+                loadLegacyProgress: !catalogOwnedProgress)
             : null;
-        if (regularCheckpoint is not null &&
+        if (!catalogOwnedProgress && regularCheckpoint is not null &&
             resume is not null && resume.Enumerator is null &&
             resume.ImageFilesSeen == 0)
             resume.ImageFilesSeen = regularCheckpoint.Checked;
         var scanEpoch = resume?.ScanEpoch ?? regularCheckpoint?.Epoch ??
             _folderRepository.GetScanEpoch(folder.CanonicalPath);
         if (resume is not null) resume.ScanEpoch = scanEpoch;
-        var exclusions = _folderRepository.GetExcludedPaths(folder.Id);
-        var inclusions = _folderRepository.GetIncludedPaths(folder.Id);
-        if (FolderExclusionRules.IsExcluded(scanRoot, exclusions, inclusions) &&
-            !FolderExclusionRules.MayContainIncludedDescendant(scanRoot, inclusions))
-            return new ScanResult(0, 0, 0, 0);
 
-        var imageFilesSeen = resume?.ImageFilesSeen ?? regularCheckpoint?.Checked ?? 0;
+        var imageFilesSeen = resume?.ImageFilesSeen ??
+            (catalogOwnedProgress ? 0 : regularCheckpoint?.Checked ?? 0);
         var updated = resume?.Updated ?? 0;
         var unchanged = resume?.Unchanged ?? 0;
         var added = resume?.Added ?? 0;
@@ -247,8 +251,12 @@ public sealed class FolderScanner
             : null;
 
         // First-import and other scan receipts drive the same enumerator.
-        var persistentScan = durableInitialImport || durableScanKey is not null;
-        var completedDirectories = durableInitialImport
+        // Re-enumerate every current directory entry; previous filename
+        // frontiers cannot establish that a file is unchanged or still exists.
+        // Existing valid rows skip expensive import work by file identity.
+        var persistentScan = !catalogOwnedProgress &&
+            (durableInitialImport || durableScanKey is not null);
+        var completedDirectories = !persistentScan ? null : durableInitialImport
             ? resume?.CompletedInitialDirectories ??
                 _folderRepository.GetCompletedInitialScanDirectories(
                     folder.Id, generation, scanEpoch)
@@ -257,7 +265,7 @@ public sealed class FolderScanner
                 : null;
         if (persistentScan && resume is not null)
             resume.CompletedInitialDirectories = completedDirectories;
-        var fileCursors = durableInitialImport
+        var fileCursors = !persistentScan ? null : durableInitialImport
             ? resume?.InitialFileCursors ??
                 _folderRepository.GetInitialScanFileCursors(folder.Id, generation, scanEpoch)
             : durableScanKey is not null
@@ -271,7 +279,7 @@ public sealed class FolderScanner
         // Upgrade the old package's existing receipts before they are deleted
         // on completion. Background verification deliberately ignores this
         // directory frontier, so new/modified/deleted photos are checked later.
-        if (preferFirstPass && durableScanKey is not null)
+        if (persistentScan && preferFirstPass && durableScanKey is not null)
         {
             _folderRepository.ImportFirstPassFromRegularScans(
                 folder.Id, generation);
@@ -290,7 +298,7 @@ public sealed class FolderScanner
         // already-indexed originals never go through metadata/decode again.
         // P4 full verification deliberately does not use this shortcut.
         HashSet<string>? indexedFirstPassPaths = null;
-        if (preferFirstPass && specificFile is null)
+        if (persistentScan && preferFirstPass && specificFile is null)
         {
             indexedFirstPassPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             using var snapshotDb = _catalog.Database.OpenConnection();
@@ -388,7 +396,7 @@ public sealed class FolderScanner
         var scanSession = _catalog.CreateScanSession(
             folder.CanonicalPath, folder.Id, generation, cancellationToken);
         // ExifTool is reused throughout this scan, not restarted per file.
-        using var exifReader = new ImageExifReader();
+        using var exifReader = _exifReaderFactory();
         var enumerator = resume?.Enumerator ??
             (specificFile is null
                 ? EnumerateIncludedFiles(
@@ -426,7 +434,7 @@ public sealed class FolderScanner
                 }
 
                 var extension = Path.GetExtension(localPath);
-                if (!SupportedExtensions.Contains(extension))
+                if (!CatalogMediaFormats.IsSupported(localPath))
                 {
                     if (resume is not null) resume.CurrentFile = null;
                     continue;
@@ -437,6 +445,8 @@ public sealed class FolderScanner
                 // Only local cache paths belong in the progress preview.
                 // Never ask the progress dialog to decode an SMB original.
                 string? currentThumbnailPath = null;
+                CatalogImageData? decodeIdentity = null;
+                bool firstFolderFile = false;
 
                 try
                 {
@@ -484,24 +494,38 @@ public sealed class FolderScanner
                     }
 
                     var existing = scanSession.GetState(canonicalPath);
+                    var unchangedError = !retryFailedFiles && !forceExifRefresh &&
+                        existing?.ImportError is not null &&
+                        existing.FileSize == fileLength &&
+                        existing.ModifiedUtcTicks == modifiedUtcTicks &&
+                        (folder.IsNetwork || existing.CreatedUtcTicks == createdUtcTicks);
+                    firstFolderFile = firstFileInThisScanFolder;
                     var currentIndex = existing is not null &&
+                        existing.ImportError is null &&
                         existing.FileSize == fileLength &&
                         existing.ModifiedUtcTicks == modifiedUtcTicks &&
                         File.Exists(existing.ThumbnailPath) &&
-                        (!RawImageSource.IsRawPath(localPath) ||
+                        (!_thumbnailCache.IsRawPath(localPath) ||
                          Path.GetFileName(existing.ThumbnailPath).StartsWith(
                              "raw2-", StringComparison.OrdinalIgnoreCase));
                     // Publish the actual pending operation BEFORE slow EXIF
                     // or thumbnail work, not after it has finished. Emit the
                     // extra UI callback only on a phase transition.
-                    var nextReadingNew = !currentIndex;
+                    var nextReadingNew = !currentIndex && !unchangedError;
                     if (readingNew != nextReadingNew)
                     {
                         readingNew = nextReadingNew;
                         ReportProgress(localPath, force: true,
                             previewCommitted: false);
                     }
-                    if (currentIndex)
+                    if (unchangedError)
+                    {
+                        // Known permanent error with an identical stamp:
+                        // neither decode the original nor queue another retry.
+                        currentThumbnailPath = existing!.ThumbnailPath;
+                        unchanged++;
+                    }
+                    else if (currentIndex)
                     {
                         if (existing.PhotoFolderId != photoFolderId ||
                             !string.Equals(existing.LocalPath, localPath, StringComparison.OrdinalIgnoreCase))
@@ -546,9 +570,10 @@ public sealed class FolderScanner
                         cancellationToken.ThrowIfCancellationRequested();
 
                         scanSession.FlushPending();
-                        var renderPath = VideoFormats.IsVideo(localPath)
-                            ? VideoThumbnailSource.Resolve(localPath, cancellationToken)
-                            : RawImageSource.Resolve(localPath, cancellationToken);
+                        decodeIdentity = new CatalogImageData(folder.Id, photoFolderId,
+                            localPath, canonicalPath, file.Name, extension.ToLowerInvariant(),
+                            fileLength, modifiedUtcTicks, 256, 256, "", createdUtcTicks);
+                        var renderPath = _thumbnailCache.ResolveSource(localPath, cancellationToken);
                         var thumbnail = _thumbnailCache.CreateOrUpdate(
                             renderPath,
                             canonicalPath,
@@ -565,20 +590,23 @@ public sealed class FolderScanner
                         // Each image owns exactly one pack writer lifetime.
                         // A later cache compaction must never race a cached,
                         // still-open handle to a previous pack file.
-                        using var packStore = new PackedThumbnailStore();
+                        using var packStore = _thumbnailCache.CreatePackStore();
                         var smallTiers = profile.Tiers.Where(tier => tier <= 512).ToArray();
                         var largeTiers = profile.Tiers.Where(tier => tier > 512).ToArray();
                         var preparedSmall = smallTiers.Length > 0
                             ? packStore.PrepareTiers(
                                 thumbnail.Path, new BrowseThumbnailProfile(smallTiers),
                                 cancellationToken)
-                            : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
+                            : Array.Empty<ImportThumbnailTier>();
                         var preparedLarge = largeTiers.Length > 0
                             ? packStore.PrepareTiers(
                                 renderPath, new BrowseThumbnailProfile(largeTiers),
                                 cancellationToken, originalSourcePath: localPath)
-                            : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
-                        var keywords = ImageTagRepository.ReadKeywords(localPath);
+                            : Array.Empty<ImportThumbnailTier>();
+                        // Only source decode failures qualify as permanent
+                        // import errors; do not mislabel database/write faults.
+                        decodeIdentity = null;
+                        var keywords = _thumbnailCache.ReadKeywords(localPath);
                         var exif = exifReader.Read(localPath, cancellationToken);
                         cancellationToken.ThrowIfCancellationRequested();
 
@@ -644,7 +672,62 @@ public sealed class FolderScanner
                         throw;
                     scanSession.RollbackPending();
                     failed++;
-                    failedDirectories.Add(Path.GetDirectoryName(localPath) ?? scanRoot);
+                    if (decodeIdentity is { } identity && _thumbnailCache.IsDecodeFailure(ex))
+                    {
+                        using var sourceLock = SourceFileLocks.Enter(localPath, cancellationToken);
+                        // Verify access and the same file identity again. A
+                        // disappearing/locked NAS source is not a corrupt file.
+                        using (var accessible = File.Open(localPath, FileMode.Open,
+                            FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                        {
+                            var now = new FileInfo(localPath);
+                            if (accessible.Length != identity.FileSize ||
+                                now.LastWriteTimeUtc.Ticks != identity.ModifiedUtcTicks ||
+                                (!folder.IsNetwork && now.CreationTimeUtc.Ticks != identity.CreatedUtcTicks))
+                                throw new IOException("Source changed during import: " + localPath);
+                            _ = accessible.ReadByte();
+                        }
+                        var placeholder = _thumbnailCache.CreateImportErrorPlaceholder(
+                            identity.CanonicalPath, identity.FileSize,
+                            identity.ModifiedUtcTicks, cancellationToken);
+                        using var store = _thumbnailCache.CreatePackStore();
+                        var prepared = store.PrepareTiers(placeholder.Path, profile,
+                            cancellationToken);
+                        lock (CatalogRemovalService.CacheLock)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            var locations = store.AppendPrepared(prepared, cancellationToken);
+                            scanSession.Upsert(identity with
+                            {
+                                ThumbnailPath = placeholder.Path,
+                                ImportError = ex.Message
+                            });
+                            scanSession.SaveBrowseLocations(identity.CanonicalPath,
+                                identity.ModifiedUtcTicks, locations, profile.Tiers.Count);
+                            scanSession.FlushPending();
+                        }
+                        currentThumbnailPath = placeholder.Path;
+                        updated++;
+                        if (firstFolderFile)
+                        {
+                            discoveredFolderId = identity.PhotoFolderId;
+                            discoveredFolderPath = Path.GetDirectoryName(localPath);
+                        }
+                        if (publishCatalogChange)
+                        {
+                            CatalogChanges.PublishImageIndexed(identity.CanonicalPath,
+                                identity.PhotoFolderId);
+                            CatalogChanges.PublishImageCommitted();
+                        }
+                    }
+                    else
+                    {
+                        // Transient source errors cannot acknowledge a
+                        // complete directory or permanently suppress retry.
+                        if (ex is IOException or UnauthorizedAccessException)
+                            throw;
+                        failedDirectories.Add(Path.GetDirectoryName(localPath) ?? scanRoot);
+                    }
                     PCasaDiagnostics.WriteMessage("Scan.FileSkipped",
                         $"File={localPath}; {ex.GetType().Name}: {ex.Message}");
                     if (firstFailure is null)
@@ -979,47 +1062,11 @@ public sealed class FolderScanner
 
     private static void EnsureInsideMonitoredFolder(MonitoredFolder folder, string scanRoot)
     {
-        var monitoredRoot = Path.GetFullPath(folder.LocalPath)
-            .Replace('/', '\\')
-            .TrimEnd('\\');
-        var normalizedScanRoot = scanRoot.TrimEnd('\\');
-
-        if (string.Equals(
-                monitoredRoot,
-                normalizedScanRoot,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        var prefix = monitoredRoot + "\\";
-        if (!normalizedScanRoot.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
+        if (!FolderExclusionRules.IsAtOrBelow(scanRoot, folder.LocalPath))
             throw new InvalidOperationException(
                 $"Der Ordner liegt nicht innerhalb des überwachten Bereichs: {scanRoot}");
-        }
     }
 
-    internal static string ResolveCanonicalFullPath(
-        MonitoredFolder folder,
-        string fullLocalPath)
-    {
-        var normalizedLocal = Path.GetFullPath(fullLocalPath);
-
-        if (string.Equals(
-            folder.LocalPath,
-            folder.CanonicalPath,
-            StringComparison.OrdinalIgnoreCase))
-        {
-            return normalizedLocal.Replace('/', '\\');
-        }
-
-        var suffix = Path.GetRelativePath(folder.LocalPath, normalizedLocal);
-        if (suffix == ".")
-        {
-            return folder.CanonicalPath.Replace('/', '\\');
-        }
-
-        return Path.Combine(folder.CanonicalPath, suffix).Replace('/', '\\');
-    }
+    internal static string ResolveCanonicalFullPath(MonitoredFolder folder, string fullLocalPath)
+        => CatalogPathPolicy.ResolveCanonicalFullPath(folder, fullLocalPath);
 }

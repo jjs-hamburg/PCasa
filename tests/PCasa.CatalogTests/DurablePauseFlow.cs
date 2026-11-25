@@ -15,7 +15,15 @@ internal static class DurablePauseFlow
         {
             ExercisePauseAndRestart(dir).GetAwaiter().GetResult();
             ExerciseAutomaticControlPersistence(dir).GetAwaiter().GetResult();
+            ExerciseInitialImportStartupRelease(dir);
             ExerciseImageEditFailureLifecycle(dir).GetAwaiter().GetResult();
+            ExerciseSessionFileJobLifetime(dir).GetAwaiter().GetResult();
+            ExerciseRetirementBeforeBlockedRead(dir).GetAwaiter().GetResult();
+            ExerciseYieldDuringShutdown(dir).GetAwaiter().GetResult();
+            ExerciseSharedUserAcceptanceOrder(dir);
+            ExerciseLegacyFirstImportOrder(dir);
+            ExerciseNewImportPreemptsOlderManualScan(dir).GetAwaiter().GetResult();
+            ExerciseAcceptedRecipeReservesRank(dir).GetAwaiter().GetResult();
             Console.WriteLine("DURABLE / AUTOMATIC PAUSE, RESUME, PRIORITY PASS");
             return 0;
         }
@@ -28,6 +36,401 @@ internal static class DurablePauseFlow
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    private static async Task ExerciseAcceptedRecipeReservesRank(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "preparing-recipe-rank.db"));
+        database.Initialize();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var yielded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var preparing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFactory = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var attempts = 0;
+        SchedulerTaskPackage Build(string key, string payload)
+        {
+            if (key == "recipe:newer")
+            {
+                preparing.TrySetResult();
+                releaseFactory.Task.GetAwaiter().GetResult();
+            }
+            var package = new SchedulerTaskPackage(key);
+            package.AddStep(async token =>
+            {
+                if (key == "recipe:older" && Interlocked.Increment(ref attempts) == 1)
+                {
+                    entered.TrySetResult();
+                    using var registration = token.Register(() => yielded.TrySetResult());
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                events.Enqueue(key);
+            });
+            return package;
+        }
+        await using var scheduler = new PCasaScheduler();
+        scheduler.EnableDurablePackages(database);
+        scheduler.RegisterDurablePackageType("manual-folder-scan-v1", Build);
+        var older = scheduler.EnqueueDurableRecipeAsync("recipe:older",
+            "manual-folder-scan-v1", "{}", SchedulerPriority.ManualAction,
+            SchedulerWorkKind.CatalogScan);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var newer = scheduler.EnqueueDurableRecipeAsync("recipe:newer",
+            "manual-folder-scan-v1", "{}", SchedulerPriority.ManualAction,
+            SchedulerWorkKind.CatalogScan);
+        try
+        {
+            await preparing.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await yielded.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            // The older job must stay yielded while the newer recipe is
+            // accepted but not yet executable. Independent UI reads still run.
+            await scheduler.EnqueueAsync("recipe:gallery",
+                SchedulerPriority.Interactive, _ => Task.CompletedTask,
+                workKind: SchedulerWorkKind.BrowseRead).WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.Delay(350);
+            if (older.IsCompleted || Volatile.Read(ref attempts) != 1)
+                throw new Exception("Older job overtook a newer accepted recipe.");
+        }
+        finally { releaseFactory.TrySetResult(); }
+        await Task.WhenAll(older, newer).WaitAsync(TimeSpan.FromSeconds(8));
+        if (!events.SequenceEqual(new[] { "recipe:newer", "recipe:older" }))
+            throw new Exception("Recipe preparation changed the global accepted order.");
+        Console.WriteLine("PASS: Accepted recipes reserve their rank before construction.");
+    }
+
+    private static async Task ExerciseNewImportPreemptsOlderManualScan(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "initial-import-preempts.db"));
+        database.Initialize();
+        var journal = new DurablePackageJournal(database);
+        var folders = new FolderRepository(database);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var attempts = 0;
+        SchedulerTaskPackage Build(string key, string payload)
+        {
+            var package = new SchedulerTaskPackage(key);
+            package.AddStep(async token =>
+            {
+                if (Interlocked.Increment(ref attempts) == 1)
+                {
+                    entered.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                events.Enqueue("older-scan");
+            });
+            return package;
+        }
+        await using var scheduler = new PCasaScheduler();
+        scheduler.EnableDurablePackages(database);
+        scheduler.RegisterDurablePackageType("manual-folder-scan-v1", Build);
+        var older = scheduler.EnqueueDurablePackageAsync(Build("older-scan", "{}"),
+            "manual-folder-scan-v1", "{}", SchedulerPriority.ManualAction,
+            SchedulerWorkKind.CatalogScan);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var source = Path.Combine(dir, "new-priority-import");
+        Directory.CreateDirectory(source);
+        folders.Add(source);
+        var accepted = folders.GetPendingFirstImportQueue().Single();
+        if (accepted.QueueOrder >= journal.Pending().Single().QueueOrder)
+            throw new Exception("New import has an older rank than the existing manual scan.");
+        var import = scheduler.EnqueueAsync($"initial:{accepted.FolderId}",
+            SchedulerPriority.ManualAction, _ =>
+            {
+                events.Enqueue("new-import");
+                return Task.CompletedTask;
+            }, workKind: SchedulerWorkKind.InitialImport, queueOrder: accepted.QueueOrder);
+        await Task.WhenAll(import, older).WaitAsync(TimeSpan.FromSeconds(8));
+        if (!events.SequenceEqual(new[] { "new-import", "older-scan" }) || attempts != 2)
+            throw new Exception("New accepted initial import did not preempt and resume the older manual scan.");
+        Console.WriteLine("PASS: Shared P0 admission dispatches newer first imports before older scans.");
+    }
+
+    private static void ExerciseLegacyFirstImportOrder(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "legacy-import-order.db"));
+        database.Initialize();
+        var folders = new FolderRepository(database);
+        var paths = new[] { "legacy-import-a", "legacy-import-b", "legacy-import-c" }
+            .Select(name => Path.Combine(dir, name)).ToArray();
+        foreach (var path in paths)
+        {
+            Directory.CreateDirectory(path);
+            folders.Add(path);
+        }
+        var roots = folders.GetAll().ToDictionary(root => root.LocalPath,
+            StringComparer.OrdinalIgnoreCase);
+        using (var db = database.OpenConnection())
+        using (var cmd = db.CreateCommand())
+        {
+            // Deliberately use a legacy user-defined order different from
+            // folder identity and insertion order.
+            cmd.CommandText = """
+                UPDATE monitored_folders
+                SET initial_scan_queue_order=CASE id
+                    WHEN $a THEN 30 WHEN $b THEN 10 WHEN $c THEN 20 END;
+                """;
+            cmd.Parameters.AddWithValue("$a", roots[paths[0]].Id);
+            cmd.Parameters.AddWithValue("$b", roots[paths[1]].Id);
+            cmd.Parameters.AddWithValue("$c", roots[paths[2]].Id);
+            cmd.ExecuteNonQuery();
+        }
+        database.Initialize();
+        var legacy = folders.GetPendingFirstImportQueue();
+        var expected = new[] { roots[paths[1]].Id, roots[paths[2]].Id, roots[paths[0]].Id };
+        if (!legacy.Select(row => row.FolderId).SequenceEqual(expected))
+            throw new Exception("Upgrade reversed legacy first-import positions.");
+        var added = Path.Combine(dir, "legacy-import-new");
+        Directory.CreateDirectory(added);
+        folders.Add(added);
+        var newId = folders.GetAll().Single(root =>
+            string.Equals(root.LocalPath, added, StringComparison.OrdinalIgnoreCase)).Id;
+        database.Initialize();
+        if (!folders.GetPendingFirstImportQueue().Select(row => row.FolderId)
+                .SequenceEqual(new[] { newId }.Concat(expected)))
+            throw new Exception("A new import did not precede the preserved legacy queue.");
+        Console.WriteLine("PASS: Legacy import order survives upgrade and new LIFO admission.");
+    }
+
+    private static void ExerciseSharedUserAcceptanceOrder(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "shared-user-order.db"));
+        database.Initialize();
+        var journal = new DurablePackageJournal(database);
+        var folders = new FolderRepository(database);
+        var first = journal.Put("before:import", "manual-scan-all-v1", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        var source = Path.Combine(dir, "shared-order-source");
+        Directory.CreateDirectory(source);
+        folders.Add(source);
+        var initial = folders.GetPendingFirstImportQueue().Single();
+        var latest = journal.Put("after:import", "manual-folder-scan-v1", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        if (!(latest.QueueOrder < initial.QueueOrder && initial.QueueOrder < first.QueueOrder))
+            throw new Exception("Imports and durable user packages have different LIFO sequences.");
+        database.Initialize();
+        folders.Add(source); // selecting the existing root is not a new acceptance
+        if (new FolderRepository(database).GetPendingFirstImportQueue().Single().QueueOrder
+                != initial.QueueOrder ||
+            new DurablePackageJournal(database).Pending().Single(row => row.Key == latest.Key)
+                .QueueOrder != latest.QueueOrder)
+            throw new Exception("Restart or duplicate acceptance changed a user job's rank.");
+        var next = journal.Put("after:restart", "manual-scan-all-v1", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        if (next.QueueOrder >= latest.QueueOrder)
+            throw new Exception("Shared acceptance sequence was reset by migration.");
+        Console.WriteLine("PASS: Initial imports and explicit user packages share durable LIFO admission.");
+    }
+
+    private static async Task ExerciseYieldDuringShutdown(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "shutdown-yield.db"));
+        database.Initialize();
+        var journal = new DurablePackageJournal(database);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var yielded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishBoundary = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        const string key = "shutdown:write";
+        SchedulerTaskPackage Build(string identity, string payload)
+        {
+            var package = new SchedulerTaskPackage(identity);
+            package.AddStep(async token =>
+            {
+                started.TrySetResult();
+                using var registration = token.Register(() => yielded.TrySetResult());
+                await finishBoundary.Task;
+                token.ThrowIfCancellationRequested();
+            });
+            return package;
+        }
+        await using var scheduler = new PCasaScheduler();
+        scheduler.EnableDurablePackages(database, retireFileJobsOnSessionEnd: true);
+        scheduler.RegisterDurablePackageType("gallery-delete-v1", Build);
+        var writing = scheduler.EnqueueDurableRecipeAsync(key,
+            "gallery-delete-v1", "{}", SchedulerPriority.Background,
+            SchedulerWorkKind.Catalog);
+        Task? higher = null;
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            higher = scheduler.EnqueueAsync("shutdown:higher",
+                SchedulerPriority.ManualAction, _ => Task.CompletedTask);
+            await yielded.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            var drain = scheduler.PrepareGracefulShutdownAsync();
+            finishBoundary.TrySetResult();
+            await drain.WaitAsync(TimeSpan.FromSeconds(8));
+            try { await writing.WaitAsync(TimeSpan.FromSeconds(8)); }
+            catch (OperationCanceledException) { }
+            if (journal.Pending().Any(row => row.Key == key) ||
+                scheduler.HasLiveExecution(key))
+                throw new Exception("Yielded file job reentered the frozen shutdown queue.");
+            if (higher.IsCompleted)
+                throw new Exception("Unrelated waiting work dispatched during shutdown.");
+        }
+        finally { finishBoundary.TrySetResult(); }
+        Console.WriteLine("PASS: Graceful shutdown does not requeue an interrupted file owner.");
+    }
+
+    private static async Task ExerciseSessionFileJobLifetime(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "session-file-jobs.db"));
+        database.Initialize();
+        var journal = new DurablePackageJournal(database);
+        journal.Put("old:transfer", "gallery-transfer-v1", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        journal.SetState("old:transfer", "running", 2);
+        journal.Put("old:scan", "manual-folder-scan-v1", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        journal.SetState("old:scan", "running", 1);
+        journal.Put("old:retry", "import-error-retry-v1", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        await using (var scheduler = new PCasaScheduler())
+        {
+            scheduler.EnableDurablePackages(database, retireFileJobsOnSessionEnd: true);
+            var pending = journal.Pending();
+            if (pending.Count != 2 ||
+                pending.Single(row => row.Key == "old:scan").CompletedSteps != 1 ||
+                !pending.Any(row => row.Key == "old:retry"))
+                throw new Exception("Startup replayed a file job or discarded a scan checkpoint.");
+            journal.Put("new:delete", "gallery-delete-v1", "{}",
+                SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+            journal.Put("new:scan", "manual-scan-all-v1", "{}",
+                SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        }
+        var remaining = journal.Pending();
+        if (remaining.Count != 3 || remaining.Any(row =>
+                !DurablePackageJournal.SurvivesSession(row.Type)))
+            throw new Exception("Shutdown retained a file job or lost a scan.");
+        using var db = database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*) FROM scheduler_packages
+             WHERE state='canceled'
+               AND ((package_key='old:transfer' AND completed_steps=2)
+                    OR package_key='new:delete');
+            """;
+        if (Convert.ToInt32(cmd.ExecuteScalar()) != 2)
+            throw new Exception("Session retirement lost the terminal audit records.");
+        Console.WriteLine("PASS: File jobs end with the session; scan receipts survive.");
+    }
+
+    private static async Task ExerciseRetirementBeforeBlockedRead(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "shutdown-blocked-read.db"));
+        database.Initialize();
+        var folders = new FolderRepository(database);
+        var source = Path.Combine(dir, "shutdown-tag-source");
+        Directory.CreateDirectory(source);
+        folders.Add(source);
+        var folderId = folders.GetAll().Single().Id;
+        long imageId;
+        using (var db = database.OpenConnection())
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.CommandText = """
+                INSERT INTO images(folder_id,local_path,canonical_path,file_name,
+                    extension,file_size,modified_utc_ticks,width,height,
+                    thumbnail_path,indexed_utc)
+                VALUES($folder,$path,$path,'offline.jpg','.jpg',100,1,10,10,'','2026-01-01')
+                RETURNING id;
+                """;
+            cmd.Parameters.AddWithValue("$folder", folderId);
+            cmd.Parameters.AddWithValue("$path", Path.Combine(source, "offline.jpg"));
+            imageId = Convert.ToInt64(cmd.ExecuteScalar());
+        }
+        var journal = new DurablePackageJournal(database);
+        await using var scheduler = new PCasaScheduler();
+        scheduler.EnableDurablePackages(database, retireFileJobsOnSessionEnd: true);
+        var tags = new ImageTagRepository(database);
+        void Stage(string owner, string keyword, bool remove)
+            => tags.QueueTagEdits(new[]
+            {
+                (ImageId: imageId, Edits: (IReadOnlyList<(string Tag, bool Remove)>)
+                    new[] { (Tag: keyword, Remove: remove) })
+            }, owner);
+        Stage("shutdown:staged-tags", "unfinished", false);
+        Stage("shutdown:older-tags", "shared", false);
+        Stage("shutdown:newer-tags", "shared", true);
+        database.Initialize();
+        if (tags.PendingImageIdsOwnedBy("shutdown:older-tags").Count != 0 ||
+            !tags.PendingImageIdsOwnedBy("shutdown:newer-tags").SequenceEqual(new[] { imageId }) ||
+            !tags.PendingImageIdsOwnedBy("shutdown:staged-tags").SequenceEqual(new[] { imageId }))
+            throw new Exception("Tag revision ownership did not survive overlapping edits and database reopen.");
+        // No original exists at this path: cancellation must be a local
+        // transaction, preserve other jobs, and restore a removed keyword.
+        using (var db = database.OpenConnection())
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE image_tags SET keywords=keywords||char(10)||'existing' WHERE image_id=$id;";
+            cmd.Parameters.AddWithValue("$id", imageId);
+            cmd.ExecuteNonQuery();
+        }
+        const string cancelKey = "shutdown:cancel-tags";
+        journal.Put(cancelKey, "tag-edit-v2", "{}", SchedulerPriority.ManualAction,
+            SchedulerWorkKind.Catalog);
+        journal.SetState(cancelKey, "running", 1);
+        Stage(cancelKey, "temporary", false);
+        Stage(cancelKey, "existing", true);
+        if (!await scheduler.DeleteDurableTaskAsync(cancelKey).WaitAsync(TimeSpan.FromSeconds(5)) ||
+            tags.PendingImageIdsOwnedBy(cancelKey).Count != 0 ||
+            tags.PendingEditsForImage(imageId).Count != 2 ||
+            !tags.PendingImageIdsOwnedBy("shutdown:newer-tags").Contains(imageId) ||
+            !(tags.GetKeywords(imageId) ?? "").Split('\n').ToHashSet()
+                .SetEquals(new[] { "unfinished", "existing" }) ||
+            journal.Pending().Any(row => row.Key == cancelKey))
+            throw new Exception("Targeted tag cancellation altered another job or lost the original projection.");
+        const string uncertainKey = "shutdown:uncertain-tags";
+        journal.Put(uncertainKey, "tag-edit-v2", "{}", SchedulerPriority.ManualAction,
+            SchedulerWorkKind.Catalog);
+        journal.SetState(uncertainKey, "running", 1);
+        Stage(uncertainKey, "uncertain", false);
+        using (var db = database.OpenConnection())
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE pending_tag_edits SET base_present=NULL WHERE owner_key=$key;";
+            cmd.Parameters.AddWithValue("$key", uncertainKey);
+            cmd.ExecuteNonQuery();
+        }
+        var refused = false;
+        try { await scheduler.DeleteDurableTaskAsync(uncertainKey); }
+        catch (InvalidOperationException) { refused = true; }
+        if (!refused || tags.PendingImageIdsOwnedBy(uncertainKey).Count != 1 ||
+            journal.Pending().Single(row => row.Key == uncertainKey).State != "paused")
+            throw new Exception("An uncertain native write was silently reversed.");
+        using (var db = database.OpenConnection())
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE pending_tag_edits SET base_present=0 WHERE owner_key=$key;";
+            cmd.Parameters.AddWithValue("$key", uncertainKey);
+            cmd.ExecuteNonQuery();
+        }
+        if (!await scheduler.DeleteDurableTaskAsync(uncertainKey))
+            throw new Exception("Confirmed cancellation could not be retried.");
+        Console.WriteLine("PASS: Owned tag cancellation preserves other jobs and refuses an uncertain native receipt.");
+        journal.Put("shutdown:staged-tags", "tag-edit-v2", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        journal.SetState("shutdown:staged-tags", "running", 1);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var read = scheduler.EnqueueAsync("shutdown:blocked-read",
+            SchedulerPriority.Interactive, async _ =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+            }, workKind: SchedulerWorkKind.BrowseRead);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await scheduler.PrepareGracefulShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            if (read.IsCompleted || journal.Pending().Any(row => row.Key == "shutdown:staged-tags") ||
+                !new OriginalWriteFailureRepository(database).IsParked(
+                    OriginalWriteFailureRepository.Tags, imageId) ||
+                tags.PendingEditsForImage(imageId).Count != 2)
+                throw new Exception("Shutdown did not park staged tag intents before blocked read disposal.");
+        }
+        finally { release.TrySetResult(); }
+        await read.WaitAsync(TimeSpan.FromSeconds(5));
+        Console.WriteLine("PASS: Session file retirement and tag review survive blocked background reads.");
     }
 
     private static async Task ExerciseImageEditFailureLifecycle(string dir)
@@ -87,25 +490,61 @@ internal static class DurablePauseFlow
         Console.WriteLine("PASS: Failed image save is terminal; next manual Save runs once.");
     }
 
+    private static void ExerciseInitialImportStartupRelease(string dir)
+    {
+        var db = new LocalDatabase(Path.Combine(dir, "initial-pause.db"));
+        db.Initialize();
+        var folders = new FolderRepository(db);
+        var path = Path.Combine(dir, "paused-import");
+        Directory.CreateDirectory(path);
+        folders.Add(path);
+        var root = folders.GetAll().Single();
+        if (!folders.SetPendingFirstImportPaused(root.Id, true))
+            throw new Exception("Initial import refused pause");
+        if (folders.GetPendingInitialScans().Any())
+            throw new Exception("Paused initial import was executable in this session");
+        var reopened = new FolderRepository(db);
+        reopened.ReleaseStartupImportPauses();
+        if (reopened.GetPendingInitialScans().Single().Id != root.Id)
+            throw new Exception("Restart did not release original initial-import identity");
+        if (!reopened.HasIncompleteImport(root.Id))
+            throw new Exception("Releasing a pause falsely completed the import");
+    }
+
     private static async Task ExerciseAutomaticControlPersistence(string dir)
     {
         var database = new LocalDatabase(Path.Combine(dir, "pcasa.db"));
         const string key = @"automatic:1:RescanRoot:G:\Camera Roll";
+        const string ordinaryKey = @"automatic:1:ScanFile:G:\Camera Roll\photo.jpg";
         await using (var scheduler = new PCasaScheduler())
         {
             scheduler.EnableDurablePackages(database);
             if (!scheduler.SetExternalTaskPaused(key, true) ||
                 !scheduler.IsExternalTaskPaused(key))
                 throw new Exception("Automatic scan pause was not accepted");
+            if (!scheduler.SetExternalTaskPaused(ordinaryKey, true))
+                throw new Exception("Ordinary watcher pause was not accepted");
         }
         await using (var scheduler = new PCasaScheduler())
         {
             scheduler.EnableDurablePackages(database);
-            if (!scheduler.IsExternalTaskPaused(key))
-                throw new Exception("Automatic scan pause was lost on restart");
-            if (!scheduler.SetExternalTaskPaused(key, false) ||
-                scheduler.IsExternalTaskPaused(key))
-                throw new Exception("Automatic scan did not resume");
+            if (scheduler.IsExternalTaskPaused(key) ||
+                !scheduler.IsExternalTaskPaused(PCasaScheduler.ContinuousReviewKey))
+                throw new Exception("Legacy hold did not migrate to permanent background review");
+            if (scheduler.IsExternalTaskPaused(ordinaryKey) ||
+                !scheduler.RecoverableExternalTaskKeys().Contains(ordinaryKey))
+                throw new Exception("Restart did not release and recover the ordinary watcher request");
+            scheduler.AcknowledgeRecoveredExternalTask(ordinaryKey);
+            if (scheduler.RecoverableExternalTaskKeys().Contains(ordinaryKey))
+                throw new Exception("Recovered watcher request was not acknowledged");
+            if (!scheduler.SetExternalTaskPaused(PCasaScheduler.ContinuousReviewKey, false) ||
+                scheduler.IsExternalTaskPaused(PCasaScheduler.ContinuousReviewKey))
+                throw new Exception("Continuous review did not resume");
+            if (scheduler.PromoteTaskNow(PCasaScheduler.ContinuousReviewKey) ||
+                scheduler.MoveTaskGlobally(PCasaScheduler.ContinuousReviewKey, ordinaryKey,
+                    new[] { new SchedulerTaskOrderItem(ordinaryKey, SchedulerPriority.Background),
+                        new SchedulerTaskOrderItem(PCasaScheduler.ContinuousReviewKey, SchedulerPriority.Idle) }))
+                throw new Exception("Permanent review accepted promotion or move");
             if (!scheduler.PromoteTaskNow(key))
                 throw new Exception("Promote Now rejected the original key");
             var placement = scheduler.EffectiveTaskPlacement(key,
@@ -183,19 +622,16 @@ internal static class DurablePauseFlow
                 throw new Exception("Paused job executed an unconfirmed step");
         }
 
-        // Closing/recreating the process must NOT auto-resume a user pause.
+        // Alpha.63: normal holds expire on restart, but their progress does not.
+        canFinish = true;
         await using (var scheduler = new PCasaScheduler())
         {
             scheduler.RegisterDurablePackageType("pause-test-v1", Make);
             scheduler.EnableDurablePackages(database);
+            var recovered = journal.Pending().Single(x => x.Key == key);
+            if (recovered.State != "queued" || recovered.CompletedSteps != 1)
+                throw new Exception("Startup release changed the durable identity/cursor");
             scheduler.RecoverDurablePackages();
-            await Task.Delay(350);
-            if (secondStepAttempts != 1 ||
-                journal.Pending().Single(x => x.Key == key).State != "paused")
-                throw new Exception("Recovered scheduler restarted a paused package");
-            canFinish = true;
-            if (!scheduler.ResumeDurableTask(key))
-                throw new Exception("Resume did not activate original identity");
             await completed.Task.WaitAsync(TimeSpan.FromSeconds(12));
             // A test-step completion precedes the scheduler continuation's
             // final SQLite state commit. Wait for that authoritative receipt.
