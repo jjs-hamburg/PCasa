@@ -1135,6 +1135,21 @@ public sealed class FolderRepository
             ? System.Text.Json.JsonSerializer.Deserialize<string[]>(json) : null;
     }
 
+    public bool IsFirstPassDirectoryComplete(long folderId, long generation, string directory)
+    {
+        using var connection = _database.OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT EXISTS(SELECT 1 FROM scan_directory_first_pass
+                WHERE monitored_folder_id=$id AND source_generation=$generation
+                  AND local_directory=$directory COLLATE NOCASE AND completed=1);
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        cmd.Parameters.AddWithValue("$directory", directory);
+        return Convert.ToInt64(cmd.ExecuteScalar()) != 0;
+    }
+
     public bool SaveImportFrontier(long folderId, long generation, string scanRoot,
         IReadOnlyCollection<string> pending)
     {

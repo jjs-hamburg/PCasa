@@ -355,6 +355,30 @@ internal static class TaskManagerFlow
             Until(manager, () => grid.Items.Cast<object>().Any(item =>
                     item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
                     == "taskmanager:a"), "Queued task is absent from its live scheduler view.");
+            // A stop awaiting a blocked source call must not lock other rows.
+            var deleteMethod = typeof(PCasa.App.TaskManagerWindow).GetMethod(
+                "PerformDeleteAsync", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var releaseDelete = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var firstDeletion = (Task)deleteMethod.Invoke(manager,
+                new object[] { "taskmanager:a", (Func<Task<bool>>)(() => releaseDelete.Task) })!;
+            try
+            {
+                grid.SelectedItem = grid.Items.Cast<object>().Single(item =>
+                    Equals(item.GetType().GetProperty("Key")?.GetValue(item), autoKey));
+                Pump(manager);
+                var deleteControl = Descendants<Button>(manager).Single(button =>
+                    Equals(button.Content, "Löschen"));
+                if (!deleteControl.IsEnabled || firstDeletion.IsCompleted)
+                    throw new Exception("A blocked deletion disabled the next task.");
+            }
+            finally
+            {
+                releaseDelete.TrySetResult(true);
+                Until(manager, () => firstDeletion.IsCompleted, "Deletion UI did not recover.");
+                firstDeletion.GetAwaiter().GetResult();
+            }
             // A waiting first-import appears before ANY scanner callback.
             var pendingRows = grid.Items.Cast<object>().Where(item =>
                 item.GetType().GetProperty("Key")?.GetValue(item) is string key &&
