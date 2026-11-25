@@ -252,7 +252,8 @@ public sealed class ImageTagRepository
     // This is the existing authoritative pending_tag_edits write path,
     // not another job queue or an additional metadata writer.
     public int QueueTagEdits(IReadOnlyList<(
-        long ImageId, IReadOnlyList<(string Tag, bool Remove)> Edits)> editsByImage)
+        long ImageId, IReadOnlyList<(string Tag, bool Remove)> Edits)> editsByImage,
+        string? ownerKey = null)
     {
         using var db = _database.OpenConnection();
         using var tx = db.BeginTransaction();
@@ -302,17 +303,19 @@ public sealed class ImageTagRepository
             using var pending = db.CreateCommand();
             pending.Transaction = tx;
             pending.CommandText = """
-                INSERT INTO pending_tag_edits(image_id,tag,desired_present,updated_utc)
-                VALUES($id,$tag,$desired,$now)
+                INSERT INTO pending_tag_edits(image_id,tag,desired_present,updated_utc,owner_key)
+                VALUES($id,$tag,$desired,$now,$owner)
                 ON CONFLICT(image_id,tag) DO UPDATE SET
                     desired_present=excluded.desired_present,
                     revision=pending_tag_edits.revision+1,
-                    updated_utc=excluded.updated_utc;
+                    updated_utc=excluded.updated_utc,
+                    owner_key=excluded.owner_key;
                 """;
             pending.Parameters.AddWithValue("$id", id);
             pending.Parameters.AddWithValue("$tag", tag);
             pending.Parameters.AddWithValue("$desired", remove ? 0 : 1);
             pending.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            pending.Parameters.AddWithValue("$owner", (object?)ownerKey ?? DBNull.Value);
             pending.ExecuteNonQuery();
             // This committed newer tag intent supersedes any previously
             // parked failure for the image. The current pending revisions
@@ -332,6 +335,24 @@ public sealed class ImageTagRepository
         }
         tx.Commit();
         return count;
+    }
+
+    // Cancellation and shutdown review can inspect the exact still-pending
+    // revisions owned by this job. A later edit of the same keyword replaces
+    // its owner in the same transaction as the new desired state.
+    public IReadOnlyList<long> PendingImageIdsOwnedBy(string ownerKey)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT DISTINCT image_id FROM pending_tag_edits
+             WHERE owner_key=$owner ORDER BY image_id;
+            """;
+        cmd.Parameters.AddWithValue("$owner", ownerKey);
+        using var rows = cmd.ExecuteReader();
+        var ids = new List<long>();
+        while (rows.Read()) ids.Add(rows.GetInt64(0));
+        return ids;
     }
 
     // The persisted intent table is the only source for pending-write dots.
