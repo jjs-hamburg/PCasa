@@ -180,6 +180,7 @@ public partial class MainWindow
 
         e.Cancel = true;
         if (_shutdownStarted || _shutdownReviewOpen) return;
+        FlushGalleryRotations();
         // Accepted persistent packages are never part of this review.
         // Only non-reconstructable session edits can be abandoned explicitly.
         var pending = PendingFileOperationsForShutdown();

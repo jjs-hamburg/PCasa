@@ -33,14 +33,15 @@ public static class JpegCropWriter
     // copy or accidentally modify the source.
     // JPEG quarter-turns use EXIF orientation; the compressed image data
     // remains untouched. Stage and verify before replacing the source.
-    public static void RotateGalleryImage(string originalPath, int turns, CancellationToken token)
+    public static void RotateGalleryImage(string originalPath, int turns, CancellationToken token,
+        Action<string>? beforePublish = null)
     {
         turns = ((turns % 4) + 4) % 4;
         if (turns == 0) return;
         if (Path.GetExtension(originalPath).ToLowerInvariant() is not (".jpg" or ".jpeg"))
         {
             SaveCore(originalPath, null, [new PhotoEditStep("rotate", Degrees: turns * 90)],
-                token, captureUndo: false);
+                token, captureUndo: false, beforePublish: beforePublish);
             return;
         }
         using var lease = SourceFileLocks.Enter(originalPath, token);
@@ -151,7 +152,7 @@ public static class JpegCropWriter
 
     private static void SaveCore(string originalPath, string? copyPath,
         IReadOnlyList<PhotoEditStep> operations, CancellationToken token,
-        bool captureUndo = true)
+        bool captureUndo = true, Action<string>? beforePublish = null)
     {
         var extension = Path.GetExtension(originalPath);
         if (!EditableImageFormats.Supports(originalPath))
@@ -252,6 +253,7 @@ public static class JpegCropWriter
                         throw;
                     }
                 }
+                beforePublish?.Invoke(staged);
                 token.ThrowIfCancellationRequested();
                 try { ReplaceWithSharingRetry(staged, fullPath, token); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

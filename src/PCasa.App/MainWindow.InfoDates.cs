@@ -146,7 +146,7 @@ public partial class MainWindow
         BeginVisibleManualOperation(key, UiLanguage.T("EXIF-Datumsfelder speichern"), 1);
         try
         {
-            await _scheduler.EnqueueAsync(key, SchedulerPriority.ManualAction,
+            await _scheduler.EnqueueSessionWriteAsync(key,
                 token =>
                 {
                     token.ThrowIfCancellationRequested();
@@ -166,13 +166,13 @@ public partial class MainWindow
                         throw new IOException("Katalogordner der Bilddatei fehlt.");
                     new BrowseCacheRepository(_database).InvalidateImage(imageId);
                     var result = _folderScanner.ScanFile(root, path,
-                        cancellationToken: token,
+                        cancellationToken: CancellationToken.None,
                         publishCatalogChange: false, forceExifRefresh: true);
                     if (result.Failed > 0)
                         throw new IOException(
                             "Die neuen EXIF-Datumsfelder konnten nicht katalogisiert werden.");
                     return Task.CompletedTask;
-                });
+                }, UiLanguage.T("EXIF-Datumsfelder speichern"), path, 1);
             _viewerOriginalCache.Remove(imageId);
             SetInfoDateEditing(false);
             await UpdateSidebarContentAsync();

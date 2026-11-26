@@ -207,6 +207,17 @@ public partial class MainWindow
             BeginVisibleManualOperation(key, "Aufnahmedatum aus Dateinamen übernehmen", 0);
             _ = ObserveCaptureDatePackageAsync(completion, key);
         }
+        else if (key.StartsWith("image:gallery-rotation:", StringComparison.Ordinal))
+        {
+            var record = new DurablePackageJournal(_database).Pending().FirstOrDefault(p => p.Key == key);
+            var recipe = record is null ? null : System.Text.Json.JsonSerializer.Deserialize<RotationRecipe>(record.Payload);
+            var ids = recipe?.ImageIds ?? Array.Empty<long>();
+            _rotationJobImages[key] = ids;
+            foreach (var id in ids) _pendingEditImageIds.Add(id);
+            var title = UiLanguage.T("Bildbearbeitung speichern");
+            BeginVisibleManualOperation(key, title, ids.Length);
+            _ = ObserveGalleryRotationAsync(completion, key, ids, title);
+        }
         else if (key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal) ||
                  key.StartsWith("catalog:scan-all:", StringComparison.Ordinal))
         {
