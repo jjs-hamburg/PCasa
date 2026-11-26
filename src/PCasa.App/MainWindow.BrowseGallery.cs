@@ -142,15 +142,28 @@ public partial class MainWindow
         await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
         if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
 
-        // Selection was restored before WPF measured the folder tree. Reveal
-        // the selected row now, once, without changing the saved selection or
-        // coupling later gallery scrolling to the folder tree.
+        // Restore the independent folder viewport AFTER the actual gallery
+        // anchor and WPF layout are ready. A selected expanded item may span
+        // hundreds of children, so scroll its header, not the entire item.
         if (_explicitGalleryNavigationVersion == 0)
         {
             var tree = _appearance.FlatFolderView ? FlatFoldersTree : FoldersTree;
+            if (_appearance.FlatFolderView && tree.SelectedItem is null &&
+                _activePhotoFolderId is long activeId)
+            {
+                var active = tree.Items.OfType<TreeViewItem>().FirstOrDefault(item =>
+                    item.Tag is FolderTreeTag { PhotoFolderId: long id } && id == activeId);
+                if (active is not null)
+                {
+                    _syncingFolderSelection = true;
+                    try { active.IsSelected = true; }
+                    finally { _syncingFolderSelection = false; }
+                }
+            }
             tree.UpdateLayout();
-            if (tree.SelectedItem is TreeViewItem selected)
-                selected.BringIntoView();
+            if (tree.SelectedItem is TreeViewItem selected &&
+                FindTreeScrollViewer(tree) is { } scroll)
+                FolderTreeNavigation.RevealHeader(tree, selected, scroll);
         }
 
         // Restore presenters before admitting the persistent recipes.
