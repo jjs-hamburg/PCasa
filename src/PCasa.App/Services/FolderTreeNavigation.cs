@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Media;
 
 namespace PCasa.App.Services;
 
@@ -57,45 +59,33 @@ public static class FolderTreeNavigation
         tree.ApplyTemplate();
         scroll.ApplyTemplate();
         tree.UpdateLayout();
-        if (scroll.ViewportHeight <= 0) return false;
-
-        // Rows in the PCasa tree template are exactly 22 DIP high.
-        // The selected container can be unrealized far outside the viewport
-        // even though the ItemsControl already owns its TreeViewItem.
-        // Scroll to its visible row index first, then refine using the
-        // measured header when WPF realizes it.
-        var row = 0;
-        if (!FindVisibleRow(tree)) return false;
-        scroll.ScrollToVerticalOffset(Math.Clamp(
-            row * 22.0 - Math.Max(0, (scroll.ViewportHeight - 22) / 2),
-            0, scroll.ScrollableHeight));
-        tree.UpdateLayout();
-        scroll.UpdateLayout();
-
         item.ApplyTemplate();
-        if (item.Template?.FindName("PART_Header", item) is FrameworkElement header &&
-            header.IsVisible && header.ActualHeight > 0 &&
-            PresentationSource.FromVisual(header) is not null)
-        {
-            var top = header.TranslatePoint(new Point(0, 0), scroll).Y;
-            var offset = scroll.VerticalOffset + top -
-                Math.Max(0, (scroll.ViewportHeight - header.ActualHeight) / 2);
-            scroll.ScrollToVerticalOffset(Math.Clamp(offset, 0, scroll.ScrollableHeight));
-            tree.UpdateLayout();
-            scroll.UpdateLayout();
-        }
-        return true;
+        tree.UpdateLayout();
 
-        bool FindVisibleRow(ItemsControl parent)
-        {
-            foreach (var child in parent.Items.OfType<TreeViewItem>())
-            {
-                if (ReferenceEquals(child, item)) return true;
-                row++;
-                if (child.IsExpanded && FindVisibleRow(child)) return true;
-            }
+        // The physical folder trees use CanContentScroll=false and a
+        // nonvirtualized panel. Scroll in DIPs against the *content presenter*,
+        // not the outer ScrollViewer (which includes its border and chrome).
+        if (scroll.Template.FindName("PART_ScrollContentPresenter", scroll)
+                is not ScrollContentPresenter viewport ||
+            viewport is not IScrollInfo info || info.ScrollOwner != scroll ||
+            info.ViewportHeight <= 0 ||
+            item.Template?.FindName("PART_Header", item) is not FrameworkElement header ||
+            !header.IsVisible || header.ActualHeight <= 0 ||
+            !viewport.IsAncestorOf(header))
             return false;
-        }
+
+        var top = header.TranslatePoint(new Point(0, 0), viewport).Y;
+        var target = Math.Clamp(info.VerticalOffset + top -
+            Math.Max(0, (info.ViewportHeight - header.ActualHeight) / 2),
+            0, Math.Max(0, info.ExtentHeight - info.ViewportHeight));
+
+        // ScrollToVerticalOffset queues a WPF command. Applying it directly
+        // to the physical scroll owner also commits the measured offset now;
+        // the same final queued target wins over earlier selection requests.
+        info.SetVerticalOffset(target);
+        scroll.ScrollToVerticalOffset(target);
+        tree.UpdateLayout();
+        return true;
     }
 
     public static bool ExpandAncestors(TreeViewItem item)
