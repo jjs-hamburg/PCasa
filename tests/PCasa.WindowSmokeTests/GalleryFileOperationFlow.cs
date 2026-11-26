@@ -82,14 +82,16 @@ internal static class GalleryFileOperationFlow
                 var copyJobs = scheduler.Snapshot().Where(item =>
                     item.Key.StartsWith("gallery:file-transfer:", StringComparison.Ordinal)).ToArray();
                 if (copyJobs.Length != 1 ||
-                    !copyJobs[0].SessionWrite ||
+                    copyJobs[0].SessionWrite ||
+                    !new DurablePackageJournal(db).RecentCompleted().Any(row =>
+                        row.Key == copyJobs[0].Key && row.Type == "gallery-transfer-v1") ||
                     copyJobs[0].Priority != SchedulerPriority.ManualAction ||
                     copyJobs[0].State != SchedulerJobState.Completed ||
                     new DurablePackageJournal(db).Pending().Any(item =>
                         item.Type == "gallery-transfer-v1") ||
                     background.IsCompleted)
                     throw new Exception(
-                        "Single manual copy must complete as one session-bound scheduler job without waiting for background work.");
+                        "Single manual copy must complete as one durable scheduler job without waiting for background work.");
             }
             catch (Exception ex)
             {
@@ -669,15 +671,15 @@ internal static class GalleryFileOperationFlow
             var uncachedSource = Path.Combine(first, "physical-first.jpg");
             var uncachedDestination = Path.Combine(third, "physical-first.jpg");
             WriteJpeg(uncachedSource);
-            SchedulerJobSnapshot? SessionTransferProgress() =>
-                scheduler.Snapshot().LastOrDefault(job => job.SessionWrite &&
+            SchedulerJobSnapshot? DurableTransferProgress() =>
+                scheduler.Snapshot().LastOrDefault(job => !job.SessionWrite &&
                     job.Key.StartsWith("gallery:file-transfer:", StringComparison.Ordinal) &&
                     job.State == SchedulerJobState.Running);
             Task deferredIndexing;
             lock (SourceFileLocks.ForPath(uncachedDestination))
             {
                 deferredIndexing = StartTransfer(window, [uncachedSource], third, move: true);
-                Until(window, () => SessionTransferProgress() is { State: SchedulerJobState.Running } job &&
+                Until(window, () => DurableTransferProgress() is { State: SchedulerJobState.Running } job &&
                         string.Equals(job.CurrentPath, uncachedSource,
                             StringComparison.OrdinalIgnoreCase),
                     "Uncatalogued move never reached destination lock.");
@@ -855,9 +857,9 @@ internal static class GalleryFileOperationFlow
             lock (SourceFileLocks.ForPath(progressSource))
             {
                 progressTask = StartTransfer(window, [progressSource], third, move: true);
-                Until(window, () => SessionTransferProgress() is { State: SchedulerJobState.Running,
+                Until(window, () => DurableTransferProgress() is { State: SchedulerJobState.Running,
                     Phase: "Bilder verschieben" },
-                    "Manual move was not visible as a running session-bound scheduler action.");
+                    "Manual move was not visible as a running durable scheduler action.");
                 var presenter = typeof(PCasa.App.MainWindow).GetField(
                     "_visibleManualWindow",
                     BindingFlags.NonPublic | BindingFlags.Instance)!
@@ -880,9 +882,9 @@ internal static class GalleryFileOperationFlow
             Until(window, () => progressTask.IsCompleted,
                 "Foreground operation did not finish.");
             progressTask.GetAwaiter().GetResult();
-            if (SessionTransferProgress() is not null || File.Exists(progressSource) ||
+            if (DurableTransferProgress() is not null || File.Exists(progressSource) ||
                 !CatalogContains(db, Path.Combine(third, Path.GetFileName(progressSource))))
-                throw new Exception("Session move finished before catalog publication.");
+                throw new Exception("Durable move finished before catalog publication.");
             Console.WriteLine("PASS: Single move progress and completion belong to the same scheduler job.");
 
             // Simulate a crash AFTER File.Move and BEFORE SQLite relocation.
