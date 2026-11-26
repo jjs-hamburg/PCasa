@@ -258,27 +258,6 @@ public sealed class SchedulerTaskView
                         "Fehler", ex.Message, 0, long.MinValue,
                         false, false, false, false));
                 }
-                try
-                {
-                    var orphanCount = ExternalEditTransaction.PendingCleanupCount();
-                    if (orphanCount > 0 && !latest.Values.Any(job =>
-                        job.Key.StartsWith("external:cleanup:", StringComparison.Ordinal) &&
-                        job.State is SchedulerJobState.Queued or SchedulerJobState.Running
-                            or SchedulerJobState.YieldRequested))
-                        rows.Add(new SchedulerTaskViewItem(
-                            "external:cleanup:pending",
-                            UiLanguage.T("Temporäre Bereinigung ausstehend"),
-                            ExternalEditTransaction.DirectoryPath,
-                            UiLanguage.Format("{0:N0} Ordner/Dateien", orphanCount),
-                            "Wartet",
-                            UiLanguage.T("Dateien eines abgeschlossenen Editors sind noch gesperrt. Die Speicherung ist davon nicht betroffen; beim nächsten Start erneut prüfen."),
-                            4, long.MaxValue - 1,
-                            false, false, false, false));
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
-                    or InvalidDataException)
-                { PCasaDiagnostics.Write("ExternalEdit.CleanupView", ex); }
-
                 // Non-durable external stage/commit/refresh/cleanup work is
                 // already owned by the ONE scheduler. Previously the Taskmanager
                 // only displayed durable packages and a few special jobs,
@@ -286,6 +265,7 @@ public sealed class SchedulerTaskView
                 foreach (var job in latest.Values.Where(job =>
                     job.Key.StartsWith("external:", StringComparison.Ordinal) &&
                     !job.Key.StartsWith("external:session:", StringComparison.Ordinal) &&
+                    !job.Key.StartsWith("external:cleanup:", StringComparison.Ordinal) &&
                     (job.State is SchedulerJobState.Queued or SchedulerJobState.Running
                         or SchedulerJobState.YieldRequested or SchedulerJobState.Failed ||
                      (showCompleted && job.State == SchedulerJobState.Completed))))

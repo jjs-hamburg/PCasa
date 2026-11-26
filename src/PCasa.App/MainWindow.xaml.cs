@@ -102,7 +102,6 @@ public partial class MainWindow : Window
         try { ExternalEditTransaction.RetirePreviousProcessSession(); }
         catch (Exception ex) { PCasaDiagnostics.Write("ExternalEdit.StartupCleanup", ex); }
         RecoverExternalEditSchedulerLease();
-        ScheduleExternalCleanup();
         _ = WarmExternalEditorIconsAsync();
         LogStartupStage("window-constructed");
     }

@@ -181,6 +181,7 @@ public partial class MainWindow
         if (_shutdownStarted) return;
         // Unsubmitted drafts are discarded, accepted writes are drained at
         // their safe boundary below. No separate pending-operation dialog.
+        FlushGalleryRotations();
         _tagDraft.Clear();
         if (_photoEditSession is { HasChanges: true }) CancelEditSession();
         // Save the ACTUAL visible folder expansion before shutdown begins.

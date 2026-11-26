@@ -40,11 +40,26 @@ public static class ExifToolKeywordWriter
         session.Write(imagePath, keywords);
     }
 
+    // Drain continuously, not at session disposal: stay-open processes
+    // otherwise hide the actual native failure behind the stdout summary.
+    internal static async Task DrainDiagnosticsAsync(Process process)
+    {
+        var pid = process.Id;
+        try
+        {
+            while (await process.StandardError.ReadLineAsync().ConfigureAwait(false) is string line)
+                if (!string.IsNullOrWhiteSpace(line))
+                    PCasaDiagnostics.WriteMessage("ExifTool.Stderr", $"PID={pid}; {line}");
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        { PCasaDiagnostics.Write("ExifTool.StderrDrain", ex); }
+    }
+
     public sealed class Session : IDisposable
     {
         private readonly object _operationGate = new();
         private Process? _process;
-        private Task<string>? _errorDrain;
+        private Task? _errorDrain;
         private int _nextRequestId;
         private bool _disposed;
 
@@ -287,6 +302,23 @@ public static class ExifToolKeywordWriter
         // Only the known capture/creation/modification date tags can enter
         // this stay-open command stream. Preserve file last-write time for
         // external results; user-initiated editing advances it independently.
+        internal void WriteOrientation(string imagePath, int orientation, CancellationToken token)
+        {
+            if (orientation is < 1 or > 8 ||
+                Path.GetExtension(imagePath).ToLowerInvariant() is not (".jpg" or ".jpeg"))
+                throw new ArgumentException("Invalid JPEG orientation.");
+            lock (_operationGate)
+            {
+                Interlocked.Increment(ref _activeWrites);
+                try
+                {
+                    ExecuteMetadataEdit(imagePath,
+                        ["-IFD0:Orientation#=" + orientation], token);
+                }
+                finally { Interlocked.Decrement(ref _activeWrites); }
+            }
+        }
+
         public void WriteExactExifDates(string imagePath,
             IReadOnlyDictionary<string, string?> values,
             CancellationToken token = default)
@@ -438,7 +470,7 @@ public static class ExifToolKeywordWriter
             lock (ActiveGate) ActiveSessions.Add(this);
             // Always drain stderr concurrently so a warning cannot deadlock
             // a subsequent request. The final metadata read verifies success.
-            _errorDrain = _process.StandardError.ReadToEndAsync();
+            _errorDrain = DrainDiagnosticsAsync(_process);
         }
 
         public void Dispose()

@@ -205,6 +205,20 @@ internal static class Program
         Run("Unicode JPEG keyword leaves pixels untouched", JpegUnicodeTagPreservesPixels, failures);
         Run("EXIF fields survive tag write and removal", JpegExifFieldsSurviveTags, failures);
         Run("Filename capture date changes only native metadata and retains the catalog thumbnail", CaptureDateFromFilenameRoundTrip, failures);
+        Run("Gallery quarter turns compose with every EXIF orientation", () =>
+        {
+            for (int orientation = 1; orientation <= 8; orientation++)
+            {
+                var right = ExifOrientation.RotateQuarterTurns(orientation, 1);
+                if (ExifOrientation.RotateQuarterTurns(right, -1) != orientation ||
+                    ExifOrientation.RotateQuarterTurns(orientation, 4) != orientation)
+                    throw new Exception("Quarter turns did not cancel.");
+            }
+            if (ExifOrientation.RotateQuarterTurns(1, 1) != 6 ||
+                ExifOrientation.RotateQuarterTurns(1, -1) != 8 ||
+                ExifOrientation.RotateQuarterTurns(2, 1) != 7)
+                throw new Exception("EXIF rotation direction is incorrect.");
+        }, failures);
         Run("JPEG EXIF orientation 6/8 is honored by viewer without altering original", JpegExifOrientationViewer, failures);
         Run("Viewer uses decoded EXIF axes at original pixel size", ViewerDecodedGeometry, failures);
         Run("RAW preview applies container orientation exactly once", RawPreviewOrientation, failures);

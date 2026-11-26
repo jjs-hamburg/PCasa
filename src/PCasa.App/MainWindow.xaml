@@ -1649,6 +1649,31 @@
                                 </Style.Triggers>
                             </Style>
                         </Border.Style>
+                        <Grid>
+                            <StackPanel x:Name="GalleryRotationButtons" Orientation="Horizontal"
+                                        HorizontalAlignment="Left" VerticalAlignment="Center"
+                                        Margin="10,1,0,1" Visibility="Collapsed">
+                                <Button x:Name="GalleryRotateLeftButton" Width="30" Height="27"
+                                        Padding="2" Margin="0,0,3,0" Focusable="False"
+                                        Style="{StaticResource PcasaStatusButtonStyle}"
+                                        Click="GalleryRotateLeft_Click">
+                                    <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
+                                        <Path Data="M 3,3 V 10 H 10 M 3,10 A 9,9 0 1 1 5,19"
+                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.9"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                                    </Canvas></Viewbox>
+                                </Button>
+                                <Button x:Name="GalleryRotateRightButton" Width="30" Height="27"
+                                        Padding="2" Focusable="False"
+                                        Style="{StaticResource PcasaStatusButtonStyle}"
+                                        Click="GalleryRotateRight_Click">
+                                    <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
+                                        <Path Data="M 21,3 V 10 H 14 M 21,10 A 9,9 0 1 0 19,19"
+                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.9"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                                    </Canvas></Viewbox>
+                                </Button>
+                            </StackPanel>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                                     VerticalAlignment="Center" Margin="0,1,9,1">
                             <!-- These NEW symbols precede the SIX unchanged approved icons. -->
@@ -1734,6 +1759,7 @@
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 5,5 L 12,12 L 19,5 M 5,11 L 12,18 L 19,11 M 4,21 H 20" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2" StrokeLineJoin="Round" StrokeStartLineCap="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                         </StackPanel>
+                        </Grid>
                     </Border>
                     <!-- Gallery owns one unchanged ScrollViewer. Only its
                          vertical chrome is replaced; virtualization and

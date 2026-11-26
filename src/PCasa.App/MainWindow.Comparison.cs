@@ -17,6 +17,7 @@ public partial class MainWindow
     private void UpdateComparisonButtons()
     {
         CompareAbButton.IsEnabled = !_viewerOpen && _selectedImageIds.Count == 2;
+        UpdateGalleryRotationButtons();
     }
 
     private async void CompareAb_Click(object sender, RoutedEventArgs e)
