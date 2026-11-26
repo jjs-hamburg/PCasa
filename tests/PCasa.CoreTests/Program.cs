@@ -75,9 +75,9 @@ try
             new DateTime(1985, 1, 1), new DateTime(1985, 12, 31)) ||
         GalleryFolderOrdering.MatchesCaptureDate(dateImage,
             new DateTime(1986, 1, 1), null) ||
-        !GalleryFolderOrdering.MatchesCaptureDate(dateImage with { TakenUtcTicks = null },
+        GalleryFolderOrdering.MatchesCaptureDate(dateImage with { TakenUtcTicks = null },
             new DateTime(2026, 1, 1), null))
-        throw new Exception("Gallery date filtering lost inclusive days or capture-date precedence.");
+        throw new Exception("Gallery date filtering lost inclusive days or used a filesystem date as a capture date.");
 
     var dateRows = new[] {
         dateImage with { ModifiedUtcTicks = new DateTime(2020, 6, 15, 12, 0, 0, DateTimeKind.Utc).Ticks },

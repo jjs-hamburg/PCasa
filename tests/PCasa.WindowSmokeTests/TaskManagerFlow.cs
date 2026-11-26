@@ -751,6 +751,20 @@ internal static class TaskManagerFlow
                 }
                 progressWindow.UpdateManualOperationWithContext(
                     waitingScan with {
+                        State = SchedulerJobState.YieldRequested,
+                        SessionWrite = true,
+                        WorkKind = SchedulerWorkKind.Catalog,
+                        Phase = "Bildbearbeitung speichern",
+                        Total = 3,
+                        Processed = 1,
+                        CurrentPath = preservedScanRoot + @"\photo.jpg"
+                    }, "Bildbearbeitung speichern", preservedScanRoot);
+                if (((TextBlock)progressWindow.FindName("PhaseText")).Text.Contains(
+                        UiLanguage.T("wartet"), StringComparison.OrdinalIgnoreCase) ||
+                    ((TextBlock)progressWindow.FindName("CurrentFileText")).Text != "photo.jpg")
+                    throw new Exception("Session write at its atomic yield boundary was displayed as waiting.");
+                progressWindow.UpdateManualOperationWithContext(
+                    waitingScan with {
                         State = SchedulerJobState.Running,
                         CurrentPath = preservedScanRoot + @"\photo.jpg",
                         Processed = 14976
