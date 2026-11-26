@@ -138,17 +138,15 @@ public static class ExifDateMetadata
         if (normalized == initial) return;
         var beforeModifiedUtc = File.GetLastWriteTimeUtc(path);
         var beforeCreatedUtc = File.GetCreationTimeUtc(path);
-        // One central full-file snapshot before the native atomic EXIF write.
-        new UndoHistoryService(undoOptions ?? UndoOptions.Load())
-            .CaptureBeforeSave(path, token);
-        using (var writer = new ExifToolKeywordWriter.Session())
-            writer.WriteExactExifDates(path, new Dictionary<string, string?>
+        using var writer = new ExifToolKeywordWriter.Session();
+        writer.WriteExactExifDates(path, new Dictionary<string, string?>
             {
                 ["EXIF:DateTimeOriginal"] = normalized.DateTimeOriginal,
                 ["EXIF:CreateDate"] = normalized.CreateDate,
                 ["EXIF:ModifyDate"] = normalized.ModifyDate
             }, token);
-        var verified = ReadFields(path, token);
+        var verified = writer.LastVerifiedExif is { } confirmed
+            ? FieldsFromJson(confirmed.Json) : ReadFields(path, CancellationToken.None);
         if (verified != normalized)
             throw new InvalidDataException(
                 "Gespeicherte EXIF-Datumsfelder stimmen nicht mit der Eingabe überein.");

@@ -58,22 +58,23 @@ public sealed class FilenameCaptureDateWriter(LocalDatabase database, UndoOption
         if (originalModified.Ticks != indexedTicks || (before.Length != indexedSize && !applied))
             throw new IOException("Datei wurde außerhalb von PCasa verändert: " + path);
         using var receipt = OriginalFileMutationReceipts.Begin(path);
+        ImageExifData? stagedExif = null;
         if (!applied)
         {
             token.ThrowIfCancellationRequested();
-            new UndoHistoryService(undoOptions ?? UndoOptions.Load()).CaptureBeforeSave(path, token);
             using var writer = new ExifToolKeywordWriter.Session();
             writer.WriteExactExifDates(path, new Dictionary<string, string?>
             {
                 ["EXIF:DateTimeOriginal"] = target
             }, token);
+            stagedExif = writer.LastVerifiedExif;
             // Once a native mutation has completed, finish verification and
             // catalog publication even if a newer P0 requested a yield.
             File.SetCreationTimeUtc(path, originalCreated);
             File.SetLastWriteTimeUtc(path, originalModified);
         }
         var after = new FileInfo(path);
-        var verified = reader.Read(path, CancellationToken.None);
+        var verified = stagedExif ?? reader.Read(path, CancellationToken.None);
         var dates = ExifDateMetadata.FieldsFromJson(verified.Json);
         if (!ExifDateMetadata.SameProtectedTag("EXIF:DateTimeOriginal", target, dates.DateTimeOriginal) ||
             dates.CreateDate != current.CreateDate || dates.ModifyDate != current.ModifyDate ||
