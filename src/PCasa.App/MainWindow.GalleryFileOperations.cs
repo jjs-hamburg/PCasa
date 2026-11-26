@@ -384,7 +384,7 @@ public partial class MainWindow
         => _visibleManualOperations.Count > 0 &&
             !_scheduler.Snapshot().Any(job =>
                 _visibleManualOperations.ContainsKey(job.Key) &&
-                job.State == SchedulerJobState.Running);
+                job.State is SchedulerJobState.Running or SchedulerJobState.YieldRequested);
 
     private void RestoreWaitingManualPresentationAfterScan()
     {
@@ -400,7 +400,7 @@ public partial class MainWindow
         // lane and must not be shown as running in another UI projection.
         var running = _scheduler.Snapshot()
             .Where(job => _visibleManualOperations.ContainsKey(job.Key) &&
-                job.State == SchedulerJobState.Running)
+                job.State is SchedulerJobState.Running or SchedulerJobState.YieldRequested)
             .OrderByDescending(job => job.StartedAt)
             .FirstOrDefault();
         if (running is not null) return running.Key;
@@ -429,6 +429,12 @@ public partial class MainWindow
     {
         if (!_visibleManualOperations.TryGetValue(key, out var item)) return;
         _visibleManualActiveKey = key;
+        var snapshot = _scheduler.Snapshot().LastOrDefault(job => job.Key == key);
+        if (snapshot is { State: SchedulerJobState.Queued })
+        {
+            _visibleManualWindow?.EndManualOperation();
+            return;
+        }
         // BeginManualOperation clears the previous picture. Also reset the
         // matching preview de-duplication key, including when the SAME source
         // is processed by the next Tag package. Otherwise its preview could
@@ -616,9 +622,17 @@ public partial class MainWindow
                 !string.Equals(preferred, _visibleManualActiveKey,
                     StringComparison.Ordinal))
                 DisplayManualOperation(preferred);
-            if (current.State == SchedulerJobState.Running &&
-                _visibleManualWindow?.ShowingScanDuringManualWait == true)
+            if (current.State is SchedulerJobState.Running or SchedulerJobState.YieldRequested &&
+                (_visibleManualWindow?.ShowingScanDuringManualWait == true ||
+                 _visibleManualWindow?.IsManualPresentationActive != true) && current.Key == preferred)
                 DisplayManualOperation(current.Key);
+            if (current.State == SchedulerJobState.Queued && current.Key == _visibleManualActiveKey &&
+                !_scheduler.Snapshot().Any(job => _visibleManualOperations.ContainsKey(job.Key) &&
+                    job.State is SchedulerJobState.Running or SchedulerJobState.YieldRequested))
+            {
+                _visibleManualWindow?.EndManualOperation();
+                return;
+            }
             if (current.Key == _visibleManualActiveKey &&
                 _visibleManualWindow?.ShowingScanDuringManualWait != true)
             {

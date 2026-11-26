@@ -64,13 +64,13 @@ public partial class MainWindow
             // This is the root availability gate, not an individual-file
             // probe loop. A disconnected share does not consume 3 attempts.
             if (!string.IsNullOrWhiteSpace(path) &&
-                (ex is IOException or UnauthorizedAccessException) &&
+                (ex is IOException or UnauthorizedAccessException) && ex is not ExifToolStructuralException &&
                 !_scheduler.SourceAvailability.CheckAfterSourceError(path, token))
                 throw new DurablePackageRetryException(
                     "Original-Quelle vorübergehend offline: " +
                     SourceAvailabilityGate.RootOf(path));
             var attempt = errors.RecordFailure(kind, packageKey, imageId, ex,
-                permanent: ex is NotSupportedException);
+                permanent: ex is NotSupportedException or ExifToolStructuralException);
             PCasaDiagnostics.Write("OriginalWrite." + kind + ":" + imageId, ex);
             if (attempt < OriginalWriteFailureRepository.MaximumAttempts)
                 throw new DurablePackageRetryException(

@@ -62,6 +62,14 @@ public sealed class ShutdownPendingWorkWindow : Window
             Margin = new Thickness(0, 0, 0, 8) };
         DockPanel.SetDock(label, Dock.Top);
         root.Children.Add(label);
+        var explanation = new TextBlock
+        {
+            Text = UiLanguage.T("Beim Beenden werden noch ausstehende Dateioperationen verworfen. Bereits gespeicherte Dateien bleiben erhalten."),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 10)
+        };
+        DockPanel.SetDock(explanation, Dock.Top);
+        root.Children.Add(explanation);
 
         var scrolling = new ScrollViewer { VerticalScrollBarVisibility =
             ScrollBarVisibility.Auto, HorizontalScrollBarVisibility =

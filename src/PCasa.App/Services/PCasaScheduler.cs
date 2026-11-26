@@ -801,7 +801,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         if (!(running.Paused || (_maintenancePauseCount > 0 && IsCatalogMutation(running)) ||
                               (RankOwner(running).Priority == SchedulerPriority.Idle &&
                                (nonIdleWaiting || _pending.Any(p =>
-                                   !IsIndependentReadItem(p) &&
+                                   !IsIndependentReadItem(p) && !p.Paused && !IsBlockedByInteraction(p) &&
                                    RankOwner(p).Priority < SchedulerPriority.Idle))) ||
                               IsBlockedByInteraction(running) ||
                               (IsCatalogMutation(running) &&
@@ -1278,6 +1278,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
     {
         lock (_gate) return _pending.Concat(_runningWork).Any(item =>
             item.Key == key && item.SessionWrite);
+    }
+
+    public bool CanPauseSessionTask(string key)
+    {
+        lock (_gate) return _pending.Any(x => x.Key == key && x.SessionWrite) ||
+            _runningWork.Any(x => x.Key == key && x.SessionWrite && x.ResumableSession);
     }
 
     public bool SetSessionTaskPaused(string key, bool paused)
@@ -1776,7 +1782,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (RankOwner(candidate).Priority == SchedulerPriority.Idle &&
             (durableNonIdlePending ||
              _pending.Any(other => !ReferenceEquals(other, candidate) &&
-                 !IsIndependentReadItem(other) &&
+                 !IsIndependentReadItem(other) && !other.Paused && !IsBlockedByInteraction(other) &&
                  RankOwner(other).Priority < SchedulerPriority.Idle) ||
              _runningWork.Any(other => !IsIndependentReadItem(other) &&
                  RankOwner(other).Priority < SchedulerPriority.Idle)))

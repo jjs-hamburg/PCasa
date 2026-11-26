@@ -49,24 +49,43 @@ public static class JpegCropWriter
         var size = before.Length;
         var modified = before.LastWriteTimeUtc;
         var created = before.CreationTimeUtc;
-        int orientation;
-        using (var input = File.Open(path, FileMode.Open, FileAccess.Read,
-                   FileShare.ReadWrite | FileShare.Delete))
-            orientation = ExifOrientation.Read(input);
-        var target = ExifOrientation.RotateQuarterTurns(orientation, turns);
+        var local = Path.Combine(Path.GetTempPath(),
+            "PCasa-rotation-" + Guid.NewGuid().ToString("N") + Path.GetExtension(path));
         var staged = Path.Combine(Path.GetDirectoryName(path)!,
             ".pcasa-edit-" + Guid.NewGuid().ToString("N") + Path.GetExtension(path));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        long download = 0, edit = 0, upload = 0, undo = 0;
         try
         {
             token.ThrowIfCancellationRequested();
-            File.Copy(path, staged);
+            CopyRotationCandidate(path, local, token);
+            download = clock.ElapsedMilliseconds;
+            int orientation;
+            using (var input = File.OpenRead(local))
+                orientation = ExifOrientation.Read(input);
+            var target = ExifOrientation.RotateQuarterTurns(orientation, turns);
+            var compressed = JpegGpsPatchPrototype.CompressedImageHash(local);
+            using var reader = new ImageExifReader();
+            var expected = ExifDateMetadata.ParseJson(reader.Read(local, token).Json);
             using (var writer = new ExifToolKeywordWriter.Session())
-                writer.WriteOrientation(staged, target, token);
-            using (var input = File.OpenRead(staged))
+                writer.WriteOrientation(local, target, token);
+            using (var input = File.OpenRead(local))
                 if (ExifOrientation.Read(input) != target)
                     throw new IOException("JPEG orientation verification failed.");
-            ExifDateMetadata.VerifyUnchanged(path, staged, token);
+            if (!compressed.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(local)))
+                throw new InvalidDataException("JPEG rotation changed compressed picture bytes.");
+            var actual = ExifDateMetadata.ParseJson(reader.Read(local, token).Json);
+            if (expected.Any(pair => !ExifDateMetadata.SameProtectedTag(pair.Key,
+                    pair.Value, actual[pair.Key])))
+                throw new InvalidDataException("JPEG rotation changed protected EXIF dates.");
+            edit = clock.ElapsedMilliseconds - download;
+            token.ThrowIfCancellationRequested();
+            CopyRotationCandidate(local, staged, token);
+            upload = clock.ElapsedMilliseconds - download - edit;
+            // Preserve the existing Undo contract and check original identity
+            // again immediately before its single atomic replacement.
             new UndoHistoryService(UndoOptions.Load()).CaptureBeforeSave(path, token);
+            undo = clock.ElapsedMilliseconds - download - edit - upload;
             ReplaceWithVerifiedSharingRetry(staged, path, token, size, modified);
             try
             {
@@ -79,10 +98,32 @@ public static class JpegCropWriter
         }
         finally
         {
-            try { if (File.Exists(staged)) File.Delete(staged); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            { PCasaDiagnostics.Write("Image.Rotate.Cleanup", ex); }
+            foreach (var candidate in new[] { local, staged })
+                try { if (File.Exists(candidate)) File.Delete(candidate); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                { PCasaDiagnostics.Write("Image.Rotate.Cleanup", ex); }
+            PCasaDiagnostics.WriteMessage("Image.Rotate.Profile",
+                $"DownloadMs={download}; LocalEditMs={edit}; UploadMs={upload}; UndoMs={undo}; " +
+                $"TotalMs={clock.ElapsedMilliseconds}; File={Path.GetFileName(path)}");
         }
+    }
+
+    private static void CopyRotationCandidate(string source, string destination,
+        CancellationToken token)
+    {
+        using var input = new FileStream(source, FileMode.Open, FileAccess.Read,
+            FileShare.Read, 131072, FileOptions.SequentialScan);
+        using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write,
+            FileShare.None, 131072, FileOptions.SequentialScan);
+        var buffer = new byte[131072];
+        int count;
+        while ((count = input.Read(buffer, 0, buffer.Length)) != 0)
+        {
+            token.ThrowIfCancellationRequested();
+            output.Write(buffer, 0, count);
+        }
+        output.Flush(flushToDisk: true);
+        token.ThrowIfCancellationRequested();
     }
 
     public static string GetAvailableCopyPath(string originalPath)

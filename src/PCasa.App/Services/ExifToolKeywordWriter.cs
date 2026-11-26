@@ -9,6 +9,8 @@ namespace PCasa.App.Services;
 /// are never decoded or recompressed. One session serves a complete user
 /// selection instead of starting a native process for every photograph.
 /// </summary>
+public sealed class ExifToolStructuralException(string message) : IOException(message);
+
 public static class ExifToolKeywordWriter
 {
     private static readonly object ActiveGate = new();
@@ -42,24 +44,47 @@ public static class ExifToolKeywordWriter
 
     // Drain continuously, not at session disposal: stay-open processes
     // otherwise hide the actual native failure behind the stdout summary.
-    internal static async Task DrainDiagnosticsAsync(Process process)
+    internal static async Task DrainDiagnosticsAsync(Process process, Func<string, bool>? capture = null)
     {
         var pid = process.Id;
         try
         {
             while (await process.StandardError.ReadLineAsync().ConfigureAwait(false) is string line)
-                if (!string.IsNullOrWhiteSpace(line))
+                if (!string.IsNullOrWhiteSpace(line) && capture?.Invoke(line) != true)
                     PCasaDiagnostics.WriteMessage("ExifTool.Stderr", $"PID={pid}; {line}");
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
         { PCasaDiagnostics.Write("ExifTool.StderrDrain", ex); }
     }
 
+    internal static bool IsStructuralFailure(string stderr) => stderr.Split('\n').Any(line =>
+        line.TrimStart().StartsWith("Error:", StringComparison.OrdinalIgnoreCase) &&
+        (line.Contains("Truncated ExifIFD directory", StringComparison.OrdinalIgnoreCase) ||
+         line.Contains("Bad format (", StringComparison.OrdinalIgnoreCase) &&
+         line.Contains("IFD", StringComparison.OrdinalIgnoreCase)));
+
     public sealed class Session : IDisposable
     {
         private readonly object _operationGate = new();
         private Process? _process;
         private Task? _errorDrain;
+        private volatile NativeDiagnosticCapture? _nativeCapture;
+
+        private sealed class NativeDiagnosticCapture
+        {
+            internal readonly string Start = "PCASA-BEGIN-" + Guid.NewGuid().ToString("N");
+            internal readonly string End = "PCASA-END-" + Guid.NewGuid().ToString("N");
+            internal readonly TaskCompletionSource<string> Finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly StringBuilder _lines = new();
+            private bool _started;
+            internal bool Accept(string line)
+            {
+                if (line == Start) { _started = true; return true; }
+                if (line == End) { Finished.TrySetResult(_lines.ToString()); return true; }
+                if (_started && _lines.Length < 32_000) _lines.AppendLine(line);
+                return false; // also keep original diagnostics in the log
+            }
+        }
         private int _nextRequestId;
         private bool _disposed;
 
@@ -370,6 +395,12 @@ public static class ExifToolKeywordWriter
                 File.Exists(imagePath + "_exiftool_tmp");
             var request = ++_nextRequestId;
             var writeStart = Stopwatch.GetTimestamp();
+            var diagnostics = new NativeDiagnosticCapture();
+            _nativeCapture = diagnostics;
+            process.StandardInput.WriteLine("-echo2");
+            process.StandardInput.WriteLine(diagnostics.Start);
+            process.StandardInput.WriteLine("-echo4");
+            process.StandardInput.WriteLine(diagnostics.End);
             process.StandardInput.WriteLine("-P");
             process.StandardInput.WriteLine("-overwrite_original");
             foreach (var command in commands)
@@ -393,13 +424,19 @@ public static class ExifToolKeywordWriter
                     TryRemoveAbandonedTemporaryOutput(imagePath, TimeSpan.Zero);
                 throw;
             }
+            string stderr = "";
+            try { stderr = diagnostics.Finished.Task.WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult(); }
+            catch (TimeoutException) { PCasaDiagnostics.WriteMessage("ExifTool.StderrBoundary", "Native diagnostic boundary not received."); }
+            finally { _nativeCapture = null; }
             if (!response.Contains("1 image files updated",
                 StringComparison.Ordinal))
             {
                 if (!temporaryExistedBeforeWrite)
                     TryRemoveAbandonedTemporaryOutput(imagePath, TimeSpan.Zero);
-                throw new IOException("ExifTool konnte die Datei nicht aktualisieren: " +
-                    response.Trim());
+                var message = "ExifTool konnte die Datei nicht aktualisieren: " +
+                    response.Trim() + "\n" + stderr.Trim();
+                if (IsStructuralFailure(stderr)) throw new ExifToolStructuralException(message);
+                throw new IOException(message);
             }
             // Learn ONLY from a successful native commit, never from a
             // canceled, failed or potentially disconnected source.
@@ -470,7 +507,9 @@ public static class ExifToolKeywordWriter
             lock (ActiveGate) ActiveSessions.Add(this);
             // Always drain stderr concurrently so a warning cannot deadlock
             // a subsequent request. The final metadata read verifies success.
-            _errorDrain = DrainDiagnosticsAsync(_process);
+            var child = _process;
+            _errorDrain = DrainDiagnosticsAsync(child, line =>
+                ReferenceEquals(_process, child) && _nativeCapture?.Accept(line) == true);
         }
 
         public void Dispose()

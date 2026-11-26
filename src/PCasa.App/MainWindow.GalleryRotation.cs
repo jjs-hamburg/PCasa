@@ -11,6 +11,7 @@ public partial class MainWindow
     private readonly Dictionary<long, int> _galleryRotationDraft = [];
     private readonly Dictionary<long, int> _galleryRotationWriting = [];
     private DispatcherTimer? _galleryRotationTimer;
+    private readonly Dictionary<string, long[]> _rotationJobImages = new(StringComparer.Ordinal);
 
     private bool CanRotateGalleryImage(long id) =>
         !_pendingEditImageIds.Contains(id) &&
@@ -71,6 +72,7 @@ public partial class MainWindow
         UpdateGalleryRotationButtons();
         var key = "image:gallery-rotation:" + Guid.NewGuid().ToString("N");
         var title = UiLanguage.T("Bildbearbeitung speichern");
+        _rotationJobImages[key] = items.Select(item => item.Key).ToArray();
         BeginVisibleManualOperation(key, title, items.Length);
         try
         {
@@ -98,7 +100,7 @@ public partial class MainWindow
                             folderId = row.GetInt64(1);
                         }
                         _scheduler.ReportProgress(key, title, processed, items.Length, path);
-                        JpegCropWriter.RotateGalleryImage(path, angle, CancellationToken.None);
+                        JpegCropWriter.RotateGalleryImage(path, angle, token);
                         // After the original commit, reconcile before releasing P0.
                         new BrowseCacheRepository(_database).InvalidateImage(id);
                         var root = _folderRepository.GetAll().First(f => f.Id == folderId);
@@ -107,12 +109,14 @@ public partial class MainWindow
                         if (result.Failed > 0 || result.ImageFilesSeen == 0)
                             throw new IOException("Image catalog reconciliation failed: " + path);
                     }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
                     catch (Exception ex)
                     {
                         failures.Add(ex);
                         PCasaDiagnostics.Write("Image.GalleryRotation", ex);
                     }
                     _scheduler.ReportProgress(key, title, ++processed, items.Length);
+                    // Keep the same cursor even when the next file yields.
                 }
                 if (failures.Count > 0) throw new AggregateException(failures);
                 return Task.CompletedTask;
@@ -128,6 +132,7 @@ public partial class MainWindow
             }
             UpdateGalleryRotationPreview();
             UpdateGalleryRotationButtons();
+            _rotationJobImages.Remove(key);
             EndVisibleManualOperation(key);
             PCasaDiagnostics.Write("Image.GalleryRotation.Enqueue", ex);
             PcasaDialog.Show(this, ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error);
@@ -141,6 +146,7 @@ public partial class MainWindow
         catch (Exception ex) { failure = ex; }
         finally
         {
+            _rotationJobImages.Remove(key);
             foreach (var id in ids)
             {
                 _galleryRotationWriting.Remove(id);

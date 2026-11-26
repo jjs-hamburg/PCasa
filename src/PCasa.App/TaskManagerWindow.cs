@@ -539,7 +539,7 @@ public sealed class TaskManagerWindow : Window
             (row.Durable || _resumePausedTask is not null ||
              IsInitialImport(row.Key) && _resumeAutomaticScan is not null);
         var canPause = row is { Status: "Läuft" or "Wartet" } &&
-            (row.Durable || _scheduler.IsSessionTask(row.Key) || _pauseInitialImport is not null &&
+            (row.Durable || _scheduler.CanPauseSessionTask(row.Key) || _pauseInitialImport is not null &&
              (IsInitialImport(row.Key) ||
               row.Key.StartsWith("automatic:", StringComparison.Ordinal)));
         _pauseResume.Content = UiLanguage.T(canResume ? "Fortsetzen" : "Pausieren");
