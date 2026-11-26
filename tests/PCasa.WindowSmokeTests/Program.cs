@@ -2616,6 +2616,7 @@ internal static class Program
             // visual bounds, and commit the offset before a later rebuild.
             var restoreTree = new TreeView { Margin = new Thickness(2) };
             ScrollViewer.SetCanContentScroll(restoreTree, false);
+            VirtualizingPanel.SetIsVirtualizing(restoreTree, false);
             for (var row = 0; row < 80; row++)
                 restoreTree.Items.Add(new TreeViewItem { Header = "Folder " + row });
             var restoredRow = (TreeViewItem)restoreTree.Items[65];
@@ -2650,10 +2651,12 @@ internal static class Program
                 restoredRow.ApplyTemplate();
                 var restoredHeader = restoredRow.Template?.FindName("PART_Header", restoredRow)
                     as FrameworkElement ?? throw new Exception("Selected folder header missing.");
-                var restoredTop = restoredHeader.TranslatePoint(new Point(0, 0), restoreScroll).Y;
+                var restoredViewport = restoreScroll.Template.FindName("PART_ScrollContentPresenter", restoreScroll)
+                    as ScrollContentPresenter ?? throw new Exception("Folder scroll content presenter missing.");
+                var restoredTop = restoredHeader.TranslatePoint(new Point(0, 0), restoredViewport).Y;
                 if (restoreScroll.VerticalOffset <= 0 || restoredTop < -1 ||
                     restoredTop + restoredHeader.ActualHeight > restoreScroll.ViewportHeight + 2)
-                    throw new Exception("Selected folder header is outside the restored viewport.");
+                    throw new Exception($"Selected folder header is outside the restored viewport: offset={restoreScroll.VerticalOffset}, top={restoredTop}, header={restoredHeader.ActualHeight}, viewport={restoreScroll.ViewportHeight}, extent={restoreScroll.ExtentHeight}.");
             }
             finally { restoreWindow.Close(); }
             Console.WriteLine("PASS: Selected expanded folder header is in the restored viewport.");
