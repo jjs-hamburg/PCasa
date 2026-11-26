@@ -180,7 +180,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 SetStateUnsafe(item, SchedulerJobState.Canceled);
                 item.Completion.TrySetCanceled();
             }
-            var active = _runningWork.Where(item => item.Kind == SchedulerWorkKind.Catalog)
+            // Catalog is an execution class, not proof of a file mutation.
+            // Only accepted session writes and durable catalog mutations
+            // must drain before disposal cancels ordinary background work.
+            var active = _runningWork.Where(item => item.SessionWrite ||
+                item.DurableJob && item.Kind == SchedulerWorkKind.Catalog)
                 .ToArray();
             sessionWrites = active.Where(item => item.SessionWrite).ToArray();
             writing = active.Select(item =>

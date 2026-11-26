@@ -22,6 +22,7 @@ internal static class DurablePauseFlow
             ExerciseImageEditFailureLifecycle(dir).GetAwaiter().GetResult();
             ExerciseSessionFileJobLifetime(dir).GetAwaiter().GetResult();
             ExerciseRetirementBeforeBlockedRead(dir).GetAwaiter().GetResult();
+            ExerciseOrdinaryCatalogShutdown(dir).GetAwaiter().GetResult();
             ExerciseYieldDuringShutdown(dir).GetAwaiter().GetResult();
             ExerciseSharedUserAcceptanceOrder(dir);
             ExerciseLegacyFirstImportOrder(dir);
@@ -387,6 +388,32 @@ internal static class DurablePauseFlow
         if (next.QueueOrder >= latest.QueueOrder)
             throw new Exception("Shared acceptance sequence was reset by migration.");
         Console.WriteLine("PASS: Initial imports and explicit user packages share durable LIFO admission.");
+    }
+
+    private static async Task ExerciseOrdinaryCatalogShutdown(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "shutdown-ordinary-catalog.db"));
+        database.Initialize();
+        await using var scheduler = new PCasaScheduler();
+        scheduler.EnableDurablePackages(database);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ordinary = scheduler.EnqueueAsync("test:ordinary-catalog",
+            SchedulerPriority.Background, async _ =>
+            {
+                entered.TrySetResult();
+                await released.Task;
+            }, workKind: SchedulerWorkKind.Catalog);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            await scheduler.PrepareGracefulShutdownAsync().WaitAsync(TimeSpan.FromSeconds(3));
+            if (ordinary.IsCompleted)
+                throw new Exception("Ordinary catalog fixture was not still blocked.");
+        }
+        finally { released.TrySetResult(); }
+        await ordinary.WaitAsync(TimeSpan.FromSeconds(8));
+        Console.WriteLine("PASS: Ordinary catalog work does not block the safe write drain.");
     }
 
     private static async Task ExerciseYieldDuringShutdown(string dir)
