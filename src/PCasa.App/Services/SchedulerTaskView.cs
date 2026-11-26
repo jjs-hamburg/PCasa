@@ -317,7 +317,7 @@ public sealed class SchedulerTaskView
                         job.Total > 0 ? $"{job.Processed:N0}/{job.Total:N0}" : "–",
                         status, job.Error, (int)job.Priority, job.QueueOrder,
                         false, true, false, job.State is SchedulerJobState.Queued or
-                            SchedulerJobState.Running or SchedulerJobState.YieldRequested, job.WorkKind));
+                            SchedulerJobState.Running or SchedulerJobState.YieldRequested or SchedulerJobState.Failed, job.WorkKind));
                 }
 
                 // Actual running work first, then the scheduler's effective

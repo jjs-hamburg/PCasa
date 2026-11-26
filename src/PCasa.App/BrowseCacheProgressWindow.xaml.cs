@@ -381,8 +381,7 @@ public partial class BrowseCacheProgressWindow : Window
         // YieldRequested and Queued are the SAME waiting condition once a
         // worker releases its lane. The taskmanager also calls it "Wartet".
         // Do not mislabel a restored, nonrunning scan as "paused" work.
-        var waiting = progress.State is
-            SchedulerJobState.Queued or SchedulerJobState.YieldRequested;
+        var waiting = progress.State == SchedulerJobState.Queued;
         var phase = UiLanguage.T(waiting
             ? title ?? progress.Phase ?? "Dateioperation läuft"
             : progress.Phase ?? title ?? "Dateioperation läuft");

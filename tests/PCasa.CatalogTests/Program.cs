@@ -226,6 +226,7 @@ internal static class Program
                 ExifOrientation.RotateQuarterTurns(2, 1) != 7)
                 throw new Exception("EXIF rotation direction is incorrect.");
         }, failures);
+        Run("JPEG gallery rotation preserves compressed picture and EXIF dates", GalleryRotationPreservesBytes, failures);
         Run("JPEG EXIF orientation 6/8 is honored by viewer without altering original", JpegExifOrientationViewer, failures);
         Run("Viewer uses decoded EXIF axes at original pixel size", ViewerDecodedGeometry, failures);
         Run("RAW preview applies container orientation exactly once", RawPreviewOrientation, failures);
@@ -7206,6 +7207,28 @@ internal static class Program
             if (!sha.SequenceEqual(SHA256.HashData(File.ReadAllBytes(original))))
                 throw new Exception("RAW preview orientation modified its source.");
         }
+    }
+
+    private static void GalleryRotationPreservesBytes()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "rotation.jpg");
+        WriteJpeg(path);
+        RunExifTool("-overwrite_original", "-IFD0:Orientation#=1",
+            "-EXIF:DateTimeOriginal=2024:01:02 03:04:05", path);
+        var pixels = JpegGpsPatchPrototype.CompressedImageHash(path);
+        var dates = ExifDateMetadata.ReadFields(path);
+        JpegCropWriter.RotateGalleryImage(path, 1, CancellationToken.None);
+        using (var input = File.OpenRead(path))
+            if (ExifOrientation.Read(input) != 6)
+                throw new Exception("Clockwise rotation was not written to original.");
+        JpegCropWriter.RotateGalleryImage(path, -1, CancellationToken.None);
+        using (var input = File.OpenRead(path))
+            if (ExifOrientation.Read(input) != 1)
+                throw new Exception("Inverse rotation was not written to original.");
+        if (!pixels.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(path)) ||
+            ExifDateMetadata.ReadFields(path) != dates)
+            throw new Exception("Rotation changed protected image content.");
     }
 
     private static void JpegExifOrientationViewer()

@@ -322,7 +322,7 @@ public partial class MainWindow
                 // Active manual mutations / native metadata writers DO require
                 // the normal full drain, to protect originals and package steps.
                 await _scheduler.PrepareGracefulShutdownAsync();
-                var criticalWorkActive = ExifToolKeywordWriter.HasLiveSessions ||
+                var criticalWorkActive = ExifToolKeywordWriter.HasActiveWrites ||
                     _scheduler.Snapshot().Any(job =>
                         job.WorkKind == SchedulerWorkKind.Catalog &&
                         job.Priority <= SchedulerPriority.UserAction &&

@@ -152,6 +152,15 @@ public sealed class PCasaScheduler : IAsyncDisposable
         lock (_gate)
         {
             _gracefulShutdownRequested = true;
+            // A running owner may be awaiting a dependent catalog read.
+            // Cancel queued dependencies rather than freeze them behind a
+            // queue that will never dispatch again.
+            foreach (var item in _pending.Where(HasRunningParent).ToArray())
+            {
+                _pending.Remove(item);
+                SetStateUnsafe(item, SchedulerJobState.Canceled);
+                item.Completion.TrySetCanceled();
+            }
             SignalController();
         }
     }
@@ -783,10 +792,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     // rows already represented by a live owner.
                     var represented = _pending.Concat(_runningWork)
                         .Select(item => RankOwner(item).Key).ToHashSet(StringComparer.Ordinal);
-                    var preparing = accepted.Where(row => !represented.Contains(row.Key))
-                        .ToArray();
+                    var preparing = accepted.Where(row => !represented.Contains(row.Key) &&
+                        _durableActiveTasks.ContainsKey(row.Key)).ToArray();
+                    // An orphan journal row is not an executing or preparing
+                    // owner. It must never reserve the lane indefinitely.
                     var nonIdleWaiting = journalUnavailable ||
-                        accepted.Any(row => row.Priority < SchedulerPriority.Idle);
+                        accepted.Any(row => row.Priority < SchedulerPriority.Idle &&
+                            (represented.Contains(row.Key) || _durableActiveTasks.ContainsKey(row.Key)));
                     // Global rank, not per-lane callbacks, decides preemption.
                     var highest = _pending.Where(p => !IsIndependentReadItem(p) && !p.Paused && !IsBlockedByInteraction(p))
                         .OrderBy(p => RankOwner(p).Priority)
@@ -1249,35 +1261,58 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // boundary before the caller removes it from the exit review.
     public async Task<bool> CancelActiveTaskAsync(string key)
     {
-        WorkItem? executing;
-        Task? completion;
+        WorkItem? affected = null;
+        Task? completion = null;
+        Task? cancellation = null;
+        bool dismissedFailure = false;
         lock (_gate)
         {
-            var waiting = _pending.FirstOrDefault(item =>
-                string.Equals(item.Key, key, StringComparison.Ordinal));
+            var waiting = _pending.FirstOrDefault(item => item.Key == key);
             if (waiting is not null)
             {
+                affected = waiting;
                 _pending.Remove(waiting);
                 SetStateUnsafe(waiting, SchedulerJobState.Canceled);
                 waiting.Completion.TrySetCanceled();
                 WakePendingWorkersUnsafe();
-                return true;
             }
-            executing = _runningWork.FirstOrDefault(item =>
-                string.Equals(item.Key, key, StringComparison.Ordinal));
-            completion = executing?.Completion.Task;
+            else if (_runningWork.FirstOrDefault(item => item.Key == key) is { } executing)
+            {
+                affected = executing;
+                completion = executing.Completion.Task;
+                // Mark cancellation before a yielded worker can requeue.
+                cancellation = executing.UserCancellation.CancelAsync();
+            }
+            else
+            {
+                var index = _history.FindLastIndex(job => job.Key == key &&
+                    job.SessionWrite && job.State == SchedulerJobState.Failed);
+                if (index >= 0)
+                {
+                    _history.RemoveAt(index);
+                    dismissedFailure = true;
+                }
+            }
         }
-        if (executing is null) return false;
-        await executing.UserCancellation.CancelAsync();
-        try { await completion!; }
-        catch (OperationCanceledException) { }
+        if (dismissedFailure) { NotifyTaskViewChanged(); return true; }
+        if (affected is null) return false;
+        if (completion is null) PublishState(affected);
+        else
+        {
+            await cancellation!;
+            try { await completion; }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { PCasaDiagnostics.Write("Taskmanager.CancelSettled", ex); }
+        }
+        NotifyTaskViewChanged();
         return true;
     }
 
     public bool IsSessionTask(string key)
     {
         lock (_gate) return _pending.Concat(_runningWork).Any(item =>
-            item.Key == key && item.SessionWrite);
+            item.Key == key && item.SessionWrite) ||
+            _history.Any(job => job.Key == key && job.SessionWrite && job.State == SchedulerJobState.Failed);
     }
 
     public bool CanPauseSessionTask(string key)
@@ -1622,7 +1657,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             // A recipe factory may finish constructing after shutdown
             // froze dispatch. Never leave it waiting on a frozen queue.
-            if (_gracefulShutdownRequested && (durableJob || sessionWrite))
+            if (_gracefulShutdownRequested)
                 return Task.FromCanceled(new CancellationToken(true));
             var identity = key;
             var existing = _pending.FirstOrDefault(x =>

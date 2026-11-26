@@ -9,7 +9,7 @@ namespace PCasa.App.Services;
 /// are never decoded or recompressed. One session serves a complete user
 /// selection instead of starting a native process for every photograph.
 /// </summary>
-public sealed class ExifToolStructuralException(string message) : IOException(message);
+public sealed class ExifToolStructuralException(string message) : IOException(message) { }
 
 public static class ExifToolKeywordWriter
 {
@@ -420,6 +420,7 @@ public static class ExifToolKeywordWriter
             }
             catch
             {
+                _nativeCapture = null;
                 if (!temporaryExistedBeforeWrite)
                     TryRemoveAbandonedTemporaryOutput(imagePath, TimeSpan.Zero);
                 throw;
