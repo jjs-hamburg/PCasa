@@ -336,13 +336,7 @@ public partial class MainWindow
                 var admissionWatch = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
-                    completion = ids.Length == 1
-                        ? StartDirectImageWrite(key,
-                            UiLanguage.T("GPS in Originaldateien schreiben"),
-                            GetOriginalImagePath(ids[0]) ?? throw new IOException("Bild fehlt im Katalog."),
-                            BuildGpsEditPackageV2(key, payload),
-                            folderId: 0, reindexOriginal: false)
-                        : _scheduler.EnqueueDurableRecipeAsync(
+                    completion = _scheduler.EnqueueDurableRecipeAsync(
                             key, "gps-edit-v2", payload,
                             SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
                 }

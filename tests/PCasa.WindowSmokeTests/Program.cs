@@ -2612,6 +2612,55 @@ internal static class Program
             Console.WriteLine(
                 "PASS: Collapsed NAS tree children expand without WPF realization or disk reads.");
 
+            // Startup must position the HEADER, not the full expanded item's
+            // visual bounds, and commit the offset before a later rebuild.
+            var restoreTree = new TreeView { Margin = new Thickness(2) };
+            ScrollViewer.SetCanContentScroll(restoreTree, false);
+            VirtualizingPanel.SetIsVirtualizing(restoreTree, false);
+            for (var row = 0; row < 80; row++)
+                restoreTree.Items.Add(new TreeViewItem { Header = "Folder " + row });
+            var restoredRow = (TreeViewItem)restoreTree.Items[65];
+            for (var child = 0; child < 40; child++)
+                restoredRow.Items.Add(new TreeViewItem { Header = "Child " + child });
+            restoredRow.IsExpanded = true;
+            var restoreWindow = new Window
+            {
+                Width = 300, Height = 260, Content = restoreTree, ShowInTaskbar = false,
+                Owner = window
+            };
+            try
+            {
+                restoreWindow.Show();
+                Flush(restoreWindow);
+                restoredRow.IsSelected = true;
+                ScrollViewer? FindScroll(DependencyObject root)
+                {
+                    if (root is ScrollViewer viewer) return viewer;
+                    for (int child = 0; child < VisualTreeHelper.GetChildrenCount(root); child++)
+                        if (FindScroll(VisualTreeHelper.GetChild(root, child)) is { } found)
+                            return found;
+                    return null;
+                }
+                var restoreScroll = FindScroll(restoreTree)
+                    ?? throw new Exception("Folder restoration scroll viewer missing.");
+                restoreScroll.ScrollToVerticalOffset(0);
+                Flush(restoreWindow);
+                if (!FolderTreeNavigation.RevealHeader(restoreTree, restoredRow, restoreScroll))
+                    throw new Exception("Selected folder header could not be restored.");
+                Flush(restoreWindow);
+                restoredRow.ApplyTemplate();
+                var restoredHeader = restoredRow.Template?.FindName("PART_Header", restoredRow)
+                    as FrameworkElement ?? throw new Exception("Selected folder header missing.");
+                var restoredViewport = restoreScroll.Template.FindName("PART_ScrollContentPresenter", restoreScroll)
+                    as ScrollContentPresenter ?? throw new Exception("Folder scroll content presenter missing.");
+                var restoredTop = restoredHeader.TranslatePoint(new Point(0, 0), restoredViewport).Y;
+                if (restoreScroll.VerticalOffset <= 0 || restoredTop < -1 ||
+                    restoredTop + restoredHeader.ActualHeight > restoreScroll.ViewportHeight + 2)
+                    throw new Exception($"Selected folder header is outside the restored viewport: offset={restoreScroll.VerticalOffset}, top={restoredTop}, header={restoredHeader.ActualHeight}, viewport={restoreScroll.ViewportHeight}, extent={restoreScroll.ExtentHeight}.");
+            }
+            finally { restoreWindow.Close(); }
+            Console.WriteLine("PASS: Selected expanded folder header is in the restored viewport.");
+
             // Alpha.56: a large S: library may contain thousands of closed
             // parents. The visibility mask must inspect only each candidate's
             // OWN ancestors (O(depth)), not every collapsed folder (O(N^2)).

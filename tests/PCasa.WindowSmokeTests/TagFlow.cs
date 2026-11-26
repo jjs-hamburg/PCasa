@@ -2335,8 +2335,7 @@ internal static class TagFlow
             Console.WriteLine(
                 "PASS: One Tag draft survives folder/selection changes, Cancel discards it, one OK writes distinct originals.");
 
-            // Single-image confirmation uses the same metadata writer and
-            // the one scheduler, but does not persist a replay recipe.
+            // A single-image confirmation is the SAME durable recipe as a batch.
             Until(window, () => !activeScheduler.Snapshot().Any(job =>
                 job.Key.StartsWith("tags:package:", StringComparison.Ordinal) &&
                 job.State is SchedulerJobState.Queued or SchedulerJobState.Running or
@@ -2346,25 +2345,20 @@ internal static class TagFlow
             SelectTagImages(otherImageId);
             tagInput.Text = directTag;
             addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
-            var beforeDirect = activeScheduler.Snapshot().Count(job =>
-                job.Key.StartsWith("tags:package:", StringComparison.Ordinal));
-            var previousSessionKeys = activeScheduler.Snapshot().Where(job => job.SessionWrite)
+            var previousTagKeys = activeScheduler.Snapshot()
+                .Where(job => job.Key.StartsWith("tags:package:", StringComparison.Ordinal))
                 .Select(job => job.Key).ToHashSet(StringComparer.Ordinal);
             tagOk.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagOk));
-            Until(window, () => activeScheduler.Snapshot().Any(job => job.SessionWrite &&
-                !previousSessionKeys.Contains(job.Key) &&
-                job.Key.StartsWith("direct:tags:", StringComparison.Ordinal) &&
-                job.State == SchedulerJobState.Completed) &&
+            Until(window, () => new DurablePackageJournal(db).RecentCompleted()
+                .Any(row => row.Type == "tag-edit-v2" && !previousTagKeys.Contains(row.Key) &&
+                    row.Key.StartsWith("tags:package:", StringComparison.Ordinal)) &&
                 (ImageTagRepository.ReadKeywords(otherImagePath) ?? "").Contains(directTag),
-                "Single Tag edit did not finish through the scheduler.");
-            if (activeScheduler.Snapshot().Count(job =>
-                    job.Key.StartsWith("tags:package:", StringComparison.Ordinal)) != beforeDirect ||
-                activeScheduler.Snapshot().Count(job => job.SessionWrite &&
-                    !previousSessionKeys.Contains(job.Key) &&
-                    job.Key.StartsWith("direct:tags:", StringComparison.Ordinal)) != 1 ||
+                "Single Tag edit did not finish as a durable package.");
+            if (activeScheduler.Snapshot().Any(job => job.SessionWrite &&
+                    job.Key.StartsWith("direct:tags:", StringComparison.Ordinal)) ||
                 !(new ImageTagRepository(db).GetKeywords(otherImageId) ?? "").Contains(directTag))
-                throw new Exception("Single-image Tag edit did not use one session-bound scheduler job.");
-            Console.WriteLine("PASS: Single Tag edit uses the shared scheduler without a durable replay recipe.");
+                throw new Exception("Single-image Tag edit bypassed the durable package.");
+            Console.WriteLine("PASS: Single Tag edit uses the same durable recipe as a batch.");
 
             SelectTagImages(editorIds);
             tagInput.Text = editableTag;

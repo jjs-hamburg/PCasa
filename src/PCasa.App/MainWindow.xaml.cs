@@ -58,6 +58,7 @@ public partial class MainWindow : Window
         _scheduler.RegisterDurablePackageType("gps-edit-v1", BuildGpsEditPackage);
         _scheduler.RegisterDurablePackageType("gps-edit-v2", BuildGpsEditPackageV2);
         _scheduler.RegisterDurablePackageType("capture-date-from-name-v1", BuildCaptureDatePackage);
+        _scheduler.RegisterDurablePackageType("explicit-exif-dates-v1", BuildExplicitExifDatePackage);
         _scheduler.RegisterDurablePackageType(RotationRecipeType, BuildGalleryRotationPackage);
         _scheduler.RegisterDurablePackageType("gpx-write-v1", BuildGpxWritePackage);
         _scheduler.RegisterDurablePackageType("undo-restore-v1", BuildUndoRestorePackage);
@@ -440,10 +441,15 @@ public partial class MainWindow : Window
         // The live scan path below patches affected ancestors instead of
         // re-walking every NAS folder for each 200-ms count notification.
         RefreshVisibleFolderCounts();
-        if (treeOffset is double savedOffset && savedOffset > 0)
-            _ = Dispatcher.BeginInvoke(new Action(() =>
-                FindTreeScrollViewer(FoldersTree)?.ScrollToVerticalOffset(savedOffset)),
-                System.Windows.Threading.DispatcherPriority.Loaded);
+        if (treeOffset is double savedOffset && FindTreeScrollViewer(FoldersTree) is { } scroll)
+        {
+            // Apply the previous physical viewport to the NEW measured tree.
+            // Do not leave a deferred zero/old offset racing startup reveal
+            // or the user's next folder navigation.
+            FoldersTree.UpdateLayout();
+            scroll.ScrollToVerticalOffset(savedOffset);
+            scroll.UpdateLayout();
+        }
         }
         finally
         {
