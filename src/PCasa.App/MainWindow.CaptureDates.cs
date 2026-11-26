@@ -126,11 +126,7 @@ public partial class MainWindow
         BeginVisibleManualOperation(key, "Aufnahmedatum aus Dateinamen übernehmen", recipe.ImageIds.Length);
         try
         {
-            var task = recipe.ImageIds.Length == 1
-                ? StartDirectImageWrite(key, UiLanguage.T("Aufnahmedatum aus Dateinamen übernehmen"),
-                    GetOriginalImagePath(recipe.ImageIds[0]) ?? throw new IOException("Image missing."),
-                    BuildCaptureDatePackage(key, payload), 0, false)
-                : _scheduler.EnqueueDurableRecipeAsync(key, "capture-date-from-name-v1", payload,
+            var task = _scheduler.EnqueueDurableRecipeAsync(key, "capture-date-from-name-v1", payload,
                     SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
             _taskManagerWindow?.RequestRefresh();
             _ = ObserveCaptureDatePackageAsync(task, key);
