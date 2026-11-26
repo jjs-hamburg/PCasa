@@ -85,7 +85,8 @@ public class GpsCatalogOperations(LocalDatabase database,
             if (!before.Exists)
                 throw new FileNotFoundException("GPS-Originaldatei nicht verfügbar.", path);
 
-            using var reader = new ImageExifReader();
+            using var readerLease = MetadataWriteScope.RentReader();
+            var reader = readerLease.Value;
             var source = reader.Read(path, token);
             readMilliseconds = elapsed.ElapsedMilliseconds;
             var alreadyHasGps = source.GpsLatitude.HasValue &&
@@ -115,16 +116,19 @@ public class GpsCatalogOperations(LocalDatabase database,
                 _ => throw new InvalidDataException("Unbekannter GPS-Auftrag.")
             };
             using var ownMutation = shouldWrite ? OriginalFileMutationReceipts.Begin(path) : null;
+            ImageExifData? stagedExif = null;
             if (shouldWrite)
             {
                 token.ThrowIfCancellationRequested();
-                using var writer = new ExifToolKeywordWriter.Session();
+                using var writerLease = MetadataWriteScope.RentWriter();
+                var writer = writerLease.Value;
                 var targetLatitude = mode == EditMode.Remove ? null : latitude;
                 var targetLongitude = mode == EditMode.Remove ? null : longitude;
                 if (optimizedWrite?.Invoke(path,
                         targetLatitude, targetLongitude, writer, token) != true)
                     writer.WriteGps(path, targetLatitude, targetLongitude, token,
                         knownSourceLengthBytes: before.Length);
+                stagedExif = writer.LastVerifiedExif;
                 writeMilliseconds = elapsed.ElapsedMilliseconds - readMilliseconds;
                 // Never cancel between the physical write and catalog commit.
                 if (File.GetLastWriteTimeUtc(path).Ticks != indexedTicks)
@@ -132,7 +136,7 @@ public class GpsCatalogOperations(LocalDatabase database,
                         new DateTime(indexedTicks, DateTimeKind.Utc));
             }
             var after = new FileInfo(path);
-            var verified = reader.Read(path, CancellationToken.None);
+            var verified = stagedExif ?? reader.Read(path, CancellationToken.None);
             verifyMilliseconds = elapsed.ElapsedMilliseconds -
                 readMilliseconds - writeMilliseconds;
             if (shouldWrite && (mode == EditMode.Remove

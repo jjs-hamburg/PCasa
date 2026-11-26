@@ -118,8 +118,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
     public bool GracefulShutdownRequested => _gracefulShutdownRequested;
 
     // Accepted session writes share the ordinary scheduler rank and owner.
-    // Their immutable in-memory payload must finish before normal exit;
-    // unlike durable recipes it cannot be reconstructed after a restart.
+    // These nonpersistent operations may be explicitly abandoned at exit;
+    // durable recipes always retain their confirmed checkpoint.
     public bool HasSessionWrites
     {
         get { lock (_gate) return _pending.Concat(_runningWork).Any(item => item.SessionWrite); }
@@ -168,11 +168,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
     public async Task PrepareGracefulShutdownAsync()
     {
         BeginGracefulShutdown();
-        // Read the durable journal outside _gate; it owns its own SQLite locks.
-        var fileKeys = _durableJournal?.Pending()
-            .Where(p => !DurablePackageJournal.SurvivesSession(p.Type))
-            .Select(p => p.Key).ToHashSet(StringComparer.Ordinal)
-            ?? new HashSet<string>(StringComparer.Ordinal);
+        // Lifetime is defined by admission: every durable recipe survives exit.
+        // Only the active catalog mutation needs a safe file boundary.
         Task[] writing;
         WorkItem[] sessionWrites;
         lock (_gate)
@@ -183,17 +180,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 SetStateUnsafe(item, SchedulerJobState.Canceled);
                 item.Completion.TrySetCanceled();
             }
-            // Waiting file jobs must never be dispatched or leave callers
-            // blocked on a frozen queue. Scan requests retain their journal.
-            if (_retireFileJobsOnSessionEnd)
-                foreach (var item in _pending.Where(item => fileKeys.Contains(item.Key)).ToArray())
-                {
-                    _pending.Remove(item);
-                    SetStateUnsafe(item, SchedulerJobState.Canceled);
-                    item.Completion.TrySetCanceled();
-                }
-            var active = _runningWork.Where(item => fileKeys.Contains(item.Key))
-                .Concat(_runningWork.Where(item => item.SessionWrite)).Distinct().ToArray();
+            // Catalog is an execution class, not proof of a file mutation.
+            // Only accepted session writes and durable catalog mutations
+            // must drain before disposal cancels ordinary background work.
+            var active = _runningWork.Where(item => item.SessionWrite ||
+                item.DurableJob && item.Kind == SchedulerWorkKind.Catalog)
+                .ToArray();
             sessionWrites = active.Where(item => item.SessionWrite).ToArray();
             writing = active.Select(item =>
                 _durableActiveTasks.GetValueOrDefault(item.Key, item.Completion.Task))
@@ -204,11 +196,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
         try { await Task.WhenAll(writing).ConfigureAwait(false); }
         catch (OperationCanceledException) { /* written checkpoint is durable */ }
         catch (Exception ex) { PCasaDiagnostics.Write("Scheduler.GracefulDrain", ex); }
-        // Retire before disposal awaits potentially noninterruptible NAS
-        // reads. The window is allowed to close without waiting for those.
-        // Late journal callbacks cannot reopen terminal rows.
-        if (_retireFileJobsOnSessionEnd)
-            _durableJournal?.RetireUnfinishedFileJobs();
         NotifyTaskViewChanged();
     }
     private long _nextId;
@@ -346,19 +333,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // monitor. This is a cached readiness decision, never a parallel job lane.
     public SourceAvailabilityGate SourceAvailability { get; }
 
-    private bool _retireFileJobsOnSessionEnd;
-
-    public void EnableDurablePackages(LocalDatabase database,
-        bool retireFileJobsOnSessionEnd = false)
+    public void EnableDurablePackages(LocalDatabase database)
     {
         if (_durableJournal is not null)
             throw new InvalidOperationException("Paketjournal bereits aktiviert.");
         _durableJournal = new DurablePackageJournal(database);
         _sessionAcceptanceDatabase = database;
         _durableJournal.NormalizeLegacyJobPriorities();
-        _retireFileJobsOnSessionEnd = retireFileJobsOnSessionEnd;
-        if (_retireFileJobsOnSessionEnd)
-            _durableJournal.RetireUnfinishedFileJobs();
         _durableJournal.ReleaseStartupPauses();
         _taskOrderStore = new SchedulerTaskOrderStore(database);
         _taskOrderStore.NormalizeLegacyJobPriorities();
@@ -1115,9 +1096,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             var endingSession = _shutdown.IsCancellationRequested || _gracefulShutdownRequested;
             journal.SetState(record.Key,
                 endingSession
-                    ? _retireFileJobsOnSessionEnd &&
-                      !DurablePackageJournal.SurvivesSession(record.Type)
-                        ? "canceled" : "queued"
+                    ? "queued"
                     : journal.Pending().Any(p => p.Key == record.Key && p.State == "paused")
                         ? "paused" : "canceled",
                 package.CompletedSteps);
@@ -2050,8 +2029,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
         try { await Task.WhenAll(durable); }
         catch (OperationCanceledException) { }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
-        if (_retireFileJobsOnSessionEnd)
-            _durableJournal?.RetireUnfinishedFileJobs();
         _shutdown.Dispose();
         _controllerWake.Dispose();
     }

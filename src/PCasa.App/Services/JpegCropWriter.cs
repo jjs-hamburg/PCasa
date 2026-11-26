@@ -33,97 +33,52 @@ public static class JpegCropWriter
     // copy or accidentally modify the source.
     // JPEG quarter-turns use EXIF orientation; the compressed image data
     // remains untouched. Stage and verify before replacing the source.
-    public static void RotateGalleryImage(string originalPath, int turns, CancellationToken token)
+    public static void RotateGalleryImage(string originalPath, int turns, CancellationToken token,
+        Action<string>? beforePublish = null)
     {
         turns = ((turns % 4) + 4) % 4;
         if (turns == 0) return;
         if (Path.GetExtension(originalPath).ToLowerInvariant() is not (".jpg" or ".jpeg"))
         {
-            Save(originalPath, [new PhotoEditStep("rotate", Degrees: turns * 90)], token);
+            SaveCore(originalPath, null, [new PhotoEditStep("rotate", Degrees: turns * 90)],
+                token, captureUndo: false, beforePublish: beforePublish);
             return;
         }
-
-        var path = Path.GetFullPath(originalPath);
-        using var lease = SourceFileLocks.Enter(path, token);
-        var before = new FileInfo(path);
-        var size = before.Length;
-        var modified = before.LastWriteTimeUtc;
-        var created = before.CreationTimeUtc;
-        var local = Path.Combine(Path.GetTempPath(),
-            "PCasa-rotation-" + Guid.NewGuid().ToString("N") + Path.GetExtension(path));
-        var staged = Path.Combine(Path.GetDirectoryName(path)!,
-            ".pcasa-edit-" + Guid.NewGuid().ToString("N") + Path.GetExtension(path));
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        long download = 0, edit = 0, upload = 0, undo = 0;
-        try
-        {
-            token.ThrowIfCancellationRequested();
-            CopyRotationCandidate(path, local, token);
-            download = clock.ElapsedMilliseconds;
-            int orientation;
-            using (var input = File.OpenRead(local))
-                orientation = ExifOrientation.Read(input);
-            var target = ExifOrientation.RotateQuarterTurns(orientation, turns);
-            var compressed = JpegGpsPatchPrototype.CompressedImageHash(local);
-            using var reader = new ImageExifReader();
-            var expected = ExifDateMetadata.ParseJson(reader.Read(local, token).Json);
-            using (var writer = new ExifToolKeywordWriter.Session())
-                writer.WriteOrientation(local, target, token);
-            using (var input = File.OpenRead(local))
-                if (ExifOrientation.Read(input) != target)
-                    throw new IOException("JPEG orientation verification failed.");
-            if (!compressed.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(local)))
-                throw new InvalidDataException("JPEG rotation changed compressed picture bytes.");
-            var actual = ExifDateMetadata.ParseJson(reader.Read(local, token).Json);
-            if (expected.Any(pair => !ExifDateMetadata.SameProtectedTag(pair.Key,
-                    pair.Value, actual[pair.Key])))
-                throw new InvalidDataException("JPEG rotation changed protected EXIF dates.");
-            edit = clock.ElapsedMilliseconds - download;
-            token.ThrowIfCancellationRequested();
-            CopyRotationCandidate(local, staged, token);
-            upload = clock.ElapsedMilliseconds - download - edit;
-            // Preserve the existing Undo contract and check original identity
-            // again immediately before its single atomic replacement.
-            new UndoHistoryService(UndoOptions.Load()).CaptureBeforeSave(path, token);
-            undo = clock.ElapsedMilliseconds - download - edit - upload;
-            ReplaceWithVerifiedSharingRetry(staged, path, token, size, modified);
-            try
-            {
-                File.SetCreationTimeUtc(path, created);
-                var now = DateTime.UtcNow;
-                File.SetLastWriteTimeUtc(path, now > modified ? now : modified.AddMilliseconds(1));
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            { PCasaDiagnostics.Write("Image.Rotate.Timestamp", ex); }
-        }
-        finally
-        {
-            foreach (var candidate in new[] { local, staged })
-                try { if (File.Exists(candidate)) File.Delete(candidate); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                { PCasaDiagnostics.Write("Image.Rotate.Cleanup", ex); }
-            PCasaDiagnostics.WriteMessage("Image.Rotate.Profile",
-                $"DownloadMs={download}; LocalEditMs={edit}; UploadMs={upload}; UndoMs={undo}; " +
-                $"TotalMs={clock.ElapsedMilliseconds}; File={Path.GetFileName(path)}");
-        }
+        using var lease = SourceFileLocks.Enter(originalPath, token);
+        using var readerLease = MetadataWriteScope.RentReader();
+        var reader = readerLease.Value;
+        var before = reader.Read(originalPath, token);
+        var target = ExifOrientation.RotateQuarterTurns(MetadataFileWriter.Orientation(before), turns);
+        SetGalleryOrientation(originalPath, target, token, before);
     }
 
-    private static void CopyRotationCandidate(string source, string destination,
-        CancellationToken token)
+    // Absolute orientation is also safe when a durable recipe is replayed.
+    public static void SetGalleryOrientation(string path, int target, CancellationToken token)
+        => SetGalleryOrientation(path, target, token, null);
+
+    internal static void SetGalleryOrientation(string path, int target,
+        CancellationToken token, ImageExifData? initial)
     {
-        using var input = new FileStream(source, FileMode.Open, FileAccess.Read,
-            FileShare.Read, 131072, FileOptions.SequentialScan);
-        using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write,
-            FileShare.None, 131072, FileOptions.SequentialScan);
-        var buffer = new byte[131072];
-        int count;
-        while ((count = input.Read(buffer, 0, buffer.Length)) != 0)
-        {
-            token.ThrowIfCancellationRequested();
-            output.Write(buffer, 0, count);
-        }
-        output.Flush(flushToDisk: true);
-        token.ThrowIfCancellationRequested();
+        using var lease = SourceFileLocks.Enter(path, token);
+        using var readerLease = MetadataWriteScope.RentReader();
+        var reader = readerLease.Value;
+        var before = initial ?? reader.Read(path, token);
+        if (MetadataFileWriter.Orientation(before) == target) return;
+        var info = new FileInfo(path);
+        var modified = info.LastWriteTimeUtc;
+        var created = info.CreationTimeUtc;
+        using var writerLease = MetadataWriteScope.RentWriter();
+        var writer = writerLease.Value;
+        writer.WriteOrientation(path, target, token);
+        var verified = writer.LastVerifiedExif ?? reader.Read(path, CancellationToken.None);
+        if (MetadataFileWriter.Orientation(verified) != target ||
+            !ExifDateMetadata.ParseJson(before.Json).All(pair =>
+                ExifDateMetadata.SameProtectedTag(pair.Key, pair.Value,
+                    ExifDateMetadata.ParseJson(verified.Json)[pair.Key])))
+            throw new InvalidDataException("JPEG orientation or protected dates could not be verified.");
+        File.SetCreationTimeUtc(path, created);
+        var now = DateTime.UtcNow;
+        File.SetLastWriteTimeUtc(path, now > modified ? now : modified.AddMilliseconds(1));
     }
 
     public static string GetAvailableCopyPath(string originalPath)
@@ -203,7 +158,7 @@ public static class JpegCropWriter
 
     private static void SaveCore(string originalPath, string? copyPath,
         IReadOnlyList<PhotoEditStep> operations, CancellationToken token,
-        bool captureUndo = true)
+        bool captureUndo = true, Action<string>? beforePublish = null)
     {
         var extension = Path.GetExtension(originalPath);
         if (!EditableImageFormats.Supports(originalPath))
@@ -304,6 +259,7 @@ public static class JpegCropWriter
                         throw;
                     }
                 }
+                beforePublish?.Invoke(staged);
                 token.ThrowIfCancellationRequested();
                 try { ReplaceWithSharingRetry(staged, fullPath, token); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

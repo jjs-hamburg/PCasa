@@ -482,7 +482,8 @@ public partial class MainWindow
                     TryWriteOriginal(OriginalWriteFailureRepository.Tags,
                         key, imageId, GetOriginalImagePath(imageId), token, () =>
                     {
-                        using var writer = new ExifToolKeywordWriter.Session();
+                        using var writerLease = MetadataWriteScope.RentWriter();
+                        var writer = writerLease.Value;
                         repo.ApplyPendingImageEdits(imageId, edits, writer, token,
                             path => _scheduler.ReportProgress(key,
                                 "Tags in Originaldateien schreiben",
@@ -557,7 +558,8 @@ public partial class MainWindow
                         TryWriteOriginal(OriginalWriteFailureRepository.Tags,
                             key, imageId, originalPath, token, () =>
                         {
-                            using var writer = new ExifToolKeywordWriter.Session();
+                            using var writerLease = MetadataWriteScope.RentWriter();
+                        var writer = writerLease.Value;
                             repo.ApplyPendingImageEdits(imageId, edits, writer, token,
                                 path => _scheduler.ReportProgress(key,
                                     "Tags in Originaldateien schreiben",
@@ -900,7 +902,8 @@ public partial class MainWindow
                     TryWriteOriginal(OriginalWriteFailureRepository.Tags, key,
                         id, GetOriginalImagePath(id), token, () =>
                     {
-                        using var writer = new ExifToolKeywordWriter.Session();
+                        using var writerLease = MetadataWriteScope.RentWriter();
+                        var writer = writerLease.Value;
                         repo.ApplyPendingImageEdits(id, edits, writer, token,
                             path => _scheduler.ReportProgress(key,
                                 "Tags in Originaldateien schreiben",

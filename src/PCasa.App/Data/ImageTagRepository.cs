@@ -4,12 +4,12 @@ using PCasa.App.Services;
 
 namespace PCasa.App.Data;
 
-// Windows composition adapter. Transactions, intent, search and native
-// metadata edits are implemented only once in the portable catalog.
+// Windows composition adapter. Native metadata transport and transactions
+// are owned by the common portable catalog services.
 public sealed class ImageTagRepository : TagCatalogOperations
 {
     public ImageTagRepository(LocalDatabase database)
-        : base(database, ReadKeywords, JpegMetadataOriginalWriter.TryWriteTags) { }
+        : base(database, ReadKeywords) { }
 
     // Null means the source was unavailable or could not be decoded.
     // Empty string means it was inspected successfully and has no keywords.

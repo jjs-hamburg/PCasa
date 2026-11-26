@@ -520,6 +520,7 @@ public sealed class SchedulerTaskView
                 ? UiLanguage.T("GPS entfernen") : UiLanguage.T("GPS schreiben"),
             "tag-edit-v1" or "tag-edit-v2" => UiLanguage.T("Tags schreiben"),
             "capture-date-from-name-v1" => UiLanguage.T("Aufnahmedatum aus Dateinamen übernehmen"),
+            "gallery-rotation-v1" => UiLanguage.T("Bildbearbeitung speichern"),
             "tag-recovery-v1" or "tag-recovery-v2" => UiLanguage.T("Tags wiederherstellen"),
             "manual-folder-scan-v1" => UiLanguage.T("Ordner aktualisieren"),
             "import-error-retry-v1" => UiLanguage.T("Erneut einlesen"),

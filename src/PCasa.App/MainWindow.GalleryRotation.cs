@@ -1,4 +1,6 @@
 using System.IO;
+using System.Text.Json;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Threading;
 using PCasa.App.Data;
@@ -12,6 +14,10 @@ public partial class MainWindow
     private readonly Dictionary<long, int> _galleryRotationWriting = [];
     private DispatcherTimer? _galleryRotationTimer;
     private readonly Dictionary<string, long[]> _rotationJobImages = new(StringComparer.Ordinal);
+    private const string RotationRecipeType = "gallery-rotation-v1";
+    private sealed record RotationPreparation(string Path, long Size, long ModifiedTicks,
+        int? TargetOrientation, string? OriginalHash, string? CandidateHash);
+    private sealed record RotationRecipe(long[] ImageIds, int[] Turns, RotationPreparation?[] Prepared);
 
     private bool CanRotateGalleryImage(long id) =>
         !_pendingEditImageIds.Contains(id) &&
@@ -76,51 +82,15 @@ public partial class MainWindow
         BeginVisibleManualOperation(key, title, items.Length);
         try
         {
-            var failures = new List<Exception>();
-            var processed = 0;
-            // Exactly one nonpersistent P0 package; file identities are resolved
-            // at execution so a prior accepted rename cannot target a stale path.
-            var task = _scheduler.EnqueueSessionWriteAsync(key, token =>
-            {
-                while (processed < items.Length)
-                {
-                    token.ThrowIfCancellationRequested();
-                    var (id, angle) = items[processed];
-                    try
-                    {
-                        string path; long folderId;
-                        using (var db = _database.OpenConnection())
-                        using (var command = db.CreateCommand())
-                        {
-                            command.CommandText = "SELECT local_path,folder_id FROM images WHERE id=$id;";
-                            command.Parameters.AddWithValue("$id", id);
-                            using var row = command.ExecuteReader();
-                            if (!row.Read()) throw new IOException("Image no longer in catalog.");
-                            path = row.GetString(0);
-                            folderId = row.GetInt64(1);
-                        }
-                        _scheduler.ReportProgress(key, title, processed, items.Length, path);
-                        JpegCropWriter.RotateGalleryImage(path, angle, token);
-                        // After the original commit, reconcile before releasing P0.
-                        new BrowseCacheRepository(_database).InvalidateImage(id);
-                        var root = _folderRepository.GetAll().First(f => f.Id == folderId);
-                        var result = _folderScanner.ScanFile(root, path,
-                            publishCatalogChange: false, forceExifRefresh: true);
-                        if (result.Failed > 0 || result.ImageFilesSeen == 0)
-                            throw new IOException("Image catalog reconciliation failed: " + path);
-                    }
-                    catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-                    catch (Exception ex)
-                    {
-                        failures.Add(ex);
-                        PCasaDiagnostics.Write("Image.GalleryRotation", ex);
-                    }
-                    _scheduler.ReportProgress(key, title, ++processed, items.Length);
-                    // Keep the same cursor even when the next file yields.
-                }
-                if (failures.Count > 0) throw new AggregateException(failures);
-                return Task.CompletedTask;
-            }, title, total: items.Length, resumable: true);
+            var recipe = new RotationRecipe(items.Select(x => x.Key).ToArray(),
+                items.Select(x => x.Value).ToArray(), new RotationPreparation?[items.Length]);
+            var payload = JsonSerializer.Serialize(recipe);
+            var task = items.Length == 1
+                ? StartDirectImageWrite(key, title,
+                    GetOriginalImagePath(items[0].Key) ?? throw new IOException("Image missing."),
+                    BuildGalleryRotationPackage(key, payload, persistent: false), 0, false)
+                : _scheduler.EnqueueDurableRecipeAsync(key, RotationRecipeType, payload,
+                    SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
             _ = ObserveGalleryRotationAsync(task, key, items.Select(item => item.Key).ToArray(), title);
         }
         catch (Exception ex)
@@ -137,6 +107,103 @@ public partial class MainWindow
             PCasaDiagnostics.Write("Image.GalleryRotation.Enqueue", ex);
             PcasaDialog.Show(this, ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private SchedulerTaskPackage BuildGalleryRotationPackage(string key, string payload)
+        => BuildGalleryRotationPackage(key, payload, persistent: true);
+
+    private SchedulerTaskPackage BuildGalleryRotationPackage(string key, string payload, bool persistent)
+    {
+        var recipe = JsonSerializer.Deserialize<RotationRecipe>(payload)
+            ?? throw new InvalidDataException("Invalid rotation recipe.");
+        if (recipe.ImageIds.Length != recipe.Turns.Length ||
+            recipe.ImageIds.Length != recipe.Prepared.Length)
+            throw new InvalidDataException("Invalid rotation recipe length.");
+        var package = new SchedulerTaskPackage(key);
+        for (int i = 0; i < recipe.ImageIds.Length; i++)
+        {
+            int index = i;
+            package.AddStep(token =>
+            {
+                token.ThrowIfCancellationRequested();
+                var id = recipe.ImageIds[index];
+                string path; long folderId;
+                using (var db = _database.OpenConnection())
+                using (var command = db.CreateCommand())
+                {
+                    command.CommandText = "SELECT local_path,folder_id FROM images WHERE id=$id;";
+                    command.Parameters.AddWithValue("$id", id);
+                    using var row = command.ExecuteReader();
+                    if (!row.Read()) throw new IOException("Image no longer in catalog.");
+                    path = row.GetString(0); folderId = row.GetInt64(1);
+                }
+                var title = UiLanguage.T("Bildbearbeitung speichern");
+                _scheduler.ReportProgress(key, title, index, recipe.ImageIds.Length, path);
+                using var lease = SourceFileLocks.Enter(path, token);
+                var before = new FileInfo(path);
+                if (!before.Exists) throw new FileNotFoundException("Rotation source missing.", path);
+                bool jpeg = Path.GetExtension(path).ToLowerInvariant() is ".jpg" or ".jpeg";
+                using var reader = new ImageExifReader();
+                ImageExifData? current = jpeg ? reader.Read(path, token) : null;
+                string Hash(string file)
+                {
+                    using var stream = File.OpenRead(file);
+                    return Convert.ToHexString(SHA256.HashData(stream));
+                }
+                void Persist(RotationPreparation prepared)
+                {
+                    recipe.Prepared[index] = prepared;
+                    if (!persistent) return;
+                    // The immutable acceptance identity and cursor remain the
+                    // same. Record the absolute target BEFORE touching pixels.
+                    using var db = _database.OpenConnection();
+                    using var cmd = db.CreateCommand();
+                    cmd.CommandText = """
+                        UPDATE scheduler_packages SET payload_json=$payload
+                         WHERE package_key=$key AND state IN ('queued','running','paused','deferred');
+                        """;
+                    cmd.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(recipe));
+                    cmd.Parameters.AddWithValue("$key", key);
+                    if (cmd.ExecuteNonQuery() != 1)
+                        throw new IOException("Rotation intent could not be recorded.");
+                }
+                var prepared = recipe.Prepared[index];
+                if (prepared is null)
+                {
+                    prepared = new RotationPreparation(path, before.Length, before.LastWriteTimeUtc.Ticks,
+                        jpeg ? ExifOrientation.RotateQuarterTurns(MetadataFileWriter.Orientation(current!),
+                            recipe.Turns[index]) : null, jpeg ? null : Hash(path), null);
+                    Persist(prepared);
+                }
+                if (!string.Equals(prepared.Path, path, StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("Rotation source changed after preparation.");
+                bool applied = jpeg
+                    ? MetadataFileWriter.Orientation(current!) == prepared.TargetOrientation
+                    : prepared.CandidateHash is not null && Hash(path) == prepared.CandidateHash;
+                if (!applied)
+                {
+                    if (before.Length != prepared.Size || before.LastWriteTimeUtc.Ticks != prepared.ModifiedTicks ||
+                        !jpeg && Hash(path) != prepared.OriginalHash)
+                        throw new IOException("Rotation source changed after preparation.");
+                    if (jpeg && prepared.TargetOrientation is int target)
+                        JpegCropWriter.SetGalleryOrientation(path, target, token, current);
+                    else
+                        JpegCropWriter.RotateGalleryImage(path, recipe.Turns[index], token,
+                            candidate => Persist(prepared with { CandidateHash = Hash(candidate) }));
+                }
+                // Reconcile even after a crash between replacement and the
+                // package checkpoint. Never repeat a relative rotation.
+                new BrowseCacheRepository(_database).InvalidateImage(id);
+                var root = _folderRepository.GetAll().First(f => f.Id == folderId);
+                var result = _folderScanner.ScanFile(root, path,
+                    publishCatalogChange: false, forceExifRefresh: true);
+                if (result.Failed > 0 || result.ImageFilesSeen == 0)
+                    throw new IOException("Image catalog reconciliation failed: " + path);
+                _scheduler.ReportProgress(key, title, index+1, recipe.ImageIds.Length, path);
+                return Task.CompletedTask;
+            });
+        }
+        return package;
     }
 
     private async Task ObserveGalleryRotationAsync(Task task, string key, long[] ids, string title)

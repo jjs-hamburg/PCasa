@@ -373,7 +373,29 @@ public static class ExifToolKeywordWriter
 
         // Shared native write lifecycle: a scheduler yield can interrupt
         // BEFORE the request, never during ExifTool's temporary-file swap.
+        // All native metadata edits use this single transport policy. Non-JPEG
+        // formats retain their established native path; benchmarks covered JPEG.
+        internal bool ForceStagedJpegWrites { get; set; }
+        internal ImageExifData? LastVerifiedExif { get; private set; }
+
         private void ExecuteMetadataEdit(string imagePath,
+            IReadOnlyList<string> commands, CancellationToken cancellationToken,
+            long? knownSourceLengthBytes = null)
+        {
+            LastVerifiedExif = null;
+            if (Path.GetExtension(imagePath).ToLowerInvariant() is ".jpg" or ".jpeg" &&
+                (ForceStagedJpegWrites || AdaptiveMetadataWriteTimeout.SourceKey(imagePath)
+                    .StartsWith("SMB:", StringComparison.Ordinal)))
+            {
+                LastVerifiedExif = MetadataFileWriter.WriteStagedJpeg(imagePath, commands,
+                    this, local => ExecuteNativeMetadataEdit(local, commands, cancellationToken),
+                    cancellationToken);
+                return;
+            }
+            ExecuteNativeMetadataEdit(imagePath, commands, cancellationToken, knownSourceLengthBytes);
+        }
+
+        private void ExecuteNativeMetadataEdit(string imagePath,
             IReadOnlyList<string> commands, CancellationToken cancellationToken,
             long? knownSourceLengthBytes = null)
         {

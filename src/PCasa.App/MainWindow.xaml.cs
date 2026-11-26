@@ -49,7 +49,7 @@ public partial class MainWindow : Window
         // before scheduler recovery can start any original-file write.
         _originalWriteFailures = new OriginalWriteFailureRepository(_database);
         _durableGalleryTransfers = new DurableGalleryTransferJournal(_database);
-        _scheduler.EnableDurablePackages(_database, retireFileJobsOnSessionEnd: true);
+        _scheduler.EnableDurablePackages(_database);
         _durableGalleryTransfers.PruneCompleted();
         _scheduler.RegisterDurablePackageType("tag-recovery-v1", BuildTagRecoveryPackage);
         _scheduler.RegisterDurablePackageType("tag-recovery-v2", BuildTagRecoveryPackageV2);
@@ -58,6 +58,7 @@ public partial class MainWindow : Window
         _scheduler.RegisterDurablePackageType("gps-edit-v1", BuildGpsEditPackage);
         _scheduler.RegisterDurablePackageType("gps-edit-v2", BuildGpsEditPackageV2);
         _scheduler.RegisterDurablePackageType("capture-date-from-name-v1", BuildCaptureDatePackage);
+        _scheduler.RegisterDurablePackageType(RotationRecipeType, BuildGalleryRotationPackage);
         _scheduler.RegisterDurablePackageType("gpx-write-v1", BuildGpxWritePackage);
         _scheduler.RegisterDurablePackageType("undo-restore-v1", BuildUndoRestorePackage);
         _scheduler.RegisterDurablePackageType("image-crop-v1", BuildCropPackage);
