@@ -54,19 +54,48 @@ public static class FolderTreeNavigation
     public static bool RevealHeader(TreeView tree, TreeViewItem item, ScrollViewer scroll)
     {
         ExpandAncestors(tree, item);
+        tree.ApplyTemplate();
+        scroll.ApplyTemplate();
         tree.UpdateLayout();
-        item.ApplyTemplate();
-        if (item.Template?.FindName("PART_Header", item) is not FrameworkElement header ||
-            !header.IsVisible || header.ActualHeight <= 0 || scroll.ViewportHeight <= 0)
-            return false;
-        var top = header.TranslatePoint(new Point(0, 0), scroll).Y;
-        var offset = scroll.VerticalOffset + top -
-            Math.Max(0, (scroll.ViewportHeight - header.ActualHeight) / 2);
-        scroll.ScrollToVerticalOffset(Math.Clamp(offset, 0, scroll.ScrollableHeight));
-        // Commit the scroll before any catalogue-driven tree rebuild can
-        // capture the obsolete initial offset of zero.
+        if (scroll.ViewportHeight <= 0) return false;
+
+        // Rows in the PCasa tree template are exactly 22 DIP high.
+        // The selected container can be unrealized far outside the viewport
+        // even though the ItemsControl already owns its TreeViewItem.
+        // Scroll to its visible row index first, then refine using the
+        // measured header when WPF realizes it.
+        var row = 0;
+        if (!FindVisibleRow(tree)) return false;
+        scroll.ScrollToVerticalOffset(Math.Clamp(
+            row * 22.0 - Math.Max(0, (scroll.ViewportHeight - 22) / 2),
+            0, scroll.ScrollableHeight));
+        tree.UpdateLayout();
         scroll.UpdateLayout();
+
+        item.ApplyTemplate();
+        if (item.Template?.FindName("PART_Header", item) is FrameworkElement header &&
+            header.IsVisible && header.ActualHeight > 0 &&
+            PresentationSource.FromVisual(header) is not null)
+        {
+            var top = header.TranslatePoint(new Point(0, 0), scroll).Y;
+            var offset = scroll.VerticalOffset + top -
+                Math.Max(0, (scroll.ViewportHeight - header.ActualHeight) / 2);
+            scroll.ScrollToVerticalOffset(Math.Clamp(offset, 0, scroll.ScrollableHeight));
+            tree.UpdateLayout();
+            scroll.UpdateLayout();
+        }
         return true;
+
+        bool FindVisibleRow(ItemsControl parent)
+        {
+            foreach (var child in parent.Items.OfType<TreeViewItem>())
+            {
+                if (ReferenceEquals(child, item)) return true;
+                row++;
+                if (child.IsExpanded && FindVisibleRow(child)) return true;
+            }
+            return false;
+        }
     }
 
     public static bool ExpandAncestors(TreeViewItem item)
