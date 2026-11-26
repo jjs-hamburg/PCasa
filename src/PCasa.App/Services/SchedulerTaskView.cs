@@ -513,6 +513,8 @@ public sealed class SchedulerTaskView
         => key.StartsWith("automatic:", StringComparison.Ordinal) &&
            key.Contains(":RescanRoot:", StringComparison.Ordinal);
 
+    internal static string GalleryRotationCaption => UiLanguage.T("Bilder drehen");
+
     internal static string TaskCaption(DurablePackageRecord item)
         => item.Type switch
         {
@@ -520,7 +522,7 @@ public sealed class SchedulerTaskView
                 ? UiLanguage.T("GPS entfernen") : UiLanguage.T("GPS schreiben"),
             "tag-edit-v1" or "tag-edit-v2" => UiLanguage.T("Tags schreiben"),
             "capture-date-from-name-v1" => UiLanguage.T("Aufnahmedatum aus Dateinamen übernehmen"),
-            "gallery-rotation-v1" => UiLanguage.T("Bildbearbeitung speichern"),
+            "gallery-rotation-v1" => GalleryRotationCaption,
             "tag-recovery-v1" or "tag-recovery-v2" => UiLanguage.T("Tags wiederherstellen"),
             "manual-folder-scan-v1" => UiLanguage.T("Ordner aktualisieren"),
             "import-error-retry-v1" => UiLanguage.T("Erneut einlesen"),

@@ -77,7 +77,7 @@ public partial class MainWindow
         }
         UpdateGalleryRotationButtons();
         var key = "image:gallery-rotation:" + Guid.NewGuid().ToString("N");
-        var title = UiLanguage.T("Bildbearbeitung speichern");
+        var title = SchedulerTaskView.GalleryRotationCaption;
         _rotationJobImages[key] = items.Select(item => item.Key).ToArray();
         BeginVisibleManualOperation(key, title, items.Length);
         try
@@ -137,7 +137,7 @@ public partial class MainWindow
                     if (!row.Read()) throw new IOException("Image no longer in catalog.");
                     path = row.GetString(0); folderId = row.GetInt64(1);
                 }
-                var title = UiLanguage.T("Bildbearbeitung speichern");
+                var title = SchedulerTaskView.GalleryRotationCaption;
                 _scheduler.ReportProgress(key, title, index, recipe.ImageIds.Length, path);
                 using var lease = SourceFileLocks.Enter(path, token);
                 var before = new FileInfo(path);

@@ -142,10 +142,18 @@ public partial class MainWindow
         await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
         if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
 
-        // Only read/import recipes survive a PCasa session. The scheduler
-        // has already retired unfinished file operations and parked any
-        // unconfirmed tag intents. Restore the scan
-        // presenter before admitting those existing read jobs.
+        // Selection was restored before WPF measured the folder tree. Reveal
+        // the selected row now, once, without changing the saved selection or
+        // coupling later gallery scrolling to the folder tree.
+        if (_explicitGalleryNavigationVersion == 0)
+        {
+            var tree = _appearance.FlatFolderView ? FlatFoldersTree : FoldersTree;
+            tree.UpdateLayout();
+            if (tree.SelectedItem is TreeViewItem selected)
+                selected.BringIntoView();
+        }
+
+        // Restore presenters before admitting the persistent recipes.
         RestoreVisiblePendingManualScans();
         var unresolvedPackages = _scheduler.RecoverDurablePackages(
             ObserveRecoveredDurablePackage);
@@ -214,7 +222,7 @@ public partial class MainWindow
             var ids = recipe?.ImageIds ?? Array.Empty<long>();
             _rotationJobImages[key] = ids;
             foreach (var id in ids) _pendingEditImageIds.Add(id);
-            var title = UiLanguage.T("Bildbearbeitung speichern");
+            var title = SchedulerTaskView.GalleryRotationCaption;
             BeginVisibleManualOperation(key, title, ids.Length);
             _ = ObserveGalleryRotationAsync(completion, key, ids, title);
         }
