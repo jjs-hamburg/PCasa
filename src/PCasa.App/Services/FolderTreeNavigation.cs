@@ -47,6 +47,28 @@ public static class FolderTreeNavigation
         }
     }
 
+    // The custom tree template contains the entire expanded subtree in the
+    // TreeViewItem's bounds. BringIntoView on that item is not a reliable
+    // request to reveal its selected header. Use the measured header and
+    // the physical pixel offset of the actual TreeView ScrollViewer.
+    public static bool RevealHeader(TreeView tree, TreeViewItem item, ScrollViewer scroll)
+    {
+        ExpandAncestors(tree, item);
+        tree.UpdateLayout();
+        item.ApplyTemplate();
+        if (item.Template?.FindName("PART_Header", item) is not FrameworkElement header ||
+            !header.IsVisible || header.ActualHeight <= 0 || scroll.ViewportHeight <= 0)
+            return false;
+        var top = header.TranslatePoint(new Point(0, 0), scroll).Y;
+        var offset = scroll.VerticalOffset + top -
+            Math.Max(0, (scroll.ViewportHeight - header.ActualHeight) / 2);
+        scroll.ScrollToVerticalOffset(Math.Clamp(offset, 0, scroll.ScrollableHeight));
+        // Commit the scroll before any catalogue-driven tree rebuild can
+        // capture the obsolete initial offset of zero.
+        scroll.UpdateLayout();
+        return true;
+    }
+
     public static bool ExpandAncestors(TreeViewItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
