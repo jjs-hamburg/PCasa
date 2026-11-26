@@ -2647,7 +2647,8 @@ internal static class Program
                 if (!FolderTreeNavigation.RevealHeader(restoreTree, restoredRow, restoreScroll))
                     throw new Exception("Selected folder header could not be restored.");
                 Flush(restoreWindow);
-                var restoredHeader = restoredRow.Template.FindName("PART_Header", restoredRow)
+                restoredRow.ApplyTemplate();
+                var restoredHeader = restoredRow.Template?.FindName("PART_Header", restoredRow)
                     as FrameworkElement ?? throw new Exception("Selected folder header missing.");
                 var restoredTop = restoredHeader.TranslatePoint(new Point(0, 0), restoreScroll).Y;
                 if (restoreScroll.VerticalOffset <= 0 || restoredTop < -1 ||
