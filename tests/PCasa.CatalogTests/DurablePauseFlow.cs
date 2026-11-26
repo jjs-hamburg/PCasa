@@ -411,7 +411,7 @@ internal static class DurablePauseFlow
             return package;
         }
         await using var scheduler = new PCasaScheduler();
-        scheduler.EnableDurablePackages(database, retireFileJobsOnSessionEnd: true);
+        scheduler.EnableDurablePackages(database);
         scheduler.RegisterDurablePackageType("gallery-delete-v1", Build);
         var writing = scheduler.EnqueueDurableRecipeAsync(key,
             "gallery-delete-v1", "{}", SchedulerPriority.Background,
@@ -428,7 +428,7 @@ internal static class DurablePauseFlow
             await drain.WaitAsync(TimeSpan.FromSeconds(8));
             try { await writing.WaitAsync(TimeSpan.FromSeconds(8)); }
             catch (OperationCanceledException) { }
-            if (journal.Pending().Any(row => row.Key == key) ||
+            if (!journal.Pending().Any(row => row.Key == key && row.CompletedSteps == 0) ||
                 scheduler.HasLiveExecution(key))
                 throw new Exception("Yielded file job reentered the frozen shutdown queue.");
             if (higher.IsCompleted)
@@ -453,32 +453,24 @@ internal static class DurablePauseFlow
             SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
         await using (var scheduler = new PCasaScheduler())
         {
-            scheduler.EnableDurablePackages(database, retireFileJobsOnSessionEnd: true);
+            scheduler.EnableDurablePackages(database);
             var pending = journal.Pending();
-            if (pending.Count != 2 ||
+            if (pending.Count != 3 ||
                 pending.Single(row => row.Key == "old:scan").CompletedSteps != 1 ||
+                pending.Single(row => row.Key == "old:transfer").CompletedSteps != 2 ||
                 !pending.Any(row => row.Key == "old:retry"))
-                throw new Exception("Startup replayed a file job or discarded a scan checkpoint.");
+                throw new Exception("Startup lost a durable file or scan checkpoint.");
             journal.Put("new:delete", "gallery-delete-v1", "{}",
                 SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
             journal.Put("new:scan", "manual-scan-all-v1", "{}",
                 SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
         }
         var remaining = journal.Pending();
-        if (remaining.Count != 3 || remaining.Any(row =>
-                !DurablePackageJournal.SurvivesSession(row.Type)))
-            throw new Exception("Shutdown retained a file job or lost a scan.");
-        using var db = database.OpenConnection();
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = """
-            SELECT COUNT(*) FROM scheduler_packages
-             WHERE state='canceled'
-               AND ((package_key='old:transfer' AND completed_steps=2)
-                    OR package_key='new:delete');
-            """;
-        if (Convert.ToInt32(cmd.ExecuteScalar()) != 2)
-            throw new Exception("Session retirement lost the terminal audit records.");
-        Console.WriteLine("PASS: File jobs end with the session; scan receipts survive.");
+        if (remaining.Count != 5 ||
+            remaining.Single(row => row.Key == "old:transfer").CompletedSteps != 2 ||
+            !remaining.Any(row => row.Key == "new:delete"))
+            throw new Exception("Shutdown discarded a durable file job.");
+        Console.WriteLine("PASS: All durable jobs and checkpoints survive shutdown.");
     }
 
     private static async Task ExerciseRetirementBeforeBlockedRead(string dir)
@@ -507,7 +499,7 @@ internal static class DurablePauseFlow
         }
         var journal = new DurablePackageJournal(database);
         await using var scheduler = new PCasaScheduler();
-        scheduler.EnableDurablePackages(database, retireFileJobsOnSessionEnd: true);
+        scheduler.EnableDurablePackages(database);
         var tags = new ImageTagRepository(database);
         void Stage(string owner, string keyword, bool remove)
             => tags.QueueTagEdits(new[]
@@ -589,15 +581,15 @@ internal static class DurablePauseFlow
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await scheduler.PrepareGracefulShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
-            if (read.IsCompleted || journal.Pending().Any(row => row.Key == "shutdown:staged-tags") ||
-                !new OriginalWriteFailureRepository(database).IsParked(
+            if (read.IsCompleted || !journal.Pending().Any(row => row.Key == "shutdown:staged-tags" && row.CompletedSteps == 1) ||
+                new OriginalWriteFailureRepository(database).IsParked(
                     OriginalWriteFailureRepository.Tags, imageId) ||
                 tags.PendingEditsForImage(imageId).Count != 2)
-                throw new Exception("Shutdown did not park staged tag intents before blocked read disposal.");
+                throw new Exception("Shutdown lost durable tag intents or waited for an unrelated read.");
         }
         finally { release.TrySetResult(); }
         await read.WaitAsync(TimeSpan.FromSeconds(5));
-        Console.WriteLine("PASS: Session file retirement and tag review survive blocked background reads.");
+        Console.WriteLine("PASS: Durable tag intents survive blocked background reads.");
     }
 
     private static async Task ExerciseImageEditFailureLifecycle(string dir)

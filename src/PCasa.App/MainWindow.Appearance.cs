@@ -180,9 +180,8 @@ public partial class MainWindow
 
         e.Cancel = true;
         if (_shutdownStarted || _shutdownReviewOpen) return;
-        // Do not silently drop a queued original-file edit on close.
-        // The review is outside the scheduler; its cancel commands go back
-        // through the same control-plane used by the Taskmanager.
+        // Accepted persistent packages are never part of this review.
+        // Only non-reconstructable session edits can be abandoned explicitly.
         var pending = PendingFileOperationsForShutdown();
         if (pending.Count > 0)
         {
@@ -191,16 +190,14 @@ public partial class MainWindow
             {
                 var review = new ShutdownPendingWorkWindow(pending, async operation =>
                 {
-                    if (_scheduler.IsSessionTask(operation.Key))
-                        return await _scheduler.CancelActiveTaskAsync(operation.Key);
-                    return await Task.Run(() => _scheduler.DeleteDurableTaskAsync(operation.Key));
+                    return await _scheduler.CancelActiveTaskAsync(operation.Key);
                 }) { Owner = this };
                 if (review.ShowDialog() != true) return;
             }
             finally { _shutdownReviewOpen = false; }
         }
-        // Explicit exit: discard unstarted work; wait only for active
-        // original-file safe boundaries, never dispatch a new file write.
+        // Persistent jobs remain accepted for the next start. Only explicitly
+        // abandoned session work is discarded; active writes reach a safe boundary.
         _galleryRotationTimer?.Stop();
         _galleryRotationDraft.Clear();
         _tagDraft.Clear();
@@ -276,26 +273,6 @@ public partial class MainWindow
                 UiLanguage.T(job.Phase ?? "Dateiaktion"),
                 UiLanguage.T(job.State == SchedulerJobState.Running ? "Läuft" : "Wartet"),
                 files);
-        }
-        foreach (var record in new DurablePackageJournal(_database).Pending())
-        {
-            if (DurablePackageJournal.SurvivesSession(record.Type) || rows.ContainsKey(record.Key))
-                continue;
-            var (ids, paths) = ShutdownRecipeTargets(record.Payload);
-            var files = paths.Select(path => new ShutdownPendingFile(path, null)).ToList();
-            foreach (var id in ids)
-                if (_dragPublishedImages.TryGetValue(id, out var entry) &&
-                    _dragPublishedFolders.TryGetValue(entry.PhotoFolderId, out var folder))
-                {
-                    var path = System.IO.Path.Combine(folder, entry.FileName);
-                    files.RemoveAll(file => string.Equals(file.Path, path, StringComparison.OrdinalIgnoreCase));
-                    files.Add(new ShutdownPendingFile(path, entry.LegacyThumbnailPath));
-                }
-            var live = _scheduler.Snapshot().LastOrDefault(job => job.Key == record.Key);
-            var title = _visibleManualOperations.TryGetValue(record.Key, out var item)
-                ? item.Title : live?.Phase ?? "Dateiaktion";
-            rows[record.Key] = new ShutdownPendingOperation(record.Key, UiLanguage.T(title),
-                UiLanguage.T(record.State == "running" ? "Läuft" : "Wartet"), files);
         }
         return rows.Values.ToArray();
     }
