@@ -11,7 +11,7 @@ namespace PCasa.App.Services;
 internal static class PCasaDiagnostics
 {
     internal const int MaxFileBytes = 1024 * 1024;
-    public static string LogPath { get; } = Path.Combine(
+    public static string LogPath { get; } = Environment.GetEnvironmentVariable("PCASA_BENCHMARK_LOG") ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "PCasa", "logs", "pcasa-errors.log");
 

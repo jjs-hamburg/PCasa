@@ -1,0 +1,40 @@
+name: Portable Metadata Benchmark
+on:
+  push:
+    branches: [benchmark-metadata]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish independent Windows x64 benchmark
+        shell: pwsh
+        run: |
+          dotnet publish tools/MetadataBenchmark/PCasa.MetadataBenchmark.csproj -c Release -r win-x64 --self-contained true -o "$env:RUNNER_TEMP/PCasaBenchmark/Runtime"
+          if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
+          Copy-Item tools/MetadataBenchmark/Benchmark.cmd "$env:RUNNER_TEMP/PCasaBenchmark/Benchmark.cmd"
+          Copy-Item tools/MetadataBenchmark/README.txt "$env:RUNNER_TEMP/PCasaBenchmark/README.txt"
+          Copy-Item LICENSE "$env:RUNNER_TEMP/PCasaBenchmark/LICENSE.txt"
+          Copy-Item LICENSES-MIT-Microsoft.txt "$env:RUNNER_TEMP/PCasaBenchmark/"
+          Copy-Item license-baseline/exiftool-13.59 "$env:RUNNER_TEMP/PCasaBenchmark/ExifTool-Licenses" -Recurse
+          ./.github/scripts/install-exiftool.ps1 -Destination "$env:RUNNER_TEMP/PCasaBenchmark/Runtime/ExifTool"
+      - name: Verify all 12 operation and method combinations on a disposable JPEG
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'benchmark-fixture'
+          New-Item -ItemType Directory -Path $fixture -Force | Out-Null
+          & "$env:RUNNER_TEMP/PCasaBenchmark/Runtime/PCasa.MetadataBenchmark.exe" --self-test $fixture
+          Get-Content "$fixture/Benchmark-Ergebnis.txt"
+          if ($LASTEXITCODE -ne 0) { throw 'Benchmark self-test failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PCasa-Metadata-Benchmark-Windows-x64
+          path: ${{ runner.temp }}/PCasaBenchmark/
+          if-no-files-found: error
+          retention-days: 30

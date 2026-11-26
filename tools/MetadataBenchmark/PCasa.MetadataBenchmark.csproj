@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AssemblyName>PCasa.MetadataBenchmark</AssemblyName>
+    <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/PCasa.Core/PCasa.Core.csproj"/>
+    <Compile Include="../../src/PCasa.App/Services/JpegTagRewritePrototype.cs" Link="JpegTagRewritePrototype.cs"/>
+    <Compile Include="../../src/PCasa.App/Services/JpegSmbCopyChunkPrototype.cs" Link="JpegSmbCopyChunkPrototype.cs"/>
+    <Compile Include="../../src/PCasa.App/Services/JpegGpsPatchPrototype.cs" Link="JpegGpsPatchPrototype.cs"/>
+    <Compile Include="../../src/PCasa.App/Services/ExifOrientation.cs" Link="ExifOrientation.cs"/>
+  </ItemGroup>
+</Project>

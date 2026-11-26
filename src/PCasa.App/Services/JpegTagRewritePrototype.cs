@@ -58,10 +58,18 @@ public static class JpegTagRewritePrototype
         => CreateCopy(originalPath, targetPath, keywords, updateTags: true,
             updateGps: true, latitude, longitude, session, token);
 
+    // Isolated benchmark uses the same JPEG carrier/CopyChunk implementation
+    // with the exact production ExifTool command for each metadata operation.
+    internal static Result CreateBenchmarkCopy(string originalPath, string targetPath,
+        ExifToolKeywordWriter.Session session, Action<string> edit, CancellationToken token)
+        => CreateCopy(originalPath, targetPath, Array.Empty<string>(), false, false,
+            null, null, session, token, edit);
+
     private static Result CreateCopy(string originalPath, string targetPath,
         IReadOnlyList<string> keywords, bool updateTags, bool updateGps,
         double? latitude, double? longitude,
-        ExifToolKeywordWriter.Session? session, CancellationToken token)
+        ExifToolKeywordWriter.Session? session, CancellationToken token,
+        Action<string>? benchmarkEdit = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(originalPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
@@ -109,7 +117,8 @@ public static class JpegTagRewritePrototype
 
             // EXIF/IPTC/XMP semantics remain with the verified ExifTool
             // engine; only the small local metadata carrier is rewritten.
-            if (session is null)
+            if (benchmarkEdit is not null) benchmarkEdit(carrierPath);
+            else if (session is null)
             {
                 using var owned = new ExifToolKeywordWriter.Session();
                 if (updateTags) owned.Write(carrierPath, keywords, token);

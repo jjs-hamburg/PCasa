@@ -10,6 +10,7 @@
     <InternalsVisibleTo Include="PCasa.Imaging" />
     <InternalsVisibleTo Include="PCasa.CatalogTests" />
     <InternalsVisibleTo Include="PCasa.WindowSmokeTests" />
+    <InternalsVisibleTo Include="PCasa.MetadataBenchmark" />
   </ItemGroup>
   <!-- Transitional links preserve existing source-level regression checks.
        These implementations are compiled ONLY into the portable assembly. -->
