@@ -205,6 +205,13 @@ internal static class Program
         Run("Unicode JPEG keyword leaves pixels untouched", JpegUnicodeTagPreservesPixels, failures);
         Run("EXIF fields survive tag write and removal", JpegExifFieldsSurviveTags, failures);
         Run("Filename capture date changes only native metadata and retains the catalog thumbnail", CaptureDateFromFilenameRoundTrip, failures);
+        Run("Structural ExifTool errors are not transient failures", () =>
+        {
+            if (!ExifToolKeywordWriter.IsStructuralFailure("Error: Truncated ExifIFD directory - file.jpg") ||
+                !ExifToolKeywordWriter.IsStructuralFailure("Error: Bad format (65535) for IFD0 entry 8") ||
+                ExifToolKeywordWriter.IsStructuralFailure("Error: Error renaming temporary file"))
+                throw new Exception("Native structural error classification failed.");
+        }, failures);
         Run("Gallery quarter turns compose with every EXIF orientation", () =>
         {
             for (int orientation = 1; orientation <= 8; orientation++)
@@ -219,6 +226,7 @@ internal static class Program
                 ExifOrientation.RotateQuarterTurns(2, 1) != 7)
                 throw new Exception("EXIF rotation direction is incorrect.");
         }, failures);
+        Run("JPEG gallery rotation preserves compressed picture and EXIF dates", GalleryRotationPreservesBytes, failures);
         Run("JPEG EXIF orientation 6/8 is honored by viewer without altering original", JpegExifOrientationViewer, failures);
         Run("Viewer uses decoded EXIF axes at original pixel size", ViewerDecodedGeometry, failures);
         Run("RAW preview applies container orientation exactly once", RawPreviewOrientation, failures);
@@ -4646,8 +4654,9 @@ internal static class Program
         Expect(GallerySortField.Size, false, 5, 4, 1, 3, 2);
         Expect(GallerySortField.Modified, false, 5, 4, 3, 1, 2);
         Expect(GallerySortField.Created, false, 4, 5, 2, 3, 1);
-        // Missing EXIF capture time uses creation, not a fake epoch.
-        Expect(GallerySortField.Captured, false, 5, 4, 2, 3, 1);
+        // Missing EXIF capture time is always last, without filesystem fallback.
+        Expect(GallerySortField.Captured, false, 4, 5, 3, 1, 2);
+        Expect(GallerySortField.Captured, true, 4, 5, 1, 3, 2);
         Expect(GallerySortField.Dimensions, false, 4, 5, 2, 3, 1);
         Expect(GallerySortField.Size, true, 4, 5, 2, 3, 1);
         // Repeated sorting with the same rule must keep index identity.
@@ -7198,6 +7207,28 @@ internal static class Program
             if (!sha.SequenceEqual(SHA256.HashData(File.ReadAllBytes(original))))
                 throw new Exception("RAW preview orientation modified its source.");
         }
+    }
+
+    private static void GalleryRotationPreservesBytes()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "rotation.jpg");
+        WriteJpeg(path);
+        RunExifTool("-overwrite_original", "-IFD0:Orientation#=1",
+            "-EXIF:DateTimeOriginal=2024:01:02 03:04:05", path);
+        var pixels = JpegGpsPatchPrototype.CompressedImageHash(path);
+        var dates = ExifDateMetadata.ReadFields(path);
+        JpegCropWriter.RotateGalleryImage(path, 1, CancellationToken.None);
+        using (var input = File.OpenRead(path))
+            if (ExifOrientation.Read(input) != 6)
+                throw new Exception("Clockwise rotation was not written to original.");
+        JpegCropWriter.RotateGalleryImage(path, -1, CancellationToken.None);
+        using (var input = File.OpenRead(path))
+            if (ExifOrientation.Read(input) != 1)
+                throw new Exception("Inverse rotation was not written to original.");
+        if (!pixels.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(path)) ||
+            ExifDateMetadata.ReadFields(path) != dates)
+            throw new Exception("Rotation changed protected image content.");
     }
 
     private static void JpegExifOrientationViewer()

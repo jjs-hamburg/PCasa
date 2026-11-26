@@ -168,6 +168,7 @@ public partial class MainWindow
     private bool _shutdownStarted;
     private bool _shutdownFinished;
     private ShutdownProgressWindow? _shutdownProgressWindow;
+    private bool _shutdownReviewOpen;
 
     private void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
@@ -178,10 +179,30 @@ public partial class MainWindow
         }
 
         e.Cancel = true;
-        if (_shutdownStarted) return;
-        // Unsubmitted drafts are discarded, accepted writes are drained at
-        // their safe boundary below. No separate pending-operation dialog.
-        FlushGalleryRotations();
+        if (_shutdownStarted || _shutdownReviewOpen) return;
+        // Do not silently drop a queued original-file edit on close.
+        // The review is outside the scheduler; its cancel commands go back
+        // through the same control-plane used by the Taskmanager.
+        var pending = PendingFileOperationsForShutdown();
+        if (pending.Count > 0)
+        {
+            _shutdownReviewOpen = true;
+            try
+            {
+                var review = new ShutdownPendingWorkWindow(pending, async operation =>
+                {
+                    if (_scheduler.IsSessionTask(operation.Key))
+                        return await _scheduler.CancelActiveTaskAsync(operation.Key);
+                    return await Task.Run(() => _scheduler.DeleteDurableTaskAsync(operation.Key));
+                }) { Owner = this };
+                if (review.ShowDialog() != true) return;
+            }
+            finally { _shutdownReviewOpen = false; }
+        }
+        // Explicit exit: discard unstarted work; wait only for active
+        // original-file safe boundaries, never dispatch a new file write.
+        _galleryRotationTimer?.Stop();
+        _galleryRotationDraft.Clear();
         _tagDraft.Clear();
         if (_photoEditSession is { HasChanges: true }) CancelEditSession();
         // Save the ACTUAL visible folder expansion before shutdown begins.
@@ -234,6 +255,51 @@ public partial class MainWindow
         _ = FinishShutdownAsync();
     }
 
+    private IReadOnlyList<ShutdownPendingOperation> PendingFileOperationsForShutdown()
+    {
+        var rows = new Dictionary<string, ShutdownPendingOperation>(StringComparer.Ordinal);
+        var active = _scheduler.Snapshot().Where(job => job.SessionWrite &&
+            job.State is SchedulerJobState.Queued or SchedulerJobState.Running or
+                SchedulerJobState.YieldRequested).ToArray();
+        foreach (var job in active)
+        {
+            var files = new List<ShutdownPendingFile>();
+            if (_rotationJobImages.TryGetValue(job.Key, out var ids))
+                foreach (var id in ids)
+                    if (_dragPublishedImages.TryGetValue(id, out var entry) &&
+                        _dragPublishedFolders.TryGetValue(entry.PhotoFolderId, out var folder))
+                        files.Add(new ShutdownPendingFile(System.IO.Path.Combine(folder, entry.FileName),
+                            entry.LegacyThumbnailPath));
+            if (files.Count == 0 && job.CurrentPath is { Length: > 0 } path)
+                files.Add(new ShutdownPendingFile(path, null));
+            rows[job.Key] = new ShutdownPendingOperation(job.Key,
+                UiLanguage.T(job.Phase ?? "Dateiaktion"),
+                UiLanguage.T(job.State == SchedulerJobState.Running ? "Läuft" : "Wartet"),
+                files);
+        }
+        foreach (var record in new DurablePackageJournal(_database).Pending())
+        {
+            if (DurablePackageJournal.SurvivesSession(record.Type) || rows.ContainsKey(record.Key))
+                continue;
+            var (ids, paths) = ShutdownRecipeTargets(record.Payload);
+            var files = paths.Select(path => new ShutdownPendingFile(path, null)).ToList();
+            foreach (var id in ids)
+                if (_dragPublishedImages.TryGetValue(id, out var entry) &&
+                    _dragPublishedFolders.TryGetValue(entry.PhotoFolderId, out var folder))
+                {
+                    var path = System.IO.Path.Combine(folder, entry.FileName);
+                    files.RemoveAll(file => string.Equals(file.Path, path, StringComparison.OrdinalIgnoreCase));
+                    files.Add(new ShutdownPendingFile(path, entry.LegacyThumbnailPath));
+                }
+            var live = _scheduler.Snapshot().LastOrDefault(job => job.Key == record.Key);
+            var title = _visibleManualOperations.TryGetValue(record.Key, out var item)
+                ? item.Title : live?.Phase ?? "Dateiaktion";
+            rows[record.Key] = new ShutdownPendingOperation(record.Key, UiLanguage.T(title),
+                UiLanguage.T(record.State == "running" ? "Läuft" : "Wartet"), files);
+        }
+        return rows.Values.ToArray();
+    }
+
     private async Task FinishShutdownAsync()
     {
         var watch = System.Diagnostics.Stopwatch.StartNew();
@@ -256,7 +322,7 @@ public partial class MainWindow
                 // Active manual mutations / native metadata writers DO require
                 // the normal full drain, to protect originals and package steps.
                 await _scheduler.PrepareGracefulShutdownAsync();
-                var criticalWorkActive = ExifToolKeywordWriter.HasLiveSessions ||
+                var criticalWorkActive = ExifToolKeywordWriter.HasActiveWrites ||
                     _scheduler.Snapshot().Any(job =>
                         job.WorkKind == SchedulerWorkKind.Catalog &&
                         job.Priority <= SchedulerPriority.UserAction &&

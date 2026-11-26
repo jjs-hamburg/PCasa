@@ -945,6 +945,7 @@
   "Für dieses Bild ist bereits ein Speicherauftrag vorgemerkt. Bitte dessen Status im Taskmanager prüfen; keinen zweiten Auftrag starten.": "A save is already queued for this image. Review it in Task Manager instead of starting another.",
   "Erstimport – Dateien einlesen": "Initial import – reading files",
   "Nicht abgeschlossene Änderungen": "Unfinished changes",
+  "Beim Beenden werden noch ausstehende Dateioperationen verworfen. Bereits gespeicherte Dateien bleiben erhalten.": "When exiting, pending file operations are discarded. Files already saved are retained.",
   "Nicht beenden": "Don't exit",
   "Nicht gespeichert": "Not saved",
   "PCasa beenden": "Exit PCasa",

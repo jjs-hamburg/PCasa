@@ -306,16 +306,18 @@ public sealed class SchedulerTaskView
                     var status = job.State switch
                     {
                         SchedulerJobState.Running => "Läuft",
+                        SchedulerJobState.YieldRequested => "Läuft",
                         SchedulerJobState.Failed => "Fehler",
                         SchedulerJobState.Completed => "Abgeschlossen",
-                        _ => "Wartet"
+                        _ => job.Paused ? "Angehalten" : "Wartet"
                     };
                     rows.Add(new SchedulerTaskViewItem(job.Key,
                         UiLanguage.T(job.Phase ?? "Dateiaktion"),
                         CurrentDirectory(job.CurrentPath),
                         job.Total > 0 ? $"{job.Processed:N0}/{job.Total:N0}" : "–",
                         status, job.Error, (int)job.Priority, job.QueueOrder,
-                        false, false, false, false, job.WorkKind));
+                        false, true, false, job.State is SchedulerJobState.Queued or
+                            SchedulerJobState.Running or SchedulerJobState.YieldRequested or SchedulerJobState.Failed, job.WorkKind));
                 }
 
                 // Actual running work first, then the scheduler's effective

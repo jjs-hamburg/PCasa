@@ -11,6 +11,7 @@ public partial class MainWindow
     private readonly Dictionary<long, int> _galleryRotationDraft = [];
     private readonly Dictionary<long, int> _galleryRotationWriting = [];
     private DispatcherTimer? _galleryRotationTimer;
+    private readonly Dictionary<string, long[]> _rotationJobImages = new(StringComparer.Ordinal);
 
     private bool CanRotateGalleryImage(long id) =>
         !_pendingEditImageIds.Contains(id) &&
@@ -71,17 +72,20 @@ public partial class MainWindow
         UpdateGalleryRotationButtons();
         var key = "image:gallery-rotation:" + Guid.NewGuid().ToString("N");
         var title = UiLanguage.T("Bildbearbeitung speichern");
+        _rotationJobImages[key] = items.Select(item => item.Key).ToArray();
+        BeginVisibleManualOperation(key, title, items.Length);
         try
         {
+            var failures = new List<Exception>();
+            var processed = 0;
             // Exactly one nonpersistent P0 package; file identities are resolved
             // at execution so a prior accepted rename cannot target a stale path.
             var task = _scheduler.EnqueueSessionWriteAsync(key, token =>
             {
-                var failures = new List<Exception>();
-                var processed = 0;
-                foreach (var (id, angle) in items)
+                while (processed < items.Length)
                 {
                     token.ThrowIfCancellationRequested();
+                    var (id, angle) = items[processed];
                     try
                     {
                         string path; long folderId;
@@ -96,7 +100,7 @@ public partial class MainWindow
                             folderId = row.GetInt64(1);
                         }
                         _scheduler.ReportProgress(key, title, processed, items.Length, path);
-                        JpegCropWriter.RotateGalleryImage(path, angle, CancellationToken.None);
+                        JpegCropWriter.RotateGalleryImage(path, angle, token);
                         // After the original commit, reconcile before releasing P0.
                         new BrowseCacheRepository(_database).InvalidateImage(id);
                         var root = _folderRepository.GetAll().First(f => f.Id == folderId);
@@ -105,17 +109,19 @@ public partial class MainWindow
                         if (result.Failed > 0 || result.ImageFilesSeen == 0)
                             throw new IOException("Image catalog reconciliation failed: " + path);
                     }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
                     catch (Exception ex)
                     {
                         failures.Add(ex);
                         PCasaDiagnostics.Write("Image.GalleryRotation", ex);
                     }
                     _scheduler.ReportProgress(key, title, ++processed, items.Length);
+                    // Keep the same cursor even when the next file yields.
                 }
                 if (failures.Count > 0) throw new AggregateException(failures);
                 return Task.CompletedTask;
-            }, title, total: items.Length);
-            _ = ObserveGalleryRotationAsync(task, items.Select(item => item.Key).ToArray(), title);
+            }, title, total: items.Length, resumable: true);
+            _ = ObserveGalleryRotationAsync(task, key, items.Select(item => item.Key).ToArray(), title);
         }
         catch (Exception ex)
         {
@@ -126,18 +132,21 @@ public partial class MainWindow
             }
             UpdateGalleryRotationPreview();
             UpdateGalleryRotationButtons();
+            _rotationJobImages.Remove(key);
+            EndVisibleManualOperation(key);
             PCasaDiagnostics.Write("Image.GalleryRotation.Enqueue", ex);
             PcasaDialog.Show(this, ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
-    private async Task ObserveGalleryRotationAsync(Task task, long[] ids, string title)
+    private async Task ObserveGalleryRotationAsync(Task task, string key, long[] ids, string title)
     {
         Exception? failure = null;
         try { await task; }
         catch (Exception ex) { failure = ex; }
         finally
         {
+            _rotationJobImages.Remove(key);
             foreach (var id in ids)
             {
                 _galleryRotationWriting.Remove(id);
@@ -146,6 +155,7 @@ public partial class MainWindow
             }
         }
         if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
+        EndVisibleManualOperation(key);
         UpdateGalleryRotationPreview();
         UpdateGalleryRotationButtons();
         await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);

@@ -90,7 +90,10 @@ public static class GalleryFolderOrdering
         if (left.PhotoFolderId != right.PhotoFolderId)
             return left.PhotoFolderId.CompareTo(right.PhotoFolderId);
 
-        int order = options.Field switch
+        var leftMissing = MissingSortValue(left, options.Field);
+        var rightMissing = MissingSortValue(right, options.Field);
+        if (leftMissing != rightMissing) return leftMissing ? 1 : -1;
+        int order = leftMissing ? 0 : options.Field switch
         {
             GallerySortField.Captured => CaptureTime(left).CompareTo(CaptureTime(right)),
             GallerySortField.Created => CreatedTime(left).CompareTo(CreatedTime(right)),
@@ -123,7 +126,7 @@ public static class GalleryFolderOrdering
         var nativeCapture = field == GallerySortField.Captured && item.TakenUtcTicks.HasValue;
         long? ticks = field switch
         {
-            GallerySortField.Captured => item.TakenUtcTicks ?? item.CreatedUtcTicks,
+            GallerySortField.Captured => item.TakenUtcTicks,
             GallerySortField.Created => item.CreatedUtcTicks,
             GallerySortField.Modified => item.ModifiedUtcTicks,
             _ => null
@@ -164,9 +167,19 @@ public static class GalleryFolderOrdering
             ? offset.DateTime.Ticks : null;
     }
 
+    private static bool MissingSortValue(BrowseThumbnailIndexEntry item, GallerySortField field)
+        => field switch
+        {
+            GallerySortField.Captured => CaptureTime(item) <= 0,
+            GallerySortField.Created => CreatedTime(item) <= 0,
+            GallerySortField.Modified => item.ModifiedUtcTicks <= 0,
+            GallerySortField.Size => item.FileSize <= 0,
+            GallerySortField.Dimensions => item.OriginalWidth <= 0 || item.OriginalHeight <= 0,
+            _ => false
+        };
+
     private static long CaptureTime(BrowseThumbnailIndexEntry item)
-        // EXIF missing: source creation; if unavailable: modification.
-        => item.HasInvalidCaptureDate ? 0 : item.TakenUtcTicks ?? item.CreatedUtcTicks ?? 0;
+        => item.HasInvalidCaptureDate ? 0 : item.TakenUtcTicks ?? 0;
 
     private static long CreatedTime(BrowseThumbnailIndexEntry item)
         => item.CreatedUtcTicks is > 0 ? item.CreatedUtcTicks.Value : 0;

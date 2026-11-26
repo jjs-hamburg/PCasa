@@ -16,6 +16,7 @@ internal static class DurablePauseFlow
             ExercisePauseAndRestart(dir).GetAwaiter().GetResult();
             ExercisePersistentMultiWrite(dir).GetAwaiter().GetResult();
             ExerciseQueuedSessionWrites(dir).GetAwaiter().GetResult();
+            ExerciseSessionControls(dir).GetAwaiter().GetResult();
             ExerciseAutomaticControlPersistence(dir).GetAwaiter().GetResult();
             ExerciseInitialImportStartupRelease(dir);
             ExerciseImageEditFailureLifecycle(dir).GetAwaiter().GetResult();
@@ -53,8 +54,7 @@ internal static class DurablePauseFlow
         {
             entered.TrySetResult();
             await release.Task;
-            token.ThrowIfCancellationRequested();
-            order.Enqueue(1);
+            order.Enqueue(1); // current atomic file completes despite cancel
         }, "Bildbearbeitung speichern", "first.jpg", 1);
         try
         {
@@ -77,14 +77,67 @@ internal static class DurablePauseFlow
             var shutdown = scheduler.PrepareGracefulShutdownAsync();
             release.TrySetResult();
             await shutdown.WaitAsync(TimeSpan.FromSeconds(8));
-            await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(8));
+            try { await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(8)); }
+            catch (OperationCanceledException) { }
             var until = DateTime.UtcNow.AddSeconds(2);
             while (scheduler.HasSessionWrites && DateTime.UtcNow < until) await Task.Delay(10);
-            if (!order.SequenceEqual(new[] { 1, 3, 2 }) || scheduler.HasSessionWrites)
-                throw new Exception("Closing lost accepted writes or interrupted the current file.");
+            if (!order.SequenceEqual(new[] { 1 }) || scheduler.HasSessionWrites ||
+                !second.IsCanceled || !third.IsCanceled)
+                throw new Exception("Closing dispatched an unstarted write or interrupted the current file.");
         }
         finally { release.TrySetResult(); }
-        Console.WriteLine("PASS: Queued single-image writes complete safely in LIFO order on shutdown.");
+        Console.WriteLine("PASS: Shutdown completes only the current atomic file and cancels queued session writes.");
+    }
+
+    private static async Task ExerciseSessionControls(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "alpha69-session-controls.db"));
+        database.Initialize();
+        await using var scheduler = new PCasaScheduler();
+        scheduler.EnableDurablePackages(database);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        var cursor = 0;
+        var batch = scheduler.EnqueueSessionWriteAsync("session:rotation", async token =>
+        {
+            while (cursor < 3)
+            {
+                token.ThrowIfCancellationRequested();
+                if (cursor == 0) { entered.TrySetResult(); await release.Task; }
+                order.Enqueue(++cursor);
+            }
+        }, "Bildbearbeitung speichern", total: 3, resumable: true);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            var canceled = scheduler.EnqueueSessionWriteAsync("session:cancel", _ =>
+                throw new Exception("Deleted job executed."));
+            if (!await scheduler.CancelActiveTaskAsync("session:cancel") || !canceled.IsCanceled)
+                throw new Exception("Waiting session operation was not deleted.");
+            if (!scheduler.SetSessionTaskPaused("session:rotation", true))
+                throw new Exception("Running session operation was not pauseable.");
+            var next = scheduler.EnqueueSessionWriteAsync("session:newer", _ =>
+            {
+                order.Enqueue(9);
+                return Task.CompletedTask;
+            });
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (!scheduler.Snapshot().Any(x => x.Key == "session:rotation" &&
+                       x.State == SchedulerJobState.YieldRequested) && DateTime.UtcNow < deadline)
+                await Task.Delay(10);
+            release.TrySetResult();
+            await next.WaitAsync(TimeSpan.FromSeconds(8));
+            if (batch.IsCompleted || !order.SequenceEqual(new[] { 1, 9 }))
+                throw new Exception("Paused session job blocked higher work or repeated a file.");
+            if (!scheduler.SetSessionTaskPaused("session:rotation", false))
+                throw new Exception("Session resume failed.");
+            await batch.WaitAsync(TimeSpan.FromSeconds(8));
+            if (!order.SequenceEqual(new[] { 1, 9, 2, 3 }))
+                throw new Exception("Session cursor was lost on resume.");
+        }
+        finally { release.TrySetResult(); }
+        Console.WriteLine("PASS: Session jobs delete, pause, yield and resume at file boundaries.");
     }
 
     private static async Task ExercisePersistentMultiWrite(string dir)

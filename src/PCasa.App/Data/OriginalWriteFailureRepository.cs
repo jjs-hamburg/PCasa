@@ -87,6 +87,7 @@ public sealed class OriginalWriteFailureRepository
                 package_key=excluded.package_key,
                 file_path=excluded.file_path,
                 attempts=CASE
+                    WHEN $first=$max THEN $max
                     WHEN original_write_failures.package_key=excluded.package_key
                       THEN MIN(original_write_failures.attempts+1,$max)
                     ELSE $first END,

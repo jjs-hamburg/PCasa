@@ -135,7 +135,8 @@ public partial class MainWindow
         if (!TryInitialTaskId(key, out var folderId))
         {
             if (!key.StartsWith("automatic:", StringComparison.Ordinal))
-                return false;
+                return _scheduler.IsSessionTask(key) && _scheduler.SetSessionTaskPaused(key, false) &&
+                    _scheduler.PromoteTaskNow(key);
             if (_scheduler.IsExternalTaskPaused(key) &&
                 !_scheduler.SetExternalTaskPaused(key, false)) return false;
             if (!_scheduler.PromoteTaskNow(key)) return false;

@@ -539,7 +539,7 @@ public sealed class TaskManagerWindow : Window
             (row.Durable || _resumePausedTask is not null ||
              IsInitialImport(row.Key) && _resumeAutomaticScan is not null);
         var canPause = row is { Status: "Läuft" or "Wartet" } &&
-            (row.Durable || _pauseInitialImport is not null &&
+            (row.Durable || _scheduler.CanPauseSessionTask(row.Key) || _pauseInitialImport is not null &&
              (IsInitialImport(row.Key) ||
               row.Key.StartsWith("automatic:", StringComparison.Ordinal)));
         _pauseResume.Content = UiLanguage.T(canResume ? "Fortsetzen" : "Pausieren");
@@ -615,7 +615,10 @@ public sealed class TaskManagerWindow : Window
             return;
         }
         if (row.Status is not ("Wartet" or "Angehalten")) return;
-        if (row.Durable)
+        if (_scheduler.IsSessionTask(row.Key))
+            _ = PerformAsync(row.Key, () => Task.Run(() =>
+                _scheduler.SetSessionTaskPaused(row.Key, false) && _scheduler.PromoteTaskNow(row.Key)));
+        else if (row.Durable)
             _ = PerformAsync(row.Key, () => Task.Run(() =>
                 _scheduler.PromoteTaskNow(row.Key) &&
                 (row.Status != "Angehalten" || _scheduler.ResumeDurableTask(row.Key))));
@@ -637,7 +640,9 @@ public sealed class TaskManagerWindow : Window
 
     private void RetryFailed(TaskRow row)
     {
-        if (_failedRows.TryGetValue(row.Key, out var failedFiles))
+        if (_scheduler.IsSessionTask(row.Key))
+            _ = PerformDeleteAsync(row.Key, () => _scheduler.CancelActiveTaskAsync(row.Key));
+        else if (_failedRows.TryGetValue(row.Key, out var failedFiles))
         {
             _ = PerformAsync(row.Key, async () =>
             {
@@ -660,6 +665,12 @@ public sealed class TaskManagerWindow : Window
     {
         var row = Selection;
         if (row is null) return;
+        if (_scheduler.IsSessionTask(row.Key))
+        {
+            _ = PerformAsync(row.Key, () => Task.Run(() =>
+                _scheduler.SetSessionTaskPaused(row.Key, row.Status != "Angehalten")));
+            return;
+        }
         if (row.Durable)
         {
             if (row.Status == "Angehalten")
@@ -689,7 +700,7 @@ public sealed class TaskManagerWindow : Window
             ? UiLanguage.Format(
                 "Scanauftrag '{0}' aus der Warteschlange löschen? Bereits eingelesene Fotos, Katalogeinträge und bestätigte Scanpositionen bleiben erhalten.",
                 row.Title)
-            : !row.Durable && !_failedRows.ContainsKey(row.Key)
+            : !row.Durable && !_scheduler.IsSessionTask(row.Key) && !_failedRows.ContainsKey(row.Key)
                 ? UiLanguage.Format(
                     "Auftrag '{0}' stoppen? Der bestätigte Einlesefortschritt bleibt erhalten.",
                     row.Title)
