@@ -85,11 +85,7 @@ public partial class MainWindow
             var recipe = new RotationRecipe(items.Select(x => x.Key).ToArray(),
                 items.Select(x => x.Value).ToArray(), new RotationPreparation?[items.Length]);
             var payload = JsonSerializer.Serialize(recipe);
-            var task = items.Length == 1
-                ? StartDirectImageWrite(key, title,
-                    GetOriginalImagePath(items[0].Key) ?? throw new IOException("Image missing."),
-                    BuildGalleryRotationPackage(key, payload, persistent: false), 0, false)
-                : _scheduler.EnqueueDurableRecipeAsync(key, RotationRecipeType, payload,
+            var task = _scheduler.EnqueueDurableRecipeAsync(key, RotationRecipeType, payload,
                     SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
             _ = ObserveGalleryRotationAsync(task, key, items.Select(item => item.Key).ToArray(), title);
         }
@@ -110,9 +106,6 @@ public partial class MainWindow
     }
 
     private SchedulerTaskPackage BuildGalleryRotationPackage(string key, string payload)
-        => BuildGalleryRotationPackage(key, payload, persistent: true);
-
-    private SchedulerTaskPackage BuildGalleryRotationPackage(string key, string payload, bool persistent)
     {
         var recipe = JsonSerializer.Deserialize<RotationRecipe>(payload)
             ?? throw new InvalidDataException("Invalid rotation recipe.");
@@ -153,7 +146,6 @@ public partial class MainWindow
                 void Persist(RotationPreparation prepared)
                 {
                     recipe.Prepared[index] = prepared;
-                    if (!persistent) return;
                     // The immutable acceptance identity and cursor remain the
                     // same. Record the absolute target BEFORE touching pixels.
                     using var db = _database.OpenConnection();
