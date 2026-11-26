@@ -927,7 +927,7 @@ public partial class MainWindow
         var snapshot = _tagDraft.Snapshot();
         var ids = snapshot.Select(entry => entry.ImageId).ToArray();
         var single = ids.Length == 1;
-        var key = (single ? "direct:tags:" : "tags:package:") +
+        var key = "tags:package:" +
             Guid.NewGuid().ToString("N");
         var payload = System.Text.Json.JsonSerializer.Serialize(new DurableTagEdit(
             ids, Array.Empty<DurableTagChange>(),
@@ -941,13 +941,8 @@ public partial class MainWindow
         {
             BeginVisibleManualOperation(key,
                 "Tags in Originaldateien schreiben", ids.Length);
-            var completion = single
-                ? StartDirectImageWrite(key,
-                    UiLanguage.T("Tags in Originaldateien schreiben"),
-                    GetOriginalImagePath(ids[0]) ?? throw new IOException("Bild fehlt im Katalog."),
-                    package, folderId: 0, reindexOriginal: false)
-                : _scheduler.EnqueueDurablePackageAsync(package,
-                    "tag-edit-v2", payload, SchedulerPriority.ManualAction);
+            var completion = _scheduler.EnqueueDurablePackageAsync(package,
+                "tag-edit-v2", payload, SchedulerPriority.ManualAction);
             _ = ObserveTagPackageAsync(completion, key);
             // The edit is accepted. The next manual action MUST be possible
             // immediately, even if this package later waits for slow I/O.
