@@ -629,12 +629,14 @@ internal static class ExternalEditSmokeFlow
             {
                 DateTimeOriginal = "2026:11:19 14:01:05"
             };
+            var undoCountBeforeDateEdit = new UndoHistoryService(undoOptions)
+                .GetVersions(datedCopy).Count();
             ExifDateMetadata.SaveExplicit(datedCopy, corrected,
                 undoOptions: undoOptions);
             if (ExifDateMetadata.ReadFields(datedCopy) != corrected ||
-                !new UndoHistoryService(undoOptions).GetVersions(datedCopy).Any())
+                new UndoHistoryService(undoOptions).GetVersions(datedCopy).Count() != undoCountBeforeDateEdit)
                 throw new Exception(
-                    "Explicit EXIF correction failed or has no central Undo.");
+                    "Explicit EXIF correction failed or unexpectedly created an Undo snapshot.");
             var noDate = Path.Combine(root, "no-date.jpg");
             WriteJpeg(noDate, 58, 64);
             var noDateSession = ExternalEditTransaction.Begin(noDate);

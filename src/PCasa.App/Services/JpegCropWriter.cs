@@ -53,8 +53,11 @@ public static class JpegCropWriter
     }
 
     // Absolute orientation is also safe when a durable recipe is replayed.
+    public static void SetGalleryOrientation(string path, int target, CancellationToken token)
+        => SetGalleryOrientation(path, target, token, null);
+
     internal static void SetGalleryOrientation(string path, int target,
-        CancellationToken token, ImageExifData? initial = null)
+        CancellationToken token, ImageExifData? initial)
     {
         using var lease = SourceFileLocks.Enter(path, token);
         using var readerLease = MetadataWriteScope.RentReader();
