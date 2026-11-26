@@ -57,6 +57,7 @@ public sealed class SchedulerTaskPackage
 
     internal async Task ExecuteAsync(CancellationToken token)
     {
+        using var metadataScope = MetadataWriteScope.Begin();
         while (_nextIndex < _steps.Count)
         {
             token.ThrowIfCancellationRequested();

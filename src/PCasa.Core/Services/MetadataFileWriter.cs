@@ -35,7 +35,8 @@ internal static class MetadataFileWriter
             Copy(source, local, token);
             download = timer.ElapsedMilliseconds;
             var beforePicture = Inspect(local);
-            using var reader = new ImageExifReader();
+            using var readerLease = MetadataWriteScope.RentReader();
+            var reader = readerLease.Value;
             var before = reader.Read(local, token);
             var beforeTags = session.ReadSnapshot(local, token);
             token.ThrowIfCancellationRequested();

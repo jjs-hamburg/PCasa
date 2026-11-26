@@ -138,7 +138,8 @@ public static class ExifDateMetadata
         if (normalized == initial) return;
         var beforeModifiedUtc = File.GetLastWriteTimeUtc(path);
         var beforeCreatedUtc = File.GetCreationTimeUtc(path);
-        using var writer = new ExifToolKeywordWriter.Session();
+        using var writerLease = MetadataWriteScope.RentWriter();
+        var writer = writerLease.Value;
         writer.WriteExactExifDates(path, new Dictionary<string, string?>
             {
                 ["EXIF:DateTimeOriginal"] = normalized.DateTimeOriginal,

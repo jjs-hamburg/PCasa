@@ -50,7 +50,8 @@ public sealed class FilenameCaptureDateWriter(LocalDatabase database, UndoOption
         if (!before.Exists) throw new FileNotFoundException("Originaldatei nicht verfügbar.", path);
         var originalCreated = before.CreationTimeUtc;
         var originalModified = before.LastWriteTimeUtc;
-        using var reader = new ImageExifReader();
+        using var readerLease = MetadataWriteScope.RentReader();
+        var reader = readerLease.Value;
         var source = reader.Read(path, token);
         var current = ExifDateMetadata.FieldsFromJson(source.Json);
         var applied = ExifDateMetadata.SameProtectedTag("EXIF:DateTimeOriginal", target, current.DateTimeOriginal);
@@ -62,7 +63,8 @@ public sealed class FilenameCaptureDateWriter(LocalDatabase database, UndoOption
         if (!applied)
         {
             token.ThrowIfCancellationRequested();
-            using var writer = new ExifToolKeywordWriter.Session();
+            using var writerLease = MetadataWriteScope.RentWriter();
+            var writer = writerLease.Value;
             writer.WriteExactExifDates(path, new Dictionary<string, string?>
             {
                 ["EXIF:DateTimeOriginal"] = target

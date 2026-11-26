@@ -6268,14 +6268,19 @@ internal static class Program
 
         var sourceHash = JpegGpsPatchPrototype.CompressedImageHash(jpeg);
         var modificationTime = File.GetLastWriteTimeUtc(jpeg);
-        using var writer = new ExifToolKeywordWriter.Session();
-        if (!JpegMpfStagedWriter.TryWrite(jpeg, writer, new[] { "2025", "La Palma" },
-            updateTags: true, null, null, CancellationToken.None))
-            throw new Exception("Synthetic MPF Tag edit rejected or changed secondary image.");
-        if (!JpegMpfStagedWriter.TryWrite(jpeg, writer,
-            Array.Empty<string>(), updateTags: false, 53.5, 10.25,
-            CancellationToken.None))
-            throw new Exception("Synthetic MPF GPS edit rejected or changed secondary image.");
+        using var writer = new ExifToolKeywordWriter.Session { ForceStagedJpegWrites = true };
+        writer.Write(jpeg, new[] { "2025", "La Palma" });
+        writer.WriteGps(jpeg, 53.5, 10.25);
+        writer.WriteOrientation(jpeg, 6, CancellationToken.None);
+        writer.WriteExactExifDates(jpeg, new Dictionary<string,string?>
+        {
+            ["EXIF:DateTimeOriginal"] = "2024:01:02 03:04:05"
+        });
+        if (writer.LastVerifiedExif is not { } staged ||
+            !ImageExifReader.SourceFileMatches(staged.Json, jpeg, true) ||
+            MetadataFileWriter.Orientation(staged) != 6 ||
+            staged.DateTimeOriginal != "2024:01:02 03:04:05")
+            throw new Exception("MPF metadata publication did not return verified original identity.");
         if (!sourceHash.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(jpeg)))
             throw new Exception("MPF edit changed the original compressed picture stream.");
         var meta = new ImageExifReader().Read(jpeg);
@@ -6317,20 +6322,14 @@ internal static class Program
         var stamp = File.GetLastWriteTimeUtc(path);
         var standard = RunExifTool("-s3", "-EXIF:Make", "-EXIF:Model",
             "-EXIF:Artist", "-EXIF:DateTimeOriginal", path);
-        using (var writer = new ExifToolKeywordWriter.Session())
+        using (var writer = new ExifToolKeywordWriter.Session { ForceStagedJpegWrites = true })
         {
-            if (!JpegMetadataOriginalWriter.TryWriteTags(path,
-                    new[] { "Keep", "Added" }, writer, CancellationToken.None))
-                throw new Exception("Ordinary JPEG refused production Tag fast path: " +
-                    JpegMetadataOriginalWriter.LastFallbackDifference);
+            writer.Write(path, new[] { "Keep", "Added" });
             var afterTags = writer.ReadSnapshot(path);
             if (!afterTags.Xmp.Contains("Keep") ||
                 !afterTags.Iptc.Contains("Added"))
                 throw new Exception("Optimized original Tag writer did not persist keywords.");
-            if (!JpegMetadataOriginalWriter.TryWriteGps(path, 53.5, 10.25,
-                    writer, CancellationToken.None))
-                throw new Exception("Ordinary JPEG refused production GPS fast path: " +
-                    JpegMetadataOriginalWriter.LastFallbackDifference);
+            writer.WriteGps(path, 53.5, 10.25);
             using (var exif = new ImageExifReader())
             {
                 var result = exif.Read(path);
@@ -6340,17 +6339,12 @@ internal static class Program
                     Math.Abs(lon - 10.25) > 0.0001)
                     throw new Exception("Optimized GPS original not updated.");
             }
-            if (!JpegMetadataOriginalWriter.TryWriteGps(path, null, null,
-                    writer, CancellationToken.None))
-                throw new Exception("Ordinary JPEG refused production GPS removal: " +
-                    JpegMetadataOriginalWriter.LastFallbackDifference);
+            writer.WriteGps(path, null, null);
             using var final = new ImageExifReader();
             if (final.Read(path).GpsLatitude is not null ||
                 final.Read(path).GpsLongitude is not null)
                 throw new Exception("Optimized original GPS deletion failed.");
-            if (!JpegMetadataOriginalWriter.TryWriteTags(path,
-                    Array.Empty<string>(), writer, CancellationToken.None))
-                throw new Exception("Ordinary JPEG refused production tag deletion.");
+            writer.Write(path, Array.Empty<string>());
             if (writer.ReadSnapshot(path).Combined.Count != 0)
                 throw new Exception("Optimized original Tag deletion failed.");
         }
@@ -7222,6 +7216,10 @@ internal static class Program
         using (var input = File.OpenRead(path))
             if (ExifOrientation.Read(input) != 6)
                 throw new Exception("Clockwise rotation was not written to original.");
+        JpegCropWriter.SetGalleryOrientation(path, 6, CancellationToken.None);
+        using (var input = File.OpenRead(path))
+            if (ExifOrientation.Read(input) != 6)
+                throw new Exception("Absolute orientation replay rotated a second time.");
         JpegCropWriter.RotateGalleryImage(path, -1, CancellationToken.None);
         using (var input = File.OpenRead(path))
             if (ExifOrientation.Read(input) != 1)
@@ -7310,9 +7308,10 @@ internal static class Program
         }
         var before = Read(path);
         var old = Read(existing);
+        var undoDirectory = Path.Combine(Path.GetDirectoryName(sandbox.Images)!, "undo");
         var worker = new FilenameCaptureDateWriter(db, new UndoOptions
         {
-            DirectoryPath = Path.Combine(Path.GetDirectoryName(sandbox.Images)!, "undo")
+            DirectoryPath = undoDirectory
         });
         var requested = PhotoDateFromFilename.Recognize(Path.GetFileName(path))?.AsExifDateTime
             ?? throw new Exception("Filename date not recognized.");
@@ -7339,6 +7338,8 @@ internal static class Program
         worker.Apply(old.Id, "2024:05:26 11:22:33", false, CancellationToken.None);
         if (Read(existing).Date != "2024:05:26 11:22:33")
             throw new Exception("Explicit overwrite did not use the date and clock time in the filename.");
+        if (Directory.Exists(undoDirectory) && Directory.EnumerateFileSystemEntries(undoDirectory).Any())
+            throw new Exception("Metadata-only capture date created an Undo snapshot.");
         if (PhotoDateFromFilename.Recognize("IMG-20240525-WA0001.jpg")?.Time is not null)
             throw new Exception("Date-only filename acquired an invented time.");
     }

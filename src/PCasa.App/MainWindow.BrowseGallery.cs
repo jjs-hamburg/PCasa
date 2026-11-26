@@ -144,7 +144,7 @@ public partial class MainWindow
 
         // Only read/import recipes survive a PCasa session. The scheduler
         // has already retired unfinished file operations and parked any
-        // unconfirmed tag intents for explicit review. Restore the scan
+        // unconfirmed tag intents. Restore the scan
         // presenter before admitting those existing read jobs.
         RestoreVisiblePendingManualScans();
         var unresolvedPackages = _scheduler.RecoverDurablePackages(

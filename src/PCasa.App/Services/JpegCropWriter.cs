@@ -45,7 +45,8 @@ public static class JpegCropWriter
             return;
         }
         using var lease = SourceFileLocks.Enter(originalPath, token);
-        using var reader = new ImageExifReader();
+        using var readerLease = MetadataWriteScope.RentReader();
+        var reader = readerLease.Value;
         var before = reader.Read(originalPath, token);
         var target = ExifOrientation.RotateQuarterTurns(MetadataFileWriter.Orientation(before), turns);
         SetGalleryOrientation(originalPath, target, token, before);
@@ -56,13 +57,15 @@ public static class JpegCropWriter
         CancellationToken token, ImageExifData? initial = null)
     {
         using var lease = SourceFileLocks.Enter(path, token);
-        using var reader = new ImageExifReader();
+        using var readerLease = MetadataWriteScope.RentReader();
+        var reader = readerLease.Value;
         var before = initial ?? reader.Read(path, token);
         if (MetadataFileWriter.Orientation(before) == target) return;
         var info = new FileInfo(path);
         var modified = info.LastWriteTimeUtc;
         var created = info.CreationTimeUtc;
-        using var writer = new ExifToolKeywordWriter.Session();
+        using var writerLease = MetadataWriteScope.RentWriter();
+        var writer = writerLease.Value;
         writer.WriteOrientation(path, target, token);
         var verified = writer.LastVerifiedExif ?? reader.Read(path, CancellationToken.None);
         if (MetadataFileWriter.Orientation(verified) != target ||
