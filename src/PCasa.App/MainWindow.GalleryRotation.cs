@@ -71,17 +71,19 @@ public partial class MainWindow
         UpdateGalleryRotationButtons();
         var key = "image:gallery-rotation:" + Guid.NewGuid().ToString("N");
         var title = UiLanguage.T("Bildbearbeitung speichern");
+        BeginVisibleManualOperation(key, title, items.Length);
         try
         {
+            var failures = new List<Exception>();
+            var processed = 0;
             // Exactly one nonpersistent P0 package; file identities are resolved
             // at execution so a prior accepted rename cannot target a stale path.
             var task = _scheduler.EnqueueSessionWriteAsync(key, token =>
             {
-                var failures = new List<Exception>();
-                var processed = 0;
-                foreach (var (id, angle) in items)
+                while (processed < items.Length)
                 {
                     token.ThrowIfCancellationRequested();
+                    var (id, angle) = items[processed];
                     try
                     {
                         string path; long folderId;
@@ -114,8 +116,8 @@ public partial class MainWindow
                 }
                 if (failures.Count > 0) throw new AggregateException(failures);
                 return Task.CompletedTask;
-            }, title, total: items.Length);
-            _ = ObserveGalleryRotationAsync(task, items.Select(item => item.Key).ToArray(), title);
+            }, title, total: items.Length, resumable: true);
+            _ = ObserveGalleryRotationAsync(task, key, items.Select(item => item.Key).ToArray(), title);
         }
         catch (Exception ex)
         {
@@ -126,12 +128,13 @@ public partial class MainWindow
             }
             UpdateGalleryRotationPreview();
             UpdateGalleryRotationButtons();
+            EndVisibleManualOperation(key);
             PCasaDiagnostics.Write("Image.GalleryRotation.Enqueue", ex);
             PcasaDialog.Show(this, ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
-    private async Task ObserveGalleryRotationAsync(Task task, long[] ids, string title)
+    private async Task ObserveGalleryRotationAsync(Task task, string key, long[] ids, string title)
     {
         Exception? failure = null;
         try { await task; }
@@ -146,6 +149,7 @@ public partial class MainWindow
             }
         }
         if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
+        EndVisibleManualOperation(key);
         UpdateGalleryRotationPreview();
         UpdateGalleryRotationButtons();
         await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);

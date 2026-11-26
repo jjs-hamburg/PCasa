@@ -4646,8 +4646,9 @@ internal static class Program
         Expect(GallerySortField.Size, false, 5, 4, 1, 3, 2);
         Expect(GallerySortField.Modified, false, 5, 4, 3, 1, 2);
         Expect(GallerySortField.Created, false, 4, 5, 2, 3, 1);
-        // Missing EXIF capture time uses creation, not a fake epoch.
-        Expect(GallerySortField.Captured, false, 5, 4, 2, 3, 1);
+        // Missing EXIF capture time is always last, without filesystem fallback.
+        Expect(GallerySortField.Captured, false, 4, 5, 2, 3, 1);
+        Expect(GallerySortField.Captured, true, 4, 5, 1, 3, 2);
         Expect(GallerySortField.Dimensions, false, 4, 5, 2, 3, 1);
         Expect(GallerySortField.Size, true, 4, 5, 2, 3, 1);
         // Repeated sorting with the same rule must keep index identity.

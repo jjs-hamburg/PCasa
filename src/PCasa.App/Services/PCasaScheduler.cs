@@ -23,6 +23,7 @@ public sealed record SchedulerJobSnapshot(
     public int Total { get; init; }
     public string? CurrentPath { get; init; }
     public bool SessionWrite { get; init; }
+    public bool Paused { get; init; }
     public long QueueOrder { get; init; }
     // A priority alone is not proof of a write: interactive catalog reads
     // must never force shutdown to wait for a blocked network source.
@@ -125,7 +126,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     }
 
     public Task EnqueueSessionWriteAsync(string key, Func<CancellationToken, Task> operation,
-        string? title = null, string? path = null, int total = 0)
+        string? title = null, string? path = null, int total = 0, bool resumable = false)
     {
         // Share the acceptance sequence with durable jobs and first imports.
         // A session write is not intrinsically ahead of every durable recipe:
@@ -140,7 +141,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
         return EnqueueAsync(key, SchedulerPriority.ManualAction, operation,
             workKind: SchedulerWorkKind.Catalog, queueOrder: order,
-            sessionWrite: true, sessionTitle: title, sessionPath: path, sessionTotal: total);
+            sessionWrite: true, sessionTitle: title, sessionPath: path, sessionTotal: total,
+            resumableSession: resumable);
     }
 
     // Freeze new dispatch before waiting for already-running file mutations.
@@ -163,8 +165,15 @@ public sealed class PCasaScheduler : IAsyncDisposable
             .Select(p => p.Key).ToHashSet(StringComparer.Ordinal)
             ?? new HashSet<string>(StringComparer.Ordinal);
         Task[] writing;
+        WorkItem[] sessionWrites;
         lock (_gate)
         {
+            foreach (var item in _pending.Where(item => item.SessionWrite).ToArray())
+            {
+                _pending.Remove(item);
+                SetStateUnsafe(item, SchedulerJobState.Canceled);
+                item.Completion.TrySetCanceled();
+            }
             // Waiting file jobs must never be dispatched or leave callers
             // blocked on a frozen queue. Scan requests retain their journal.
             if (_retireFileJobsOnSessionEnd)
@@ -175,11 +184,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     item.Completion.TrySetCanceled();
                 }
             var active = _runningWork.Where(item => fileKeys.Contains(item.Key))
-                .Concat(_pending.Concat(_runningWork).Where(item => item.SessionWrite)).Distinct().ToArray();
+                .Concat(_runningWork.Where(item => item.SessionWrite)).Distinct().ToArray();
+            sessionWrites = active.Where(item => item.SessionWrite).ToArray();
             writing = active.Select(item =>
                 _durableActiveTasks.GetValueOrDefault(item.Key, item.Completion.Task))
                 .ToArray();
         }
+        foreach (var item in sessionWrites)
+            await item.UserCancellation.CancelAsync().ConfigureAwait(false);
         try { await Task.WhenAll(writing).ConfigureAwait(false); }
         catch (OperationCanceledException) { /* written checkpoint is durable */ }
         catch (Exception ex) { PCasaDiagnostics.Write("Scheduler.GracefulDrain", ex); }
@@ -702,39 +714,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     _shutdown.Token);
                 if (_gracefulShutdownRequested)
                 {
-                    // Do not dispatch any new scan or durable recipe during
-                    // exit. The accepted nonpersistent writes still need to
-                    // finish in their normal LIFO order.
-                    List<CancellationTokenSource> yields = new();
-                    var started = false;
-                    lock (_gate)
-                    {
-                        if (_disposed) break;
-                        var next = _pending.Where(item => item.SessionWrite)
-                            .OrderBy(item => item.Priority).ThenBy(item => item.QueueOrder)
-                            .ThenBy(item => item.Id).FirstOrDefault();
-                        if (next is not null)
-                        {
-                            foreach (var running in _runningWork.Where(item =>
-                                item.Kind is SchedulerWorkKind.CatalogScan or SchedulerWorkKind.InitialImport))
-                            {
-                                if (running.YieldSource is not { } source || running.YieldRequested) continue;
-                                running.YieldRequested = true;
-                                yields.Add(source);
-                            }
-                            if (!_runningWork.Any(IsCatalogMutation) && _maintenancePauseCount == 0)
-                            {
-                                StartExecutionUnsafe(next, ExecutorCatalog);
-                                started = true;
-                            }
-                        }
-                    }
-                    foreach (var source in yields)
-                    {
-                        try { _ = source.CancelAsync(); }
-                        catch (ObjectDisposedException) { }
-                    }
-                    if (started) NotifyTaskViewChanged();
+                    // Exit never starts a waiting file operation. The active
+                    // original-file step reaches its safe boundary; queued
+                    // session tasks are retired by PrepareGracefulShutdownAsync.
                     continue;
                 }
                 if (_deferredRecoveryReady)
@@ -806,7 +788,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     var nonIdleWaiting = journalUnavailable ||
                         accepted.Any(row => row.Priority < SchedulerPriority.Idle);
                     // Global rank, not per-lane callbacks, decides preemption.
-                    var highest = _pending.Where(p => !IsIndependentReadItem(p))
+                    var highest = _pending.Where(p => !IsIndependentReadItem(p) && !p.Paused && !IsBlockedByInteraction(p))
                         .OrderBy(p => RankOwner(p).Priority)
                         .ThenBy(p => RankOwner(p).QueueOrder)
                         .ThenBy(p => RankOwner(p).Id).FirstOrDefault();
@@ -816,7 +798,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         // The owning job requests yield. Its dependent steps
                         // must be allowed to finish the current safe boundary.
                         if (HasRunningParent(running)) continue;
-                        if (!((_maintenancePauseCount > 0 && IsCatalogMutation(running)) ||
+                        if (!(running.Paused || (_maintenancePauseCount > 0 && IsCatalogMutation(running)) ||
                               (RankOwner(running).Priority == SchedulerPriority.Idle &&
                                (nonIdleWaiting || _pending.Any(p =>
                                    !IsIndependentReadItem(p) &&
@@ -903,7 +885,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         _pending.Remove(item);
         item.YieldRequested = false;
         item.ExecutionClass = executor;
-        var yieldRequest = IsCatalogMutation(item) && !item.SessionWrite ? new CancellationTokenSource() : null;
+        var yieldRequest = IsCatalogMutation(item) && (!item.SessionWrite || item.ResumableSession)
+            ? new CancellationTokenSource() : null;
         item.YieldSource = yieldRequest;
         _runningWork.Add(item);
         SetStateUnsafe(item, SchedulerJobState.Running);
@@ -1291,6 +1274,30 @@ public sealed class PCasaScheduler : IAsyncDisposable
         return true;
     }
 
+    public bool IsSessionTask(string key)
+    {
+        lock (_gate) return _pending.Concat(_runningWork).Any(item =>
+            item.Key == key && item.SessionWrite);
+    }
+
+    public bool SetSessionTaskPaused(string key, bool paused)
+    {
+        WorkItem? item;
+        lock (_gate)
+        {
+            item = _pending.Concat(_runningWork).FirstOrDefault(x => x.Key == key && x.SessionWrite);
+            if (item is null || (paused && _runningWork.Contains(item) && !item.ResumableSession))
+                return false;
+            item.Paused = paused;
+            SetStateUnsafe(item, _runningWork.Contains(item)
+                ? item.YieldRequested ? SchedulerJobState.YieldRequested : SchedulerJobState.Running
+                : SchedulerJobState.Queued);
+            SignalController();
+        }
+        PublishState(item);
+        return true;
+    }
+
     // A deferred durable record can remain queued in SQLite after its
     // last in-memory executor has failed. Only the scheduler may determine
     // whether a live execution for that identity still exists.
@@ -1598,7 +1605,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
         long? queueOrder = null, string? parentKey = null,
         bool durableJob = false, bool sessionWrite = false,
-        string? sessionTitle = null, string? sessionPath = null, int sessionTotal = 0)
+        string? sessionTitle = null, string? sessionPath = null, int sessionTotal = 0,
+        bool resumableSession = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(operation);
@@ -1633,6 +1641,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 {
                     DurableJob = durableJob,
                     SessionWrite = sessionWrite,
+                    ResumableSession = resumableSession,
                     // Ephemeral manual preflight (e.g. GPS eligibility)
                     // must never be buried behind the old durable ledger's
                     // large historical sequence values. Durable ranks remain
@@ -1725,7 +1734,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         bool durableNonIdlePending)
     {
         var candidates = _pending
-            .Where(x => ExecutorFor(x.Priority, x.Kind) == executor);
+            .Where(x => ExecutorFor(x.Priority, x.Kind) == executor &&
+                !x.Paused && (HasRunningParent(x) || !IsBlockedByInteraction(x)));
         if (executor == ExecutorCatalog)
         {
             // An active owner can finish its own dependent catalog steps,
@@ -1776,7 +1786,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         // behind an unrelated queued P0 while the owner awaits them.
         if (!childOfRunningPackage &&
             _pending.Any(other => !ReferenceEquals(other, candidate) &&
-                !IsIndependentReadItem(other) && Precedes(other, candidate)))
+                !IsIndependentReadItem(other) && !other.Paused && !IsBlockedByInteraction(other) &&
+                  Precedes(other, candidate)))
             return null;
         // Manual P0 packages form an actual LIFO interruption stack.
         // P1-P3 may run on independent read/executor capacity while an
@@ -1938,6 +1949,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         _history[index] = _history[index] with
         {
             State = state, Priority = item.Priority, Error = error, QueueOrder = item.QueueOrder,
+            Paused = item.Paused,
             StartedAt = state == SchedulerJobState.Running
                 ? _history[index].StartedAt ?? now : _history[index].StartedAt,
             FinishedAt = state is SchedulerJobState.Completed or
@@ -2014,6 +2026,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         public WorkItem? Parent { get; set; }
         public bool DurableJob { get; init; }
         public bool SessionWrite { get; init; }
+        public bool ResumableSession { get; init; }
+        public bool Paused { get; set; }
         public CancellationTokenSource UserCancellation { get; } = new();
         public SchedulerPriority Priority { get; set; } = priority;
         public SchedulerWorkKind Kind { get; } = kind;
