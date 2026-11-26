@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using PCasa.App.Data;
 using PCasa.App.Services;
@@ -7,6 +8,9 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
+    private sealed record ExplicitExifDateRecipe(long ImageId, string Path,
+        DateTime SourceWriteUtc, ExifDateMetadata.Fields Values);
+
     private long? _infoDatesImageId;
     private string? _infoDatesPath;
     private string? _infoDatesFilename;
@@ -140,48 +144,29 @@ public partial class MainWindow
             return;
         }
         var key = "info:exif-dates:" + Guid.NewGuid().ToString("N");
+        var request = new ExplicitExifDateRecipe(imageId, path, stamp, newValues);
         _infoDatesSaving = true;
         InfoDatesSave.IsEnabled = false;
         InfoDatesCancel.IsEnabled = false;
         BeginVisibleManualOperation(key, UiLanguage.T("EXIF-Datumsfelder speichern"), 1);
         try
         {
-            await _scheduler.EnqueueSessionWriteAsync(key,
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    if (File.GetLastWriteTimeUtc(path) != stamp)
-                        throw new IOException(
-                            "Die Datei wurde seit dem Öffnen der Bildinformationen geändert.");
-                    ExifDateMetadata.SaveExplicit(path, newValues, token);
-                    using var db = _database.OpenConnection();
-                    using var command = db.CreateCommand();
-                    command.CommandText =
-                        "SELECT folder_id FROM images WHERE id=$id LIMIT 1";
-                    command.Parameters.AddWithValue("$id", imageId);
-                    var folderId = command.ExecuteScalar() is { } value
-                        ? Convert.ToInt64(value) : 0L;
-                    var root = _folderRepository.GetAll().FirstOrDefault(
-                        folder => folder.Id == folderId) ??
-                        throw new IOException("Katalogordner der Bilddatei fehlt.");
-                    new BrowseCacheRepository(_database).InvalidateImage(imageId);
-                    var result = _folderScanner.ScanFile(root, path,
-                        cancellationToken: CancellationToken.None,
-                        publishCatalogChange: false, forceExifRefresh: true);
-                    if (result.Failed > 0)
-                        throw new IOException(
-                            "Die neuen EXIF-Datumsfelder konnten nicht katalogisiert werden.");
-                    return Task.CompletedTask;
-                }, UiLanguage.T("EXIF-Datumsfelder speichern"), path, 1);
+            var task = _scheduler.EnqueueDurableRecipeAsync(key, "explicit-exif-dates-v1",
+                JsonSerializer.Serialize(request), SchedulerPriority.ManualAction);
+            SetInfoDateEditing(false);
+            await task;
+            if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
             _viewerOriginalCache.Remove(imageId);
             SetInfoDateEditing(false);
             await UpdateSidebarContentAsync();
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: false);
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("ImageInfo.ExifDates.Save", ex);
+            if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
             MessageBox.Show(this, UiLanguage.T("Aufnahmedatum konnte nicht gespeichert werden.") +
                 Environment.NewLine + UiLanguage.T(ex.Message),
                 UiLanguage.T("Bildinformationen"), MessageBoxButton.OK,
@@ -195,4 +180,50 @@ public partial class MainWindow
             InfoDatesCancel.IsEnabled = true;
         }
     }
+
+    private SchedulerTaskPackage BuildExplicitExifDatePackage(string key, string payload)
+    {
+        var request = JsonSerializer.Deserialize<ExplicitExifDateRecipe>(payload)
+            ?? throw new InvalidDataException("Invalid EXIF date recipe.");
+        var package = new SchedulerTaskPackage(key);
+        package.AddStep(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            _scheduler.ReportProgress(key, UiLanguage.T("EXIF-Datumsfelder speichern"),
+                0, 1, request.Path);
+            using var lease = SourceFileLocks.Enter(request.Path, token);
+            long folderId;
+            using (var db = _database.OpenConnection())
+            using (var command = db.CreateCommand())
+            {
+                command.CommandText = "SELECT local_path,folder_id FROM images WHERE id=$id";
+                command.Parameters.AddWithValue("$id", request.ImageId);
+                using var row = command.ExecuteReader();
+                if (!row.Read() || !string.Equals(row.GetString(0), request.Path,
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("EXIF date source no longer matches catalog.");
+                folderId = row.GetInt64(1);
+            }
+            var root = _folderRepository.GetAll().FirstOrDefault(folder => folder.Id == folderId)
+                ?? throw new IOException("Katalogordner der Bilddatei fehlt.");
+            var current = ExifDateMetadata.ReadFields(request.Path, token);
+            if (current != request.Values)
+            {
+                if (File.GetLastWriteTimeUtc(request.Path) != request.SourceWriteUtc)
+                    throw new IOException("Die Datei wurde seit dem Öffnen der Bildinformationen geändert.");
+                ExifDateMetadata.SaveExplicit(request.Path, request.Values, token);
+            }
+            new BrowseCacheRepository(_database).InvalidateImage(request.ImageId);
+            var result = _folderScanner.ScanFile(root, request.Path,
+                cancellationToken: CancellationToken.None, publishCatalogChange: false,
+                forceExifRefresh: true);
+            if (result.Failed > 0 || result.ImageFilesSeen == 0)
+                throw new IOException("Die neuen EXIF-Datumsfelder konnten nicht katalogisiert werden.");
+            _scheduler.ReportProgress(key, UiLanguage.T("EXIF-Datumsfelder speichern"),
+                1, 1, request.Path);
+            return Task.CompletedTask;
+        });
+        return package;
+    }
+
 }
