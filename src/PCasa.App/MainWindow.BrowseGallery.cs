@@ -148,22 +148,29 @@ public partial class MainWindow
         if (_explicitGalleryNavigationVersion == 0)
         {
             var tree = _appearance.FlatFolderView ? FlatFoldersTree : FoldersTree;
-            if (_appearance.FlatFolderView && tree.SelectedItem is null &&
-                _activePhotoFolderId is long activeId)
+            var selected = tree.SelectedItem as TreeViewItem;
+            if (!_appearance.FlatFolderView && _appearance.SelectedTreePath is { Length: > 0 } savedPath)
+                selected = FindFolderTreeItemByPath(tree, savedPath) ?? selected;
+            if (selected is null && _activePhotoFolderId is long activeId)
             {
-                var active = tree.Items.OfType<TreeViewItem>().FirstOrDefault(item =>
-                    item.Tag is FolderTreeTag { PhotoFolderId: long id } && id == activeId);
-                if (active is not null)
-                {
-                    _syncingFolderSelection = true;
-                    try { active.IsSelected = true; }
-                    finally { _syncingFolderSelection = false; }
-                }
+                if (_appearance.FlatFolderView)
+                    selected = tree.Items.OfType<TreeViewItem>().FirstOrDefault(item =>
+                        item.Tag is FolderTreeTag { PhotoFolderId: long id } && id == activeId);
+                else
+                    _folderTreeItems.TryGetValue(activeId, out selected);
             }
             tree.UpdateLayout();
-            if (tree.SelectedItem is TreeViewItem selected &&
-                FindTreeScrollViewer(tree) is { } scroll)
-                FolderTreeNavigation.RevealHeader(tree, selected, scroll);
+            if (selected is not null && FindTreeScrollViewer(tree) is { } scroll)
+            {
+                _syncingFolderSelection = true;
+                try
+                {
+                    FolderTreeNavigation.ExpandAncestors(tree, selected);
+                    selected.IsSelected = true;
+                    FolderTreeNavigation.RevealHeader(tree, selected, scroll);
+                }
+                finally { _syncingFolderSelection = false; }
+            }
         }
 
         // Restore presenters before admitting the persistent recipes.
@@ -226,6 +233,11 @@ public partial class MainWindow
         else if (key.StartsWith("capture-date:", StringComparison.Ordinal))
         {
             BeginVisibleManualOperation(key, "Aufnahmedatum aus Dateinamen übernehmen", 0);
+            _ = ObserveCaptureDatePackageAsync(completion, key);
+        }
+        else if (key.StartsWith("info:exif-dates:", StringComparison.Ordinal))
+        {
+            BeginVisibleManualOperation(key, UiLanguage.T("EXIF-Datumsfelder speichern"), 1);
             _ = ObserveCaptureDatePackageAsync(completion, key);
         }
         else if (key.StartsWith("image:gallery-rotation:", StringComparison.Ordinal))
