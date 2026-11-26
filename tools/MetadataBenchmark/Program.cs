@@ -29,11 +29,43 @@ internal static class Program
         CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
         Console.OutputEncoding = Encoding.UTF8;
         bool selfTest = args.Length == 2 && args[0] == "--self-test";
-        if ((!selfTest && args.Length != 1) || !Directory.Exists(args[^1])) return 2;
-        string root = Path.GetFullPath(args[^1]);
+        string packageRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
+        if (new DriveInfo(Path.GetPathRoot(packageRoot)!).DriveType == DriveType.Network ||
+            packageRoot.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            Console.WriteLine("Bitte das Benchmark-Paket auf ein lokales Laufwerk entpacken und dort starten.");
+            return 2;
+        }
+        string selected;
+        if (args.Length == 0)
+        {
+            var picker = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "Testbildverzeichnis auswählen",
+                InitialDirectory = packageRoot,
+                Multiselect = false
+            };
+            if (picker.ShowDialog() != true) return 0;
+            selected = picker.FolderName;
+        }
+        else if (selfTest || args.Length == 1) selected = args[^1];
+        else { Console.WriteLine("Bitte genau ein Testbildverzeichnis angeben."); return 2; }
+        if (!Directory.Exists(selected))
+        {
+            Console.WriteLine("Testbildverzeichnis nicht erreichbar: " + selected);
+            return 2;
+        }
+        string root = Path.GetFullPath(selected);
         string local = Path.Combine(Path.GetTempPath(), "PCasa-bench-data-" + Guid.NewGuid().ToString("N"));
         string remote = Path.Combine(root, ".pcasa-benchmark-" + Guid.NewGuid().ToString("N"));
-        string report = Path.Combine(root, "Benchmark-Ergebnis.txt");
+        string resultFolder = Path.Combine(packageRoot, "Ergebnisse");
+        Directory.CreateDirectory(resultFolder);
+        string sourceLabel = Path.GetPathRoot(root) ?? "Quelle";
+        sourceLabel = new string(sourceLabel.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray()).Trim('_');
+        if (sourceLabel.Length == 0) sourceLabel = "Quelle";
+        if (sourceLabel.Length > 40) sourceLabel = sourceLabel[..40];
+        string report = Path.Combine(resultFolder,
+            $"Benchmark-Ergebnis-{sourceLabel}-{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..8]}.txt");
         Directory.CreateDirectory(local);
         Environment.SetEnvironmentVariable("PCASA_BENCHMARK_LOG", Path.Combine(local, "diagnostics.log"));
         Environment.SetEnvironmentVariable("PCASA_EXIFTOOL_PATH",
@@ -42,7 +74,9 @@ internal static class Program
         Environment.SetEnvironmentVariable("TMP", local);
         var rows = new List<Sample>();
         var failures = 0;
-        using var log = new StreamWriter(report, false, new UTF8Encoding(true)) { AutoFlush = true };
+        using var log = new StreamWriter(new FileStream(report, FileMode.CreateNew,
+            FileAccess.Write, FileShare.Read), new UTF8Encoding(true)) { AutoFlush = true };
+        Console.WriteLine("Ergebnisbericht: " + report);
         void Print(string value) { Console.WriteLine(value); log.WriteLine(value); }
         try
         {
@@ -53,7 +87,7 @@ internal static class Program
                     null, new byte[64 * 32 * 3], 64 * 3);
                 var encoder = new JpegBitmapEncoder();
                 encoder.Frames.Add(BitmapFrame.Create(image));
-                using (var stream = File.Create(fixture)) encoder.Save(stream);
+                using (var stream = new FileStream(fixture, FileMode.CreateNew)) encoder.Save(stream);
                 using var init = new ExifToolKeywordWriter.Session();
                 init.WriteOrientation(fixture, 1, default);
                 init.WriteExactExifDates(fixture, new Dictionary<string,string?> {
@@ -65,8 +99,9 @@ internal static class Program
                 .Where(p => !Path.GetFileName(p).StartsWith(".pcasa-", StringComparison.OrdinalIgnoreCase))
                 .Where(p => (File.GetAttributes(p) & FileAttributes.ReparsePoint) == 0)
                 .OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
-            Print("PCasa Metadaten-Benchmark 1 | " + DateTimeOffset.Now.ToString("O"));
+            Print("PCasa Metadaten-Benchmark 2 | " + DateTimeOffset.Now.ToString("O"));
             Print("Ordner: " + root + " | JPEGs: " + sources.Length);
+            Print("Ergebnisbericht (lokal): " + report);
             Print("A=ExifTool auf Testkopie; B=lokale Vollkopie; C=PCasa Header + SMB CopyChunk sofern verfuegbar.");
             Print("Vier getrennte Aenderungen, jeweils frische identische Testkopien; Vorbereitung und unabhaengige Nachpruefung separat.");
             Print("Keine Undo-Sicherung, kein PCasa-Katalog. Zeit fuer Katalog/Thumbnail wird hier NICHT gemessen.");
@@ -100,6 +135,7 @@ internal static class Program
                         for (int k = 0; k < Methods.Length; k++)
                         {
                             var method = Methods[(i + j + k) % Methods.Length];
+                            Console.WriteLine($"  Test {op} / {method} ...");
                             var row = Trial(source, size, op, method, remote, local, writer, reader, Print);
                             rows.Add(row);
                             if (row.Status == "FAIL") failures++;

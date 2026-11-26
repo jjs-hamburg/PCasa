@@ -30,8 +30,13 @@ jobs:
           $fixture = Join-Path $env:RUNNER_TEMP 'benchmark-fixture'
           New-Item -ItemType Directory -Path $fixture -Force | Out-Null
           & "$env:RUNNER_TEMP/PCasaBenchmark/Runtime/PCasa.MetadataBenchmark.exe" --self-test $fixture
-          Get-Content "$fixture/Benchmark-Ergebnis.txt"
-          if ($LASTEXITCODE -ne 0) { throw 'Benchmark self-test failed' }
+          $code = $LASTEXITCODE
+          $results = @(Get-ChildItem "$env:RUNNER_TEMP/PCasaBenchmark/Ergebnisse" -Filter 'Benchmark-Ergebnis-*.txt')
+          if ($results.Count -ne 1) { throw 'Expected exactly one local report' }
+          Get-Content $results[0].FullName
+          if ($code -ne 0) { throw 'Benchmark self-test failed' }
+          if (@(Get-ChildItem $fixture -Force).Count -ne 1) { throw 'Unexpected files left in test-image directory' }
+          Remove-Item "$env:RUNNER_TEMP/PCasaBenchmark/Ergebnisse" -Recurse -Force
       - uses: actions/upload-artifact@v4
         with:
           name: PCasa-Metadata-Benchmark-Windows-x64
