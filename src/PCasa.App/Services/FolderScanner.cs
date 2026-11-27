@@ -606,8 +606,6 @@ public sealed class FolderScanner
                         {
                             scanSession.FlushPending();
                             var exif = exifReader.Read(localPath, cancellationToken);
-                            if (fingerprint is not null)
-                                scanSession.SaveContentFingerprint(canonicalPath, fingerprint);
                             scanSession.SaveExif(canonicalPath, modifiedUtcTicks, fileLength, exif);
                             scanSession.FlushPending();
                             metadataUpdated++;
@@ -686,6 +684,8 @@ public sealed class FolderScanner
                                 file.Name, extension.ToLowerInvariant(), fileLength,
                                 modifiedUtcTicks, thumbnail.Width, thumbnail.Height,
                                 thumbnail.Path, createdUtcTicks));
+                            if (fingerprint is not null)
+                                scanSession.SaveContentFingerprint(canonicalPath, fingerprint);
                             scanSession.SaveExif(canonicalPath, modifiedUtcTicks, fileLength, exif);
                             if (keywords is not null)
                                 scanSession.SaveTags(canonicalPath, modifiedUtcTicks, keywords);
