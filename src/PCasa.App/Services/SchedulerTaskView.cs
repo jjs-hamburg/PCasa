@@ -527,6 +527,7 @@ public sealed class SchedulerTaskView
             "image-edit-v1" or "image-edit-v2" => UiLanguage.T("Bildbearbeitung speichern"),
             "undo-restore-v1" or "undo-restore-v2" => UiLanguage.T("Bild wiederherstellen"),
             "image-rename-v1" => UiLanguage.T("Bild umbenennen"),
+            "folder-rename-v1" => UiLanguage.T("Ordner umbenennen"),
             "tag-recovery-v1" or "tag-recovery-v2" => UiLanguage.T("Tags wiederherstellen"),
             "manual-folder-scan-v1" => UiLanguage.T("Ordner aktualisieren"),
             "import-error-retry-v1" => UiLanguage.T("Erneut einlesen"),
