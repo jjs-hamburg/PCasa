@@ -328,7 +328,7 @@ public partial class MainWindow
             _ => ReadFolderTreeConfigurationSnapshot());
         if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
         _dragTargetValidity.Clear();
-        await EnsureBrowseCacheAndRefreshAsync(initialProjectionOnly: true);
+        await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
         RefreshFolderTree(preserveGalleryAnchor: true);
         RefreshBackgroundMonitor();
     }
