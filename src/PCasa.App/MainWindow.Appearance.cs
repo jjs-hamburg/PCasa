@@ -180,29 +180,43 @@ public partial class MainWindow
 
         e.Cancel = true;
         if (_shutdownStarted || _shutdownReviewOpen) return;
-        FlushGalleryRotations();
-        // Accepted persistent packages are never part of this review.
-        // Only non-reconstructable session edits can be abandoned explicitly.
-        var pending = PendingFileOperationsForShutdown();
-        if (pending.Count > 0)
+        // A Save click may still be resolving its exact copy destination.
+        // Do not close before that admission has reached the journal.
+        if (_cropSavePending)
+        {
+            _closeAfterEditAdmission = true;
+            return;
+        }
+        if (!FlushGalleryRotations()) return;
+
+        var acceptedExternal = HasPendingExternalWrites();
+        var acceptedImageEdit = _photoEditSession is { } session &&
+            _pendingEditImageIds.Contains(session.ImageId);
+        var unsaved = _tagDraft.HasChanges || _gpsDraft is not null ||
+            (_infoDatesEditing && !_infoDatesSaving &&
+             (InfoDateOriginal.Text != ExifDateMetadata.DisplayDate(_infoDatesOriginal.DateTimeOriginal) ||
+              InfoDateCreated.Text != ExifDateMetadata.DisplayDate(_infoDatesOriginal.CreateDate) ||
+              InfoDateModified.Text != ExifDateMetadata.DisplayDate(_infoDatesOriginal.ModifyDate))) ||
+            (!acceptedImageEdit && !acceptedExternal &&
+                (_photoEditSession?.HasChanges == true || GetPendingLiveEditStep() is not null)) ||
+            (!acceptedExternal &&
+                (_externalEditReview?.ResultPath is not null ||
+                 _externalBatchReview is { Outputs.Length: > 0 }));
+        if (unsaved)
         {
             _shutdownReviewOpen = true;
             try
             {
-                var review = new ShutdownPendingWorkWindow(pending, async operation =>
-                {
-                    return await _scheduler.CancelActiveTaskAsync(operation.Key);
-                }) { Owner = this };
-                if (review.ShowDialog() != true) return;
+                if (PcasaDialog.Show(this, UiLanguage.T("Ungespeicherte Bildbearbeitungen verwerfen?"),
+                        UiLanguage.T("Bearbeiten"), MessageBoxButton.YesNo,
+                        MessageBoxImage.Question) != MessageBoxResult.Yes)
+                    return;
             }
             finally { _shutdownReviewOpen = false; }
         }
-        // Persistent jobs remain accepted for the next start. Only explicitly
-        // abandoned session work is discarded; active writes reach a safe boundary.
+        // Accepted work belongs to the journal; only editor drafts are discarded.
         _galleryRotationTimer?.Stop();
-        _galleryRotationDraft.Clear();
         _tagDraft.Clear();
-        if (_photoEditSession is { HasChanges: true }) CancelEditSession();
         // Save the ACTUAL visible folder expansion before shutdown begins.
         // Event-driven saves alone can miss programmatic changes or be
         // overwritten by late scan/tree rebuilds during asynchronous disposal.
@@ -251,31 +265,6 @@ public partial class MainWindow
         // shutdown has no modal UI and reaches Close() as soon as the workers
         // acknowledge cancellation.
         _ = FinishShutdownAsync();
-    }
-
-    private IReadOnlyList<ShutdownPendingOperation> PendingFileOperationsForShutdown()
-    {
-        var rows = new Dictionary<string, ShutdownPendingOperation>(StringComparer.Ordinal);
-        var active = _scheduler.Snapshot().Where(job => job.SessionWrite &&
-            job.State is SchedulerJobState.Queued or SchedulerJobState.Running or
-                SchedulerJobState.YieldRequested).ToArray();
-        foreach (var job in active)
-        {
-            var files = new List<ShutdownPendingFile>();
-            if (_rotationJobImages.TryGetValue(job.Key, out var ids))
-                foreach (var id in ids)
-                    if (_dragPublishedImages.TryGetValue(id, out var entry) &&
-                        _dragPublishedFolders.TryGetValue(entry.PhotoFolderId, out var folder))
-                        files.Add(new ShutdownPendingFile(System.IO.Path.Combine(folder, entry.FileName),
-                            entry.LegacyThumbnailPath));
-            if (files.Count == 0 && job.CurrentPath is { Length: > 0 } path)
-                files.Add(new ShutdownPendingFile(path, null));
-            rows[job.Key] = new ShutdownPendingOperation(job.Key,
-                UiLanguage.T(job.Phase ?? "Dateiaktion"),
-                UiLanguage.T(job.State == SchedulerJobState.Running ? "Läuft" : "Wartet"),
-                files);
-        }
-        return rows.Values.ToArray();
     }
 
     private async Task FinishShutdownAsync()
