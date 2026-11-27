@@ -2027,8 +2027,8 @@ internal static class Program
                         throw new Exception("Shared data-bound time zone selection is not rendered.");
                     boundChoice.IsDropDownOpen = true;
                     Flush(boundWindow);
-                    var popup = boundChoice.Template.FindName("PART_Popup", boundChoice) as Popup;
-                    if (popup?.IsOpen != true || popup.Child is not Border frame ||
+                    var timeZonePopup = boundChoice.Template.FindName("PART_Popup", boundChoice) as Popup;
+                    if (timeZonePopup?.IsOpen != true || timeZonePopup.Child is not Border frame ||
                         frame.Background is not SolidColorBrush paper ||
                         boundChoice.Foreground is not SolidColorBrush ink ||
                         Math.Abs(ink.Color.R - paper.Color.R) +
