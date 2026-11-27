@@ -62,8 +62,10 @@ public partial class MainWindow : Window
         _scheduler.RegisterDurablePackageType(RotationRecipeType, BuildGalleryRotationPackage);
         _scheduler.RegisterDurablePackageType("gpx-write-v1", BuildGpxWritePackage);
         _scheduler.RegisterDurablePackageType("undo-restore-v1", BuildUndoRestorePackage);
+        _scheduler.RegisterDurablePackageType("undo-restore-v2", BuildUndoRestorePackage);
         _scheduler.RegisterDurablePackageType("image-crop-v1", BuildCropPackage);
         _scheduler.RegisterDurablePackageType("image-edit-v1", BuildEditPackage);
+        _scheduler.RegisterDurablePackageType("image-edit-v2", BuildEditPackage);
         _scheduler.RegisterDurablePackageType("manual-folder-scan-v1", BuildManualFolderScanPackage);
         _scheduler.RegisterDurablePackageType("import-error-retry-v1", BuildImportErrorRetryPackage);
         _scheduler.RegisterDurablePackageType("manual-scan-all-v1", BuildScanAllPackage);
