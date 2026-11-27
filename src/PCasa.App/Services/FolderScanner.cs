@@ -138,14 +138,15 @@ public sealed class FolderScanner
         string? durableScanKey = null,
         bool preferFirstPass = false,
         bool catalogOwnedProgress = false,
-        bool retryFailedFiles = false)
+        bool retryFailedFiles = false,
+        bool prioritizeImportFrontier = false)
     {
         return ScanDirectoryLocked(
             folder, localDirectory, recursive, progress, cancellationToken,
             resume: resume, durableInitialImport: durableInitialImport,
             durableScanKey: durableScanKey, preferFirstPass: preferFirstPass,
             catalogOwnedProgress: catalogOwnedProgress,
-            retryFailedFiles: retryFailedFiles);
+            retryFailedFiles: retryFailedFiles, prioritizeImportFrontier: prioritizeImportFrontier);
     }
 
     public ScanResult ScanFile(
@@ -179,7 +180,8 @@ public sealed class FolderScanner
         bool forceExifRefresh = false,
         bool preferFirstPass = false,
         bool catalogOwnedProgress = false,
-        bool retryFailedFiles = false, bool forceContentRefresh = false)
+        bool retryFailedFiles = false, bool forceContentRefresh = false,
+        bool prioritizeImportFrontier = false)
     {
         var scanRoot = CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(localDirectory));
         EnsureInsideMonitoredFolder(folder, scanRoot);
@@ -421,6 +423,19 @@ public sealed class FolderScanner
             folder.CanonicalPath, folder.Id, generation, cancellationToken);
         // ExifTool is reused throughout this scan, not restarted per file.
         using var exifReader = _exifReaderFactory();
+        // A first-import frontier is a preferred starting scope, never a
+        // filter on an explicit refresh. Revisit the rest of the selected
+        // tree after the outstanding directories, without visiting any twice.
+        string[]? preferredDirectories = null;
+        if (prioritizeImportFrontier && !catalogImport && specificFile is null &&
+            resume?.Enumerator is null && _folderRepository.HasIncompleteImport(folder.Id))
+        {
+            preferredDirectories = (_folderRepository.GetImportFrontier(folder.Id, generation, scanRoot)
+                ?? _folderRepository.GetImportFrontier(folder.Id, generation, folder.LocalPath)
+                ?? _folderRepository.GetDirectoryFirstPass(folder.Id, generation, scanRoot).Cursors.Keys.ToArray())
+                .Where(path => FolderExclusionRules.IsAtOrBelow(path, scanRoot) &&
+                    Directory.Exists(path)).ToArray();
+        }
         var enumerator = resume?.Enumerator ??
             (catalogImport
                 ? EnumerateFirstImportFiles(folder, generation, scanRoot, recursive,
@@ -438,7 +453,8 @@ public sealed class FolderScanner
                         ? resume is null
                             ? DirectoryCompleted
                             : directory => resume.DirectoryCompletionHandler?.Invoke(directory)
-                        : null)
+                        : null,
+                    preferredDirectories)
                 : new[] { specificFile }).GetEnumerator();
         if (resume is not null) resume.Enumerator = enumerator;
         var enumerationComplete = resume?.EnumerationComplete ?? false;
@@ -865,7 +881,7 @@ public sealed class FolderScanner
 
                 // Show each newly discovered folder and regularly refresh
                 // progress; presentation cannot own the scanner cursor.
-                ReportProgress(localPath, force: discoveredFolderId is not null,
+                ReportProgress(localPath, force: discoveredFolderId is not null || readingNew == true,
                     discoveredFolderId, discoveredFolderPath, currentThumbnailPath);
             }
         }
@@ -1075,10 +1091,15 @@ public sealed class FolderScanner
         IReadOnlyDictionary<string, string>? fileCursors = null,
         IReadOnlySet<string>? alreadyIndexedPaths = null,
         bool catalogImport = false,
-        Action<string>? onDirectoryComplete = null)
+        Action<string>? onDirectoryComplete = null,
+        IReadOnlyList<string>? preferredDirectories = null)
     {
         var pending = new Stack<string>();
         pending.Push(scanRoot);
+        if (preferredDirectories is not null)
+            foreach (var directory in preferredDirectories.Reverse())
+                pending.Push(directory);
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var options = new EnumerationOptions
         {
             RecurseSubdirectories = false,
@@ -1093,6 +1114,7 @@ public sealed class FolderScanner
         {
             token.ThrowIfCancellationRequested();
             var directory = pending.Pop();
+            if (!visited.Add(FolderExclusionRules.Normalize(directory))) continue;
             yield return string.Empty;
             var directoryExcluded = FolderExclusionRules.IsExcluded(
                 directory, exclusions, inclusions);

@@ -176,6 +176,7 @@ internal static class Program
         Run("Repeated browse index keeps decoded thumbnail pages", IdenticalIndexRetainsPage, failures);
         Run("Manual thumbnail rebuild updates one image without evicting its neighbors", TargetedThumbnailRebuildRetainsNeighbor, failures);
         Run("New discoveries import before inventory completion; same-stamp replacement rebuilds content", ImmediateInventoryAndFingerprint, failures);
+        Run("Unified refresh streams changed and new files at root and child scope", UnifiedDirectoryRefresh, failures);
         Run("Per-folder gallery sorting preserves tree order for all six sort fields", PerFolderSortAllFields, failures);
         Run("Gallery sorting reads EXIF capture date, file dates, size and original dimensions from one index", GallerySortUsesCatalogMetadata, failures);
         Run("External Topaz result supports an in-workspace crop before explicit Save without touching original",
@@ -4409,6 +4410,45 @@ internal static class Program
         cache.SetIndex(Array.Empty<BrowseThumbnailIndexEntry>());
         if (cache.Count != 0 || cache.TryGet(0, out _))
             throw new Exception("Changed browse index did not invalidate obsolete pages.");
+    }
+
+    private static void UnifiedDirectoryRefresh()
+    {
+        using var sandbox = new Sandbox();
+        var a = Path.Combine(sandbox.Images, "A");
+        var b = Path.Combine(sandbox.Images, "B");
+        Directory.CreateDirectory(a);
+        Directory.CreateDirectory(b);
+        var old = Path.Combine(a, "old.jpg");
+        var other = Path.Combine(b, "other.jpg");
+        WriteJpeg(old);
+        WriteJpeg(other);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        var catalog = new ImageCatalogRepository(db);
+        var newPath = Path.Combine(a, "new.jpg");
+        WriteJpeg(newPath);
+        File.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddDays(-1));
+        var sawNew = false;
+        var sawChanged = false;
+        var progress = new InlineProgress<ScanProgress>(p =>
+        {
+            if (p.CurrentFile is null || !p.PreviewCommitted) return;
+            sawNew |= p.Added > 0;
+            sawChanged |= p.Changed > 0;
+        });
+        var child = scanner.ScanDirectory(root, a, true, progress,
+            catalogOwnedProgress: true, prioritizeImportFrontier: true);
+        if (child.ImageFilesSeen != 2 || child.Updated != 2 || child.Failed != 0 ||
+            !sawNew || !sawChanged || catalog.CountAll() != 3)
+            throw new Exception("Child refresh did not stream both new and changed files: " + child);
+        File.Delete(old);
+        File.SetLastWriteTimeUtc(other, DateTime.UtcNow.AddDays(-2));
+        var whole = scanner.ScanDirectory(root, root.LocalPath, true,
+            catalogOwnedProgress: true, prioritizeImportFrontier: true);
+        if (whole.ImageFilesSeen != 2 || whole.Updated != 1 ||
+            whole.Removed != 1 || whole.Failed != 0 || catalog.CountAll() != 2)
+            throw new Exception("Root refresh did not use the same reconciliation: " + whole);
     }
 
     private static void ImmediateInventoryAndFingerprint()

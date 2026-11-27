@@ -1593,8 +1593,6 @@ public partial class MainWindow
                     }
                     ScanResult? scanResult = null;
                     bool unavailablePath = false;
-                    CatalogInventoryCheckResult? inventoryResult = null;
-                    IReadOnlyList<FolderRepository.AutomaticChangeJob>? acceptedReviewChanges = null;
                     var reviewEpoch = _folderRepository.GetScanEpoch(folder.CanonicalPath);
                     // One confirmed count belongs to the original
                     // directory-inventory receipt, not to a newly allocated
@@ -1692,32 +1690,22 @@ public partial class MainWindow
                                     ? null : new ImageCatalogRepository(_database).CountIndexedImages(
                                         folder.Id, request.Kind == BackgroundFolderChangeKind.ScanFile
                                             ? Path.GetDirectoryName(scanPath)! : scanPath, request.Recursive)));
-                            if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
-                            {
-                                inventoryResult = new CatalogInventoryCheck(_database).Check(
-                                    folder,
-                                    _folderRepository.GetExcludedPaths(folder.Id),
-                                    _folderRepository.GetIncludedPaths(folder.Id), token,
-                                    (count, path) => scanProgress.Report(
-                                        new ScanProgress(count, 0, count, 0, path)));
-                                token.ThrowIfCancellationRequested();
-                                acceptedReviewChanges = _folderRepository.CompleteRootCheck(
-                                    folder.Id, sourceState.Value.Generation, reviewEpoch,
-                                    inventoryResult.Changes);
-                                if (acceptedReviewChanges is null)
-                                    throw new OperationCanceledException("Review source changed.");
-                                scanResult = new ScanResult(inventoryResult.CheckedFiles, 0,
-                                    inventoryResult.CheckedFiles, 0);
-                            }
-                            else
-                                scanResult = request.Kind == BackgroundFolderChangeKind.ScanFile
-                                    ? _folderScanner.ScanFile(folder, scanPath, scanProgress, token,
-                                        forceExifRefresh: request.ForceExifRefresh)
-                                    : _folderScanner.ScanDirectory(
-                                        folder, scanPath, request.Recursive,
-                                        progress: scanProgress, token, scanResume,
-                                        durableScanKey: inventoryKey,
-                                        catalogOwnedProgress: true);
+                            // P4 uses the same streaming scanner as manual updates.
+                            // The review keeps its own priority and completion receipt,
+                            // but never manufactures a second wave of import jobs.
+                            scanResult = request.Kind == BackgroundFolderChangeKind.ScanFile
+                                ? _folderScanner.ScanFile(folder, scanPath, scanProgress, token,
+                                    forceExifRefresh: request.ForceExifRefresh)
+                                : _folderScanner.ScanDirectory(folder, scanPath,
+                                    request.Kind == BackgroundFolderChangeKind.RescanRoot || request.Recursive,
+                                    progress: scanProgress, token, scanResume,
+                                    durableScanKey: request.Kind == BackgroundFolderChangeKind.RescanRoot
+                                        ? null : inventoryKey,
+                                    catalogOwnedProgress: true);
+                            if (request.Kind == BackgroundFolderChangeKind.RescanRoot &&
+                                !_folderRepository.CompleteRootCheck(folder.Id,
+                                    sourceState.Value.Generation, reviewEpoch))
+                                throw new OperationCanceledException("Review source changed.");
                             return Task.CompletedTask;
                         },
                         () => _folderRepository.IsCurrentSourceGeneration(
@@ -1744,12 +1732,10 @@ public partial class MainWindow
                         continue;
                     }
                     var result = scanResult ?? throw new OperationCanceledException();
-                    if (inventoryResult is not null)
+                    if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
                     {
                         _backgroundActiveScanKind = null;
                         reviewCompleted = true;
-                        foreach (var accepted in acceptedReviewChanges!)
-                            QueueBackgroundChange(accepted.Change, persisted: accepted);
                     }
                     CompleteAutomaticChange(request);
 
