@@ -524,6 +524,8 @@ public sealed class SchedulerTaskView
             "capture-date-from-name-v1" => UiLanguage.T("Aufnahmedatum aus Dateinamen übernehmen"),
             "explicit-exif-dates-v1" => UiLanguage.T("EXIF-Datumsfelder speichern"),
             "gallery-rotation-v1" => GalleryRotationCaption,
+            "image-edit-v1" or "image-edit-v2" => UiLanguage.T("Bildbearbeitung speichern"),
+            "undo-restore-v1" or "undo-restore-v2" => UiLanguage.T("Bild wiederherstellen"),
             "tag-recovery-v1" or "tag-recovery-v2" => UiLanguage.T("Tags wiederherstellen"),
             "manual-folder-scan-v1" => UiLanguage.T("Ordner aktualisieren"),
             "import-error-retry-v1" => UiLanguage.T("Erneut einlesen"),
