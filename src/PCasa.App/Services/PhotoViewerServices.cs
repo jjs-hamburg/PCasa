@@ -62,13 +62,15 @@ public static class PhotoViewerImageLoader
             ext is ".jpg" or ".jpeg" or ".png" or ".bmp" or ".gif" or ".tif" or ".tiff")
         {
             var bytes = new byte[(int)input.Length];
-            input.ReadExactlyAsync(bytes.AsMemory(), token).GetAwaiter().GetResult();
+            // ValueTask may still be pending on a real disk or SMB read.
+            // AsTask provides a blocking wait on this foreground worker.
+            input.ReadExactlyAsync(bytes.AsMemory(), token).AsTask().GetAwaiter().GetResult();
             var hash = System.Security.Cryptography.SHA256.HashData(bytes);
             using var memory = new MemoryStream(bytes, writable: false);
             return (LoadLocked(info, requiredSize, token, memory), hash);
         }
         var fingerprint = System.Security.Cryptography.SHA256.HashDataAsync(input, token)
-            .GetAwaiter().GetResult();
+            .AsTask().GetAwaiter().GetResult();
         return (LoadLocked(info, requiredSize, token), fingerprint);
     }
 

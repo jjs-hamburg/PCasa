@@ -634,7 +634,7 @@ public sealed class FolderScanner
                                 128 * 1024, FileOptions.SequentialScan);
                         byte[]? fingerprint = sourceBytes is null ? null :
                             System.Security.Cryptography.SHA256.HashDataAsync(sourceBytes, cancellationToken)
-                                .GetAwaiter().GetResult();
+                                .AsTask().GetAwaiter().GetResult();
                         var renderPath = _thumbnailCache.ResolveSource(localPath, cancellationToken);
                         var thumbnail = _thumbnailCache.CreateOrUpdate(
                             renderPath,
