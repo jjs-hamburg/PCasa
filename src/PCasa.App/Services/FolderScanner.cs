@@ -233,7 +233,8 @@ public sealed class FolderScanner
             ? _folderRepository.BeginOrResumeRegularScan(
                 durableScanKey, folder.Id, scanRoot, folder.CanonicalPath,
                 beginManualEpoch: false,
-                loadLegacyProgress: !catalogOwnedProgress || durableRefresh)
+                loadLegacyProgress: !catalogOwnedProgress || durableRefresh,
+                verifiedDirectoryReceipts: durableRefresh)
             : null;
         if ((!catalogOwnedProgress || durableRefresh) && regularCheckpoint is not null &&
             resume is not null && resume.Enumerator is null &&

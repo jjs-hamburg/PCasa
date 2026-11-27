@@ -451,7 +451,7 @@ public partial class MainWindow
                             durableScanKey, folder.Id,
                             Path.GetFullPath(directory).Replace('/', '\\'),
                             folder.CanonicalPath, beginManualEpoch: true,
-                            loadLegacyProgress: false);
+                            loadLegacyProgress: false, verifiedDirectoryReceipts: true);
                     _manualScanEpoch = checkpoint.Epoch;
                     // The receipt preserves identity and the source fence,
                     // not the amount of imported catalog data.

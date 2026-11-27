@@ -2126,6 +2126,11 @@ internal static class Program
         if (!reopened.SaveRegularScanFile(automaticKey, dir, "z.jpg", 999,
                 source.Generation, oldReceipt.Epoch))
             throw new Exception("Could not seed legacy automatic receipt.");
+        // A legacy directory marked complete is equally untrustworthy.
+        // Migration must reset both the obsolete count and all such receipts.
+        if (!reopened.CompleteRegularScanDirectory(automaticKey, dir, 999,
+                source.Generation, oldReceipt.Epoch))
+            throw new Exception("Could not seed legacy completed directory.");
         WriteJpeg(Path.Combine(dir, "0.jpg"));
         var recovered = scanner2.ScanDirectory(root, dir, true,
             durableScanKey: automaticKey, catalogOwnedProgress: true);

@@ -972,7 +972,7 @@ public sealed class FolderRepository
     public RegularScanCheckpoint BeginOrResumeRegularScan(
         string scanKey, long folderId, string scanRoot,
         string sourceCanonicalPath, bool beginManualEpoch,
-        bool loadLegacyProgress = true)
+        bool loadLegacyProgress = true, bool verifiedDirectoryReceipts = false)
     {
         using var connection = _database.OpenConnection();
         using var tx = connection.BeginTransaction();
@@ -994,12 +994,13 @@ public sealed class FolderRepository
 
         long epoch;
         int checkedCount;
+        int receiptVersion = 0;
         using (var previous = connection.CreateCommand())
         {
             previous.Transaction = tx;
             previous.CommandText = """
                 SELECT monitored_folder_id, scan_root, source_generation,
-                       scan_epoch, checked_count
+                       scan_epoch, checked_count, receipt_version
                 FROM scan_resume_jobs WHERE scan_key=$key;
                 """;
             previous.Parameters.AddWithValue("$key", scanKey);
@@ -1014,6 +1015,7 @@ public sealed class FolderRepository
                         "Obsolete scan receipt belongs to another source generation.");
                 epoch = reader.GetInt64(3);
                 checkedCount = reader.GetInt32(4);
+                receiptVersion = reader.GetInt32(5);
             }
             else
             {
@@ -1046,8 +1048,8 @@ public sealed class FolderRepository
             create.CommandText = """
                 INSERT INTO scan_resume_jobs
                     (scan_key,monitored_folder_id,scan_root,source_generation,
-                     scan_epoch,checked_count,started_utc)
-                VALUES ($key,$id,$root,$generation,$epoch,0,$now);
+                     scan_epoch,checked_count,started_utc,receipt_version)
+                VALUES ($key,$id,$root,$generation,$epoch,0,$now,$version);
                 """;
             create.Parameters.AddWithValue("$key", scanKey);
             create.Parameters.AddWithValue("$id", folderId);
@@ -1055,7 +1057,24 @@ public sealed class FolderRepository
             create.Parameters.AddWithValue("$generation", generation);
             create.Parameters.AddWithValue("$epoch", epoch);
             create.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            receiptVersion = verifiedDirectoryReceipts ? 1 : 0;
+            create.Parameters.AddWithValue("$version", receiptVersion);
             create.ExecuteNonQuery();
+        }
+        if (verifiedDirectoryReceipts && receiptVersion != 1)
+        {
+            // Keep the accepted job and its source/epoch fence. Only legacy
+            // traversal evidence is invalid: it may have skipped earlier files.
+            using var migrate = connection.CreateCommand();
+            migrate.Transaction = tx;
+            migrate.CommandText = """
+                DELETE FROM scan_resume_directories WHERE scan_key=$key;
+                UPDATE scan_resume_jobs SET checked_count=0,receipt_version=1
+                    WHERE scan_key=$key;
+                """;
+            migrate.Parameters.AddWithValue("$key", scanKey);
+            migrate.ExecuteNonQuery();
+            checkedCount = 0;
         }
         var completed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var cursors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

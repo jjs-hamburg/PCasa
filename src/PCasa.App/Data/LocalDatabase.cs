@@ -425,6 +425,10 @@ public sealed class LocalDatabase
                 """;
             regularScan.ExecuteNonQuery();
         }
+        // Version the semantics, not the job identity. Old filename receipts
+        // do not prove a complete streaming directory reconciliation.
+        EnsureColumn(connection, "scan_resume_jobs", "receipt_version",
+            "INTEGER NOT NULL DEFAULT 0");
 
         // Long-lived first-pass progress belongs to the monitored source
         // and the individual directory, NOT to a particular scan job. A
