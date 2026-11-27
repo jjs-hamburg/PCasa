@@ -177,6 +177,7 @@ internal static class Program
         Run("Manual thumbnail rebuild updates one image without evicting its neighbors", TargetedThumbnailRebuildRetainsNeighbor, failures);
         Run("New discoveries import before inventory completion; same-stamp replacement rebuilds content", ImmediateInventoryAndFingerprint, failures);
         Run("Unified refresh streams changed and new files at root and child scope", UnifiedDirectoryRefresh, failures);
+        Run("Streaming refresh persists completed directory receipts", DurableStreamingRefresh, failures);
         Run("Per-folder gallery sorting preserves tree order for all six sort fields", PerFolderSortAllFields, failures);
         Run("Gallery sorting reads EXIF capture date, file dates, size and original dimensions from one index", GallerySortUsesCatalogMetadata, failures);
         Run("External Topaz result supports an in-workspace crop before explicit Save without touching original",
@@ -4410,6 +4411,51 @@ internal static class Program
         cache.SetIndex(Array.Empty<BrowseThumbnailIndexEntry>());
         if (cache.Count != 0 || cache.TryGet(0, out _))
             throw new Exception("Changed browse index did not invalidate obsolete pages.");
+    }
+
+    private static void DurableStreamingRefresh()
+    {
+        using var sandbox = new Sandbox();
+        var dirs = new[] { Path.Combine(sandbox.Images, "A"), Path.Combine(sandbox.Images, "B"),
+            Path.Combine(sandbox.Images, "C") };
+        foreach (var dir in dirs)
+        {
+            Directory.CreateDirectory(dir);
+            WriteJpeg(Path.Combine(dir, "photo.jpg"));
+        }
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        const string key = "manual:refresh:restart-test";
+        string? completed = null;
+        using var stop = new CancellationTokenSource();
+        var progress = new InlineProgress<ScanProgress>(p =>
+        {
+            if (p.VerifiedDirectoryPath is string directory && dirs.Contains(directory,
+                StringComparer.OrdinalIgnoreCase))
+            {
+                completed = directory;
+                stop.Cancel();
+            }
+        });
+        try
+        {
+            scanner.ScanDirectory(root, root.LocalPath, true, progress, stop.Token,
+                durableScanKey: key, catalogOwnedProgress: true);
+            throw new Exception("Expected interruption after first complete photo directory.");
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        if (completed is null) throw new Exception("Refresh failed to publish a durable checkpoint.");
+        var pending = dirs.Where(dir => !dir.Equals(completed, StringComparison.OrdinalIgnoreCase)).ToArray();
+        Directory.Delete(pending[0], recursive: true);
+        WriteJpeg(Path.Combine(pending[1], "new.jpg"));
+        File.SetLastWriteTimeUtc(Path.Combine(completed, "photo.jpg"), DateTime.UtcNow.AddDays(-2));
+        var fresh = new FolderScanner(new ImageCatalogRepository(db), new ThumbnailCache(),
+            new FolderRepository(db), new BrowseThumbnailProfileRepository(db));
+        var result = fresh.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: key, catalogOwnedProgress: true);
+        if (result.ImageFilesSeen != 3 || result.Updated != 1 ||
+            result.Removed != 1 || result.Failed != 0 || new ImageCatalogRepository(db).CountAll() != 3)
+            throw new Exception("Recovered streaming refresh replayed a completed directory or lost a change: " + result);
     }
 
     private static void UnifiedDirectoryRefresh()
