@@ -292,6 +292,7 @@ public partial class MainWindow
                 await HasUnfinishedImageEditAsync(id))
                 throw new InvalidOperationException(UiLanguage.T(
                     "Für dieses Bild ist ein Speicherauftrag noch nicht abgeschlossen. Bitte im Taskmanager prüfen."));
+            if (_viewerOpen && !_viewerHasOriginal) return;
             if (_viewerOpen && !ConfirmCropExit()) return;
 
             EnsureExternalReviewActivationHook();
@@ -573,7 +574,7 @@ public partial class MainWindow
                     BrowseSurface_ImageOpened(BrowseSurface,
                         new PCasa.App.Controls.BrowseImageClickedEventArgs(
                             review.ImageId, System.Windows.Input.ModifierKeys.None));
-                if (changed && result is not null && _viewerOpen &&
+                if ((changed || !review.PreviewReady) && result is not null && _viewerOpen &&
                     _viewerSequence is not null && _viewerCurrentIndex >= 0 &&
                     _viewerSequence.At(_viewerCurrentIndex).ImageId == review.ImageId)
                 {
@@ -588,12 +589,22 @@ public partial class MainWindow
                                     Path.GetFileName(result), width, height),
                                 size, CancellationToken.None);
                         });
-                        if (!ReferenceEquals(_externalEditReview, review)) return;
+                        var originalInfo = _viewerImageInfo ?? await Task.Run(() =>
+                            new PhotoViewerImageRepository(_database).Get(review.ImageId));
+                        if (!ReferenceEquals(_externalEditReview, review) || !_viewerOpen ||
+                            _viewerSequence is null || _viewerCurrentIndex < 0 ||
+                            _viewerSequence.At(_viewerCurrentIndex).ImageId != review.ImageId) return;
                         _viewerDecodeCancellation?.Cancel();
                         ++_viewerImageRequest;
+                        _viewerPendingOriginalImageId = null;
+                        _viewerPendingOriginalPixels = 0;
+                        _viewerImageInfo = originalInfo;
                         _photoEditSession = null;
+                        ResetEditComparison();
                         SetViewerBitmap(bitmap);
+                        _viewerHasOriginal = true;
                         review.PreviewReady = true;
+                        SetViewerQualityMessage(null);
                         ApplyViewerImageLayout();
                     }
                     catch (Exception ex)
