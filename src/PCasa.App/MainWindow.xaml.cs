@@ -67,6 +67,7 @@ public partial class MainWindow : Window
         _scheduler.RegisterDurablePackageType("image-edit-v1", BuildEditPackage);
         _scheduler.RegisterDurablePackageType("image-edit-v2", BuildEditPackage);
         _scheduler.RegisterDurablePackageType("image-rename-v1", BuildImageRenamePackage);
+        _scheduler.RegisterDurablePackageType("folder-rename-v1", BuildFolderRenamePackage);
         _scheduler.RegisterDurablePackageType("manual-folder-scan-v1", BuildManualFolderScanPackage);
         _scheduler.RegisterDurablePackageType("import-error-retry-v1", BuildImportErrorRetryPackage);
         _scheduler.RegisterDurablePackageType("manual-scan-all-v1", BuildScanAllPackage);
@@ -87,7 +88,9 @@ public partial class MainWindow : Window
                 new UndoHistoryService(UndoOptions.Load())
                     .RebaseSourcePaths(recovered.Source, recovered.Target,
                         subtree: true);
-                renameService.CompleteDirectoryRename(recovered.Id);
+                if (!new DurablePackageJournal(_database).Pending().Any(row =>
+                    row.Key == recovered.Id && row.Type == "folder-rename-v1"))
+                    renameService.CompleteDirectoryRename(recovered.Id);
                 PCasaDiagnostics.WriteMessage("Rename.FolderRecovered",
                     $"Completed interrupted folder rename {recovered.Source} -> {recovered.Target}");
             }
