@@ -2,6 +2,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
 using PCasa.App.Services;
+using PCasa.App.Data;
 
 namespace PCasa.App;
 
@@ -52,7 +53,7 @@ public partial class MainWindow
         persist(state);
         publish(staged =>
         {
-            state = state with { CandidateHash = WriteHash(staged) };
+            state = state! with { CandidateHash = WriteHash(staged) };
             persist(state);
         });
     }
