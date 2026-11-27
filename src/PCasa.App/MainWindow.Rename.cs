@@ -308,6 +308,23 @@ public partial class MainWindow
         return package;
     }
 
+    private async Task ObserveRecoveredFolderMutationAsync(Task completion, string key)
+    {
+        try
+        {
+            await completion;
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
+                await RefreshFolderMutationProjectionAsync();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { PCasaDiagnostics.Write("Folder.Mutation.Recovery", ex); }
+        finally
+        {
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
+                EndVisibleManualOperation(key);
+        }
+    }
+
     private void RebaseRenamedTreePreferences(string oldPath, string newPath,
         string oldCanonical, string newCanonical)
     {
