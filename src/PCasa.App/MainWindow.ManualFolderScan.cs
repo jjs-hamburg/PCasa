@@ -482,7 +482,9 @@ public partial class MainWindow
             {
                 // Both first import and manual reread reconcile the current
                 // filesystem against the catalog, not an old filename cursor.
-                Result = owner._folderScanner.ScanDirectory(
+                Result = _firstImport != true && !acknowledgeTargetedPending
+                    ? RefreshDifferences(folder, currentSource.Value.Generation, token)
+                    : owner._folderScanner.ScanDirectory(
                     folder, directory, recursive: true, progress, token, _resume,
                     durableInitialImport: requirePendingInitialImport,
                     durableScanKey: requirePendingInitialImport ? null : durableScanKey,
@@ -508,6 +510,53 @@ public partial class MainWindow
                     folder.Id, expectedGeneration, scanEpoch);
             }
             return Task.CompletedTask;
+        }
+
+        // One manual P0 identity, no child jobs. A restart/yield recomputes
+        // the difference from the committed catalog, never replays unchanged pixels.
+        private ScanResult RefreshDifferences(MonitoredFolder folder, long generation,
+            CancellationToken token)
+        {
+            var inventory = new CatalogInventoryCheck(owner._database).Check(folder,
+                owner._folderRepository.GetExcludedPaths(folder.Id),
+                owner._folderRepository.GetIncludedPaths(folder.Id), token,
+                (count, path) => progress?.Report(new ScanProgress(count, 0, count, 0, path,
+                    ReadingNew: false)), selectedDirectory: directory);
+            int updated = 0, removed = 0, failed = 0, metadata = 0, scanned = 0;
+            foreach (var change in inventory.Changes)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!owner._folderRepository.IsCurrentSourceGeneration(folder.CanonicalPath, generation, true))
+                    throw new OperationCanceledException("Inventory source changed.");
+                if (change.Kind == BackgroundFolderChangeKind.ScanFile)
+                {
+                    var result = owner._folderScanner.ScanFile(folder, change.Path, progress, token,
+                        forceExifRefresh: change.ForceExifRefresh);
+                    scanned += result.ImageFilesSeen;
+                    updated += result.Updated;
+                    failed += result.Failed;
+                    metadata += result.MetadataUpdated;
+                }
+                else if (change.Kind == BackgroundFolderChangeKind.RemovePath)
+                {
+                    var parent = Path.GetDirectoryName(change.Path);
+                    if (parent is null || !Directory.Exists(parent) ||
+                        !owner._scheduler.SourceAvailability.CanAccess(directory, token))
+                        throw new IOException("Inventory parent unavailable: " + parent);
+                    // File.Exists also returns false for permission/I/O errors.
+                    // Only an explicit missing-path result permits removal.
+                    try { _ = File.GetAttributes(change.Path); continue; }
+                    catch (FileNotFoundException) { }
+                    catch (DirectoryNotFoundException) { }
+                    if (!Directory.Exists(parent))
+                        throw new IOException("Inventory parent disappeared: " + parent);
+                    removed += owner._catalogRemovalService.RemovePath(folder.Id, change.Path,
+                        cancellationToken: token, sourceCanonicalPath: folder.CanonicalPath,
+                        expectedGeneration: generation, deferCleanup: true);
+                }
+            }
+            return new ScanResult(inventory.CheckedFiles, updated,
+                Math.Max(0, inventory.CheckedFiles - scanned), failed, removed, metadata);
         }
 
         public void Dispose() => _resume.Dispose();
