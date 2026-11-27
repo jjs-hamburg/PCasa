@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using PCasa.App.Services;
@@ -111,39 +112,9 @@ public partial class MainWindow
         BeginVisibleManualOperation(key, UiLanguage.T("Bild umbenennen"), 1);
         try
         {
-            var work = new SchedulerTaskPackage(key);
-            work.AddStep(token =>
-                {
-                    var root = _folderRepository.GetAll().Where(entry =>
-                        FolderExclusionRules.IsAtOrBelow(source, entry.LocalPath))
-                        .OrderByDescending(entry => entry.LocalPath.Length)
-                        .FirstOrDefault() ?? throw new IOException(
-                            "Bild liegt nicht in einem überwachten Ordner.");
-                    using var guard = SourceFileLocks.EnterPair(source, target, token);
-                    if (!File.Exists(source)) throw new FileNotFoundException(
-                        "Originaldatei ist nicht erreichbar.", source);
-                    if (File.Exists(target) || Directory.Exists(target))
-                        throw new IOException("Zieldatei existiert bereits: " + target);
-                    var intent = Guid.NewGuid().ToString("N");
-                    _imageCatalog.BeginRelocationIntent(intent, imageId, source, target, root.Id);
-                    File.Move(source, target);
-                    // This existing relocation path preserves image identity,
-                    // packed thumbnails, tags, GPS and every EXIF cache row.
-                    if (!_imageCatalog.RelocateImage(imageId, source, target, root,
-                            token, relocationIntentId: intent))
-                        throw new IOException(
-                            "Datei wurde umbenannt; Katalogaktualisierung ausstehend.");
-                    try
-                    {
-                        new UndoHistoryService(UndoOptions.Load())
-                            .RebaseSourcePaths(source, target, subtree: false);
-                    }
-                    catch (Exception ex)
-                    { PCasaDiagnostics.Write("Rename.ImageUndo", ex); }
-                    return Task.CompletedTask;
-                });
-            await StartDirectImageWrite(key, UiLanguage.T("Bild umbenennen"),
-                source, work, folderId: 0, reindexOriginal: false);
+            var request = new ImageRenameRecipe(imageId, source, target);
+            await _scheduler.EnqueueDurableRecipeAsync(key, "image-rename-v1",
+                JsonSerializer.Serialize(request), SchedulerPriority.ManualAction);
             if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: false);
@@ -152,6 +123,59 @@ public partial class MainWindow
         }
         catch (Exception ex) { ShowFileActionError(ex); }
         finally { EndVisibleManualOperation(key); }
+    }
+
+    private sealed record ImageRenameRecipe(long ImageId, string Path,
+        string Destination, string? OriginalHash = null);
+
+    private SchedulerTaskPackage BuildImageRenamePackage(string key, string payload)
+    {
+        var request = JsonSerializer.Deserialize<ImageRenameRecipe>(payload)
+            ?? throw new InvalidDataException("Invalid image rename recipe.");
+        var package = new SchedulerTaskPackage(key);
+        package.AddStep(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            var source = request.Path;
+            var target = request.Destination;
+            _scheduler.ReportProgress(key, UiLanguage.T("Bild umbenennen"), 0, 1, source);
+            var root = _folderRepository.GetAll().Where(entry =>
+                FolderExclusionRules.IsAtOrBelow(source, entry.LocalPath))
+                .OrderByDescending(entry => entry.LocalPath.Length)
+                .FirstOrDefault() ?? throw new IOException(
+                    "Bild liegt nicht in einem überwachten Ordner.");
+            using var guard = SourceFileLocks.EnterPair(source, target, token);
+            var sourcePresence = SourceFilePresence.Probe(source);
+            var targetPresence = SourceFilePresence.Probe(target);
+            var intent = key;
+            if (sourcePresence == FilePresence.Present &&
+                targetPresence == FilePresence.ConfirmedMissing &&
+                CatalogImageIdAtPath(source) == request.ImageId)
+            {
+                var hash = WriteHash(source);
+                if (request.OriginalHash is not null && hash != request.OriginalHash)
+                    throw new IOException("Rename source changed after preparation.");
+                request = request with { OriginalHash = hash };
+                PersistWriteRecipe(key, request);
+                if (!_imageCatalog.PendingRelocationIds().Contains(intent))
+                    _imageCatalog.BeginRelocationIntent(intent, request.ImageId, source, target, root.Id);
+                File.Move(source, target);
+            }
+            else if (sourcePresence != FilePresence.ConfirmedMissing ||
+                targetPresence != FilePresence.Present || request.OriginalHash is null ||
+                WriteHash(target) != request.OriginalHash)
+                throw new IOException("Unklarer oder inzwischen veränderter Dateizustand: " + source);
+
+            if (CatalogImageIdAtPath(target) != request.ImageId &&
+                !_imageCatalog.RelocateImage(request.ImageId, source, target, root,
+                    token, relocationIntentId: intent))
+                throw new IOException("Datei wurde umbenannt; Katalogaktualisierung ausstehend.");
+            new UndoHistoryService(UndoOptions.Load())
+                .RebaseSourcePaths(source, target, subtree: false);
+            _scheduler.ReportProgress(key, UiLanguage.T("Bild umbenennen"), 1, 1, target);
+            return Task.CompletedTask;
+        });
+        return package;
     }
 
     private async Task RenameFolderAsync(string source)
