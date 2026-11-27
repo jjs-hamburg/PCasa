@@ -178,6 +178,9 @@ public partial class MainWindow
         // ongoing original load must NOT cancel and restart that same read.
         // Finish it first; only then request any genuinely larger resolution.
         var wanted = _viewerSequence.At(_viewerCurrentIndex).ImageId;
+        if (_externalEditReview is { Combined: true, PreviewReady: true, ResultPath: not null } external &&
+            external.ImageId == wanted && _photoEditSession?.ImageId == wanted)
+            return; // Accepted external history, not the original, owns these pixels.
         if (keepCurrentAsPlaceholder &&
             _viewerPendingOriginalImageId == wanted &&
             _viewerDecodeCancellation is { IsCancellationRequested: false })
@@ -442,7 +445,12 @@ public partial class MainWindow
                     var folder = ResolveMonitoredFolder(info.LocalPath);
                     if (folder is null) return (Info: info, Camera: (string?)null);
                     var scan = _folderScanner.ScanFile(folder, info.LocalPath,
-                        cancellationToken: readToken, forceContentRefresh: true);
+                        cancellationToken: readToken, publishCatalogChange: false, forceContentRefresh: true);
+                    if (scan.CatalogChanged)
+                    {
+                        PublishCommittedGalleryImage(_activeBrowseTier, imageId, null);
+                        CatalogChanges.PublishImageCommitted();
+                    }
                     if (scan.Failed > 0)
                         return (Info: info, Camera: (string?)null);
                     return (Info: new PhotoViewerImageRepository(_database).Get(imageId) ?? info,
