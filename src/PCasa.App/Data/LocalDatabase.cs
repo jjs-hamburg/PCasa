@@ -162,6 +162,7 @@ public sealed class LocalDatabase
         // Existing images are enriched on their next ordinary scan. Never
         // pretend that indexed_utc is the source file's creation timestamp.
         EnsureColumn(connection, "images", "created_utc_ticks", "INTEGER NULL");
+        EnsureColumn(connection, "images", "content_sha256", "BLOB NULL");
         EnsureColumn(connection, "images", "import_error", "TEXT NULL");
         EnsureColumn(connection, "images", "import_attempt_utc", "TEXT NULL");
 
