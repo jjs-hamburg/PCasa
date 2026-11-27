@@ -517,12 +517,23 @@ public partial class MainWindow
         private ScanResult RefreshDifferences(MonitoredFolder folder, long generation,
             CancellationToken token)
         {
+            int updated = 0, removed = 0, failed = 0, metadata = 0, scanned = 0;
+            void Import(BackgroundFolderChange change)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!owner._folderRepository.IsCurrentSourceGeneration(folder.CanonicalPath, generation, true))
+                    throw new OperationCanceledException("Inventory source changed.");
+                var result = owner._folderScanner.ScanFile(folder, change.Path, progress, token,
+                    forceExifRefresh: change.ForceExifRefresh);
+                scanned += result.ImageFilesSeen;
+                updated += result.Updated;
+                failed += result.Failed;
+                metadata += result.MetadataUpdated;
+            }
             var inventory = new CatalogInventoryCheck(owner._database).Check(folder,
                 owner._folderRepository.GetExcludedPaths(folder.Id),
                 owner._folderRepository.GetIncludedPaths(folder.Id), token,
-                (count, path) => progress?.Report(new ScanProgress(count, 0, count, 0, path,
-                    ReadingNew: false)), selectedDirectory: directory);
-            int updated = 0, removed = 0, failed = 0, metadata = 0, scanned = 0;
+                selectedDirectory: directory, importNewImmediately: Import);
             foreach (var change in inventory.Changes)
             {
                 token.ThrowIfCancellationRequested();
@@ -530,12 +541,7 @@ public partial class MainWindow
                     throw new OperationCanceledException("Inventory source changed.");
                 if (change.Kind == BackgroundFolderChangeKind.ScanFile)
                 {
-                    var result = owner._folderScanner.ScanFile(folder, change.Path, progress, token,
-                        forceExifRefresh: change.ForceExifRefresh);
-                    scanned += result.ImageFilesSeen;
-                    updated += result.Updated;
-                    failed += result.Failed;
-                    metadata += result.MetadataUpdated;
+                    Import(change);
                 }
                 else if (change.Kind == BackgroundFolderChangeKind.RemovePath)
                 {
