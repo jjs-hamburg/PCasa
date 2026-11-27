@@ -212,8 +212,9 @@ public sealed class PicasaGalleryScrollBar : UserControl
                 _viewer.VerticalOffset, _viewer.ViewportHeight)
             : _gallery.GetAdjacentImageRowOffset(
                 _viewer.VerticalOffset, direction);
-        _viewer.ScrollToVerticalOffset(Math.Clamp(
-            target, 0, _viewer.ScrollableHeight));
+        if (TryScrollTarget(_viewer.VerticalOffset, _viewer.ScrollableHeight,
+                target - _viewer.VerticalOffset, out var offset))
+            _viewer.ScrollToVerticalOffset(offset);
     }
 
     private void MovePages(int direction)
@@ -273,12 +274,12 @@ public sealed class PicasaGalleryScrollBar : UserControl
     private void StartPage(int direction)
     {
         if (_viewer is null) return;
-        _dragging = false;
-        _paging = true;
+        StopMotion();
         _pageStart = _viewer.VerticalOffset;
-        _pageTarget = Math.Clamp(_pageStart +
-            direction * Math.Max(1, _viewer.ViewportHeight * 0.9),
-            0, _viewer.ScrollableHeight);
+        if (!TryScrollTarget(_pageStart, _viewer.ScrollableHeight,
+                direction * Math.Max(1, _viewer.ViewportHeight * 0.9), out _pageTarget))
+            return;
+        _paging = true;
         _pageElapsed = 0;
         StartClock();
     }
@@ -317,9 +318,10 @@ public sealed class PicasaGalleryScrollBar : UserControl
             _pageElapsed += dt;
             var t = Math.Clamp(_pageElapsed / AnimationSeconds, 0, 1);
             var eased = 1 - Math.Pow(1 - t, 3);
-            _viewer.ScrollToVerticalOffset(Math.Clamp(
-                _pageStart + (_pageTarget - _pageStart) * eased,
-                0, _viewer.ScrollableHeight));
+            var desired = _pageStart + (_pageTarget - _pageStart) * eased;
+            if (TryScrollTarget(_viewer.VerticalOffset, _viewer.ScrollableHeight,
+                    desired - _viewer.VerticalOffset, out var target))
+                _viewer.ScrollToVerticalOffset(target);
             if (t >= 1)
             {
                 _paging = false;
@@ -360,10 +362,22 @@ public sealed class PicasaGalleryScrollBar : UserControl
             Math.Max(10 * viewport, 0.05 * Math.Max(0, scrollableHeight));
     }
 
+    // A no-op at either physical edge must not enqueue a WPF scroll command.
+    // The next input in the reverse direction remains immediately effective.
+    public static bool TryScrollTarget(double offset, double extent, double delta,
+        out double target)
+    {
+        target = offset;
+        if (!double.IsFinite(offset) || !double.IsFinite(extent) ||
+            !double.IsFinite(delta) || extent <= 0 || delta == 0) return false;
+        target = Math.Clamp(offset + delta, 0, extent);
+        return target != offset;
+    }
+
     private void ScrollBy(double pixels)
     {
         if (_viewer is null || !double.IsFinite(pixels)) return;
-        _viewer.ScrollToVerticalOffset(Math.Clamp(
-            _viewer.VerticalOffset + pixels, 0, _viewer.ScrollableHeight));
+        if (TryScrollTarget(_viewer.VerticalOffset, _viewer.ScrollableHeight, pixels, out var target))
+            _viewer.ScrollToVerticalOffset(target);
     }
 }
