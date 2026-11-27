@@ -68,6 +68,7 @@ public partial class MainWindow : Window
         _scheduler.RegisterDurablePackageType("image-edit-v2", BuildEditPackage);
         _scheduler.RegisterDurablePackageType("image-rename-v1", BuildImageRenamePackage);
         _scheduler.RegisterDurablePackageType("folder-rename-v1", BuildFolderRenamePackage);
+        _scheduler.RegisterDurablePackageType("folder-filesystem-delete-v1", BuildFolderDeletePackage);
         _scheduler.RegisterDurablePackageType("manual-folder-scan-v1", BuildManualFolderScanPackage);
         _scheduler.RegisterDurablePackageType("import-error-retry-v1", BuildImportErrorRetryPackage);
         _scheduler.RegisterDurablePackageType("manual-scan-all-v1", BuildScanAllPackage);
