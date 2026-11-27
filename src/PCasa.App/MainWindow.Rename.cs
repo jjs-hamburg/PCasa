@@ -121,7 +121,8 @@ public partial class MainWindow
             _ = RefreshRestoreBadgesAsync();
             StatusText.Text = UiLanguage.T("Umbenannt: ") + Path.GetFileName(target);
         }
-        catch (Exception ex) { ShowFileActionError(ex); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { if (!_shutdownStarted) ShowFileActionError(ex); }
         finally { EndVisibleManualOperation(key); }
     }
 
