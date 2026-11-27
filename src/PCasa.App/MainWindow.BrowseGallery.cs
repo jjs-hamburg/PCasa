@@ -240,6 +240,12 @@ public partial class MainWindow
             BeginVisibleManualOperation(key, UiLanguage.T("EXIF-Datumsfelder speichern"), 1);
             _ = ObserveCaptureDatePackageAsync(completion, key);
         }
+        else if (key.StartsWith("external:commit:", StringComparison.Ordinal) ||
+                 key.StartsWith("external:batch-commit:", StringComparison.Ordinal))
+        {
+            BeginVisibleManualOperation(key, UiLanguage.T("Externe Bearbeitung"), 100);
+            _ = ObserveRecoveredExternalWriteAsync(completion, key);
+        }
         else if (key.StartsWith("folder:rename:", StringComparison.Ordinal) ||
                  key.StartsWith("folder:filesystem-delete:", StringComparison.Ordinal))
         {
