@@ -829,6 +829,13 @@ internal static class Program
                 controlsMethod.Invoke(window, null);
                 if (!tabs.IsEnabled || toolButtons.Any(btn => !btn.IsEnabled))
                     throw new Exception("Refined JPEG editor did not become available.");
+                var decisionRow = (StackPanel)window.FindName("ViewerToolDecisionRow")!;
+                var apply = (Button)window.FindName("CropApplyButton")!;
+                var cancelDraft = (Button)window.FindName("ViewerToolCancelButton")!;
+                if (decisionRow.Visibility != Visibility.Visible ||
+                    apply.Parent != decisionRow || cancelDraft.Parent != decisionRow ||
+                    ((Border)window.FindName("ViewerOnImageToolsBar")!).Visibility != Visibility.Collapsed)
+                    throw new Exception("Ordinary tonal tool decisions depend on the crop-only container.");
             }
             finally
             {
