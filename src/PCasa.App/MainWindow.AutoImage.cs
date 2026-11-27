@@ -106,13 +106,11 @@ public partial class MainWindow
     private void ApplyAutomaticImageEdit(string kind)
     {
         if (!EnsureEditSession() || _cropSavePending) return;
-        if (_cropActive) EndCrop();
-        if (_straightenActive) LeaveStraighten();
-        if (_brightnessActive) ApplyEditTool();
-        if (_advancedToneActive) ApplyEditTool();
+        DiscardLiveEditTool();
         if (_photoEditSession is null) return;
-        _photoEditSession.Apply(new PhotoEditStep(kind));
-        SetViewerBitmap(_photoEditSession.Render());
+        _pendingAutomaticEdit = new PhotoEditStep(kind);
+        SetViewerBitmap(PhotoEditSession.Render(_photoEditSession.Render(),
+            [_pendingAutomaticEdit]));
         ApplyViewerImageLayout();
         UpdateEditControls();
     }
@@ -120,9 +118,7 @@ public partial class MainWindow
     private bool BeginBrightness()
     {
         if (_cropSavePending || !EnsureEditSession()) return false;
-        if (_cropActive) EndCrop();
-        if (_straightenActive) LeaveStraighten();
-        if (_advancedToneActive) ApplyEditTool();
+        DiscardLiveEditTool();
         _brightnessPreviewBase = _photoEditSession!.Render();
         _brightnessAmount = BrightnessSlider.Value;
         _brightnessActive = true;
@@ -178,6 +174,7 @@ public partial class MainWindow
         _brightnessPreviewCancellation?.Dispose();
         _brightnessPreviewCancellation = null;
         _brightnessPreviewBase = null;
+        _brightnessAmount = 0;
         BrightnessSlider.Value = 0;
         BrightnessValueText.Text = "0,00 EV";
         if (_photoEditSession is not null)
