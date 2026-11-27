@@ -20,14 +20,15 @@ public static class PcasaDialog
 
     public static MessageBoxResult Show(Window? owner, string message,
         string caption, MessageBoxButton buttons, MessageBoxImage icon,
-        MessageBoxResult defaultResult = MessageBoxResult.None)
+        MessageBoxResult defaultResult = MessageBoxResult.None,
+        IReadOnlyDictionary<MessageBoxResult, string>? captions = null)
     {
         var app = Application.Current;
         if (app is null)
             return MessageBox.Show(owner, message, caption, buttons, icon, defaultResult);
         if (!app.Dispatcher.CheckAccess())
             return app.Dispatcher.Invoke(() =>
-                Show(owner, message, caption, buttons, icon, defaultResult));
+                Show(owner, message, caption, buttons, icon, defaultResult, captions));
 
         owner ??= app.Windows.OfType<Window>()
             .FirstOrDefault(w => w.IsActive && w.IsVisible)
@@ -141,7 +142,8 @@ public static class PcasaDialog
         {
             var button = new Button
             {
-                Content = UiLanguage.T(choice switch
+                Content = captions is not null && captions.TryGetValue(choice, out var custom)
+                    ? custom : UiLanguage.T(choice switch
                 {
                     MessageBoxResult.Yes => "Ja",
                     MessageBoxResult.No => "Nein",
