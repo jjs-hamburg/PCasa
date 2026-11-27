@@ -555,6 +555,9 @@ public partial class MainWindow
                         expectedGeneration: generation, deferCleanup: true);
                 }
             }
+            token.ThrowIfCancellationRequested();
+            if (durableScanKey is not null && _manualScanEpoch is long epoch)
+                owner._folderRepository.FinishRegularScan(durableScanKey, generation, epoch);
             return new ScanResult(inventory.CheckedFiles, updated,
                 Math.Max(0, inventory.CheckedFiles - scanned), failed, removed, metadata);
         }
@@ -570,7 +573,7 @@ public partial class MainWindow
     {
         public void Report(ScanProgress value)
         {
-            scheduler.ReportProgress(key, value.CatalogIndexed.HasValue ? "Bilder einlesen" : "Bestand überprüfen",
+            scheduler.ReportProgress(key, value.ReadingNew == true || value.CatalogIndexed.HasValue ? "Bilder einlesen" : "Bestand überprüfen",
                 value.CatalogIndexed ?? value.ImageFilesSeen, 0, value.CurrentFile);
             display?.Report(value);
         }
