@@ -104,8 +104,8 @@ internal static class TagFlow
                 update.Parameters.AddWithValue("$a", a.Id);
                 update.ExecuteNonQuery();
             }
-            // A controlled UI test should not run an independent folder monitor.
-            new BackgroundScanSettings { Enabled = false }.Save();
+            // Monitoring is always enabled for registered roots since Alpha.40.
+            // Offline-file fixtures must not send real deletion/rename events.
 
             var app = new PCasa.App.App();
             app.InitializeComponent();
@@ -2675,14 +2675,17 @@ internal static class TagFlow
             const string recoveredTag = "Recovered P0 Tag";
             const string unavailableTag = "Offline P0 Tag";
             var unavailableImage = Path.Combine(albumA, "a-01-topaz.jpg");
-            var hiddenOriginal = unavailableImage + ".unreachable";
             var repoForRecovery = new ImageTagRepository(db);
             if (repoForRecovery.QueueTagEdit(
                     new[] { editorIds[0] }, recoveredTag, false) != 1 ||
                 repoForRecovery.QueueTagEdit(
                     new[] { editorIds[1] }, unavailableTag, false) != 1)
                 throw new Exception("Cannot seed the durable tag recovery test.");
-            File.Move(unavailableImage, hiddenOriginal);
+            // A rename is a genuine deletion event for the always-on watcher.
+            // Simulate an unavailable existing original with an exclusive
+            // Windows handle, keeping its catalog ID and pending revisions.
+            using var unavailableHandle = new FileStream(unavailableImage,
+                FileMode.Open, FileAccess.Read, FileShare.None);
             // Red folder markers are driven ONLY by pending_tag_edits.
             // Recompute once for our synthetic test setup; all later
             // transitions must refresh themselves from scheduler callbacks.
@@ -2754,7 +2757,7 @@ internal static class TagFlow
                     throw new Exception(
                         "Red pending-tag marker disappeared although one original was still offline.");
 
-                File.Move(hiddenOriginal, unavailableImage);
+                unavailableHandle.Dispose();
                 // Recreate the exact same versioned recipe. Persisted DB
                 // revisions, not a newly staged tag edit, are replayed.
                 var resumed = scheduler.EnqueueDurablePackageAsync(
@@ -2793,8 +2796,7 @@ internal static class TagFlow
             }
             finally
             {
-                if (File.Exists(hiddenOriginal) && !File.Exists(unavailableImage))
-                    File.Move(hiddenOriginal, unavailableImage);
+                unavailableHandle.Dispose();
             }
 
 
