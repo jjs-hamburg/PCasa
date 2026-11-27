@@ -125,8 +125,8 @@ public partial class MainWindow
             EditableImageFormats.Supports(_viewerImageInfo!.LocalPath) &&
             ((_photoEditSession is { } live && live.ImageId == id &&
                  (live.HasChanges || GetPendingLiveEditStep() is not null)) ||
-             (_externalEditReview is { Ready: true, Busy: false,
-                 ResultPath: not null } external && external.ImageId == id));
+             (_externalEditReview is { Combined: false, Ready: true, Busy: false,
+                 PreviewReady: true, ResultPath: not null } external && external.ImageId == id));
         if (!eligible && _editCompareMode != EditCompareMode.Single)
             ResetEditComparison();
         // When there is no unsaved before/after decision, remove the
@@ -183,12 +183,12 @@ public partial class MainWindow
             if (live.HasChanges)
             {
                 var aligned = await Task.Run(() => live.RenderAlignedOriginal());
-                var edited = PhotoViewerImage.Source as BitmapSource ?? live.Render();
+                var edited = live.Render();
                 return (aligned, edited, live.Original);
             }
         }
         var external = _externalEditReview;
-        if (external is { ResultPath: not null } && external.ImageId == imageId)
+        if (external is { Combined: false, PreviewReady: true, ResultPath: not null } && external.ImageId == imageId)
         {
             var captured = _latestExternalComparison;
             if (captured is null || captured.SessionId != external.Snapshot.Id ||
@@ -278,7 +278,9 @@ public partial class MainWindow
             return;
         _editCompareOriginal = session.RenderAlignedOriginal(GetPendingLiveEditStep());
         _editCompareUncroppedOriginal = session.Original;
-        _editCompareEdited = PhotoViewerImage.Source as BitmapSource ?? session.Render();
+        var pending = GetPendingLiveEditStep();
+        _editCompareEdited = pending is null ? session.Render() :
+            PhotoEditSession.Render(session.Render(), [pending]);
         EditCompareSideOriginal.Source = _editCompareUncroppedOriginal;
         EditCompareSideEdited.Source = _editCompareEdited;
         EditCompareSwipeOriginal.Source = _editCompareOriginal;
@@ -626,6 +628,7 @@ public partial class MainWindow
 
     private void ResetEditComparison()
     {
+        var wasComparing = _editCompareMode != EditCompareMode.Single || _editCompareHoldingOriginal;
         CancelPendingOriginalHold();
         ++_editCompareRequest;
         if (_editComparePanActive)
@@ -649,6 +652,12 @@ public partial class MainWindow
         {
             PhotoViewerScroller.Visibility = Visibility.Visible;
             PhotoViewerNavigator.Visibility = Visibility.Visible;
+            if (wasComparing && _photoEditSession is { } live && live.ImageId == _viewerImageInfo?.Id)
+            {
+                var pending = GetPendingLiveEditStep();
+                SetViewerBitmap(pending is null ? live.Render() :
+                    PhotoEditSession.Render(live.Render(), [pending]));
+            }
             ApplyViewerImageLayout();
         }
         UpdateEditComparisonAvailability();
