@@ -24,9 +24,11 @@ public sealed record ExternalEditSnapshot(
     // The editor may replace BackupPath in place. This nested local copy
     // never goes to the editor or the result enumerator, and is the exact
     // input state that Before/After must display.
-    public string BeforePath => Path.Combine(
+    public string BeforePath => BeforeSnapshotPath ?? Path.Combine(
         DirectoryPath, ".pcasa-before", Path.GetFileName(BackupPath));
     public string? ConfiguredWorkspaceRoot { get; init; }
+    public string? BeforeSnapshotPath { get; init; }
+    public string? InputSha256 { get; init; }
 }
 
 public static class ExternalEditTransaction
@@ -90,6 +92,7 @@ public static class ExternalEditTransaction
                 if (File.Exists(marker)) File.Delete(marker);
             }
             CleanupCompletedWorkspaces();
+            TryCleanupFolder(HistoryRoot);
             PanoramaTransaction.CleanupLegacySessions();
             // Prior alphas archived inert GUID manifests outside ExternalEdit.
             // These have no purpose once crash recovery is intentionally gone.
@@ -287,11 +290,13 @@ public static class ExternalEditTransaction
         File.Delete(SessionFile);
         if (_currentProcessSessionId == session.Id) _currentProcessSessionId = null;
         CleanupWorkspaceContents(session.DirectoryPath);
+        TryCleanupFolder(HistoryDirectory(session));
         CleanupCompletedWorkspaces();
     }
 
     public static ExternalEditSnapshot Begin(string original, CancellationToken token = default,
-        Action<long, long>? progress = null, string? workspaceRoot = null)
+        Action<long, long>? progress = null, string? workspaceRoot = null,
+        IReadOnlyList<PhotoEditStep>? initialSteps = null)
     {
         var path = Path.GetFullPath(original);
         lock (Gate)
@@ -397,12 +402,23 @@ public static class ExternalEditTransaction
                         EditableImageFormats.ValidateStillImage(work);
                     // RAW is staged byte-for-byte; no pixel converter may
                     // process or rewrite the original or working input.
+                    // Materialize only on the isolated working file, never the gallery original.
+                    // BeforePath remains the exact original for later Undo and comparison.
+                    string? inputHash = null;
+                    if (initialSteps is { Count: > 0 })
+                    {
+                        var prepared = JpegCropWriter.MaterializeWorkingImage(beforePath,
+                            Path.GetDirectoryName(beforePath)!, "prepared", initialSteps, token);
+                        File.Move(prepared, work, overwrite: true);
+                        inputHash = Hash(work);
+                    }
                     var session = new ExternalEditSnapshot(id, path,
                         work, checksum, originalLength, originalWrite,
                         DateTime.UtcNow, [])
                     {
                         ConfiguredWorkspaceRoot = string.IsNullOrWhiteSpace(workspaceRoot)
-                            ? null : root
+                            ? null : root,
+                        InputSha256 = inputHash
                     };
                     WritePending(session);
                     _currentProcessSessionId = session.Id;
@@ -416,6 +432,94 @@ public static class ExternalEditTransaction
                     CleanupWorkspaceContents(root);
                 throw;
             }
+        }
+    }
+
+    private static string HistoryRoot => Path.Combine(DirectoryPath, ".pcasa-history");
+    private static string HistoryDirectory(ExternalEditSnapshot session)
+        => Path.Combine(HistoryRoot, session.Id.ToString("N"));
+
+    internal static void TryRemoveHistoryFile(string path)
+    {
+        if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(HistoryRoot) +
+                Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return;
+        try { File.Delete(path); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { PCasaDiagnostics.Write("ExternalEdit.HistoryCleanup", ex); }
+    }
+
+    internal static string CaptureHistoryResult(ExternalEditSnapshot session, string result,
+        long length, DateTime modified, CancellationToken token = default)
+    {
+        lock (Gate)
+        {
+            CheckIdentity(session);
+            var directory = HistoryDirectory(session);
+            Directory.CreateDirectory(directory);
+            var snapshot = Path.Combine(directory, "edit-" + Guid.NewGuid().ToString("N") +
+                Path.GetExtension(result).ToLowerInvariant());
+            try
+            {
+                using var source = File.Open(result, FileMode.Open, FileAccess.Read, FileShare.Read);
+                if (source.Length != length || File.GetLastWriteTimeUtc(result) != modified)
+                    throw new IOException("External result changed during capture.");
+                CopyAtomic(result, snapshot, false, token, modifiedUtc: modified);
+                if (new FileInfo(snapshot).Length != length || File.GetLastWriteTimeUtc(result) != modified)
+                    throw new IOException("External result changed during capture.");
+                return snapshot;
+            }
+            catch { TryRemoveHistoryFile(snapshot); throw; }
+        }
+    }
+
+    // One original identity throughout the session. Keep immutable history in
+    // PCasa-owned local storage, independent of each configured exchange root.
+    // A new external launch never commits or archives the original.
+    internal static ExternalEditSnapshot PrepareNextInput(ExternalEditSnapshot requested,
+        IReadOnlyList<PhotoEditStep> steps, string? workspaceRoot, CancellationToken token)
+    {
+        lock (Gate)
+        {
+            CheckIdentity(requested);
+            var session = ReadPending()!;
+            if (session.Finalizing is not null) throw new InvalidOperationException("External save already accepted.");
+            var history = HistoryDirectory(session);
+            Directory.CreateDirectory(history);
+            var original = Path.Combine(history, "original" + Path.GetExtension(session.OriginalPath));
+            if (!File.Exists(original)) CopyAtomic(session.BeforePath, original, false, token);
+            if (!string.Equals(Hash(original), session.OriginalSha256, StringComparison.Ordinal))
+                throw new IOException("External original snapshot changed.");
+            var prepared = JpegCropWriter.MaterializeWorkingImage(original, history,
+                "input-" + Guid.NewGuid().ToString("N"), steps, token);
+            try
+            {
+                var root = string.IsNullOrWhiteSpace(workspaceRoot) ? DirectoryPath : Path.GetFullPath(workspaceRoot);
+                if (Path.GetPathRoot(root) == root || session.OriginalPath.StartsWith(
+                    root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Invalid exchange root.");
+                Directory.CreateDirectory(root);
+                var marker = Path.Combine(root, FlatExchangeMarker);
+                if (File.Exists(Path.Combine(root, PanoramaTransaction.BatchMarker)) ||
+                    (IsCustomRoot(root) && !File.Exists(marker) && Directory.EnumerateFiles(root).Any()))
+                    throw new IOException("Exchange directory is not available.");
+                // Persist the stable original path BEFORE deleting an earlier
+                // exchange directory. The full history is safe even if an
+                // external process still locks its old input or output.
+                session = session with { BeforeSnapshotPath = original };
+                WritePending(session);
+                CleanupWorkspaceContents(root);
+                if (RemainingFiles(root) != 0) throw new IOException("Exchange files are locked.");
+                if (IsCustomRoot(root)) File.WriteAllText(marker, "PCasa external exchange");
+                var work = Path.Combine(root, "photo" + Path.GetExtension(prepared));
+                CopyAtomic(prepared, work, false, token);
+                var next = session with { BackupPath = work,
+                    InputSha256 = Hash(work), ConfiguredWorkspaceRoot = string.IsNullOrWhiteSpace(workspaceRoot) ? null : root };
+                WritePending(next);
+                if (!string.Equals(root, session.DirectoryPath, StringComparison.OrdinalIgnoreCase))
+                    CleanupWorkspaceContents(session.DirectoryPath);
+                return next;
+            }
+            finally { TryRemoveHistoryFile(prepared); }
         }
     }
 
@@ -447,7 +551,7 @@ public static class ExternalEditTransaction
             if (!File.Exists(session.BackupPath))
                 throw new FileNotFoundException("ExternalEdit: Arbeitsdatei fehlt.",
                     session.BackupPath);
-            return Hash(session.BackupPath) == session.OriginalSha256
+            return Hash(session.BackupPath) == (session.InputSha256 ?? session.OriginalSha256)
                 ? null : session.BackupPath;
         }
     }
