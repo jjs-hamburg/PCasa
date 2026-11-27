@@ -245,12 +245,11 @@ public partial class MainWindow
         // uninterruptible file transaction or a slow NAS cancellation.
         // Make this visible before any slow cleanup, not after it.
         var busy = _databaseBackupTask is { IsCompleted: false } ||
-            _scheduler.HasSessionWrites ||
-            ExifToolProcessRegistry.LiveCount > 0 ||
-            ExifToolKeywordWriter.HasLiveSessions ||
-            _scheduler.Snapshot().Any(job => job.State is
-                SchedulerJobState.Queued or SchedulerJobState.Running or
-                SchedulerJobState.YieldRequested);
+            ExifToolKeywordWriter.HasActiveWrites ||
+            _scheduler.Snapshot().Any(job =>
+                job.WorkKind == SchedulerWorkKind.Catalog &&
+                job.Priority <= SchedulerPriority.UserAction &&
+                job.State is SchedulerJobState.Running or SchedulerJobState.YieldRequested);
         // Disable pointer input, NOT the WPF window: IsEnabled=false
         // applies the disabled visual state to every child and makes
         // the folder tree unreadable while the shutdown dialog is shown.
@@ -353,8 +352,8 @@ public partial class MainWindow
                 PCasaDiagnostics.WriteMessage("Shutdown.Duration",
                     $"Abschlussdauer: {watch.ElapsedMilliseconds} ms; " +
                     "Scheduler und native Metadatenprozesse abgeschlossen.");
-            // Scan state survives shutdown. Unfinished file jobs are retired
-            // by the scheduler; unconfirmed writes remain reviewable errors.
+            // Accepted durable jobs retain their confirmed checkpoints.
+            // Only unconfirmed editor drafts are discarded.
             _shutdownProgressWindow?.Close();
             _shutdownProgressWindow = null;
             _shutdownFinished = true;
