@@ -1976,8 +1976,10 @@ internal static class Program
                 foreach (var choice in slideshowChoices)
                 {
                     choice.ApplyTemplate();
-                    var selectedText = choice.Template.FindName(
-                        "SelectedCaption", choice) as TextBlock;
+                    var selectedCaption = choice.Template.FindName(
+                        "SelectedCaption", choice) as ContentPresenter;
+                    var selectedText = selectedCaption is null ? null :
+                        Descendants<TextBlock>(selectedCaption).FirstOrDefault();
                     var captionText = (choice.SelectedItem as ComboBoxItem)?.Content as string;
                     if (selectedText is null || string.IsNullOrWhiteSpace(selectedText.Text) ||
                         selectedText.Text != captionText)
@@ -2002,6 +2004,43 @@ internal static class Program
                     choice.IsDropDownOpen = false;
                     Flush(slideshowDialog);
                 }
+                // Also exercise the shared template with a data-bound dropdown,
+                // as used for the GPX time zones (not ComboBoxItem objects).
+                var boundChoice = new ComboBox
+                {
+                    DisplayMemberPath = "DisplayName", SelectedValuePath = "Id",
+                    ItemsSource = TimeZoneInfo.GetSystemTimeZones(), SelectedIndex = 0,
+                    MaxDropDownHeight = 240
+                };
+                var boundWindow = new Window { Owner = window, Content = boundChoice,
+                    Width = 550, Height = 100, ShowInTaskbar = false };
+                try
+                {
+                    boundWindow.Show();
+                    Flush(boundWindow);
+                    boundChoice.ApplyTemplate();
+                    var caption = boundChoice.Template.FindName("SelectedCaption", boundChoice)
+                        as ContentPresenter;
+                    var visible = caption is null ? null : Descendants<TextBlock>(caption)
+                        .FirstOrDefault();
+                    if (visible?.Text != ((TimeZoneInfo)boundChoice.SelectedItem).DisplayName)
+                        throw new Exception("Shared data-bound time zone selection is not rendered.");
+                    boundChoice.IsDropDownOpen = true;
+                    Flush(boundWindow);
+                    var popup = boundChoice.Template.FindName("PART_Popup", boundChoice) as Popup;
+                    if (popup?.IsOpen != true || popup.Child is not Border frame ||
+                        frame.Background is not SolidColorBrush paper ||
+                        boundChoice.Foreground is not SolidColorBrush ink ||
+                        Math.Abs(ink.Color.R - paper.Color.R) +
+                        Math.Abs(ink.Color.G - paper.Color.G) +
+                        Math.Abs(ink.Color.B - paper.Color.B) < 240 ||
+                        boundChoice.ItemContainerGenerator.ContainerFromIndex(0) is not ComboBoxItem item ||
+                        Descendants<TextBlock>(item).FirstOrDefault()?.Text !=
+                            ((TimeZoneInfo)boundChoice.Items[0]).DisplayName)
+                        throw new Exception("Shared data-bound time zone popup is empty or illegible.");
+                    boundChoice.IsDropDownOpen = false;
+                }
+                finally { boundWindow.Close(); }
                 // Alpha.60: both Viewmaster choices are separate, selectable
                 // and persist under independent transition IDs.
                 var transitions = slideshowChoices.Single(choice =>
