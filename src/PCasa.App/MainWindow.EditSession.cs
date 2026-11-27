@@ -473,6 +473,8 @@ public partial class MainWindow
             .Any(item => JsonSerializer.Deserialize<EditWriteRecipe>(
                 item.Payload)?.ImageId == imageId));
 
+    private bool _closeAfterEditAdmission;
+
     private async void SaveEdits(bool asCopy = false)
     {
         if (_externalBatchReview is not null)
@@ -545,6 +547,14 @@ public partial class MainWindow
                 PcasaDialog.Show(this, ex.Message,
                     UiLanguage.T("Bildbearbeitung speichern"),
                     MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            if (_closeAfterEditAdmission)
+            {
+                _closeAfterEditAdmission = false;
+                Dispatcher.BeginInvoke(new Action(Close));
+            }
         }
     }
 
