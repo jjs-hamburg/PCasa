@@ -151,4 +151,141 @@ public partial class MainWindow
                 EndVisibleManualOperation(key);
         }
     }
+
+    private sealed record BatchResultInput(int SourceIndex, string Path, long Size, DateTime ModifiedUtc);
+    private sealed record BatchResultPrepared(string Staged, string Target, string Hash,
+        DateTime CreatedUtc, DateTime ModifiedUtc, string? OriginalHash);
+    private sealed record ExternalBatchCommitRecipe(PanoramaSession Session,
+        ExternalEditDecision Decision, BatchResultInput[] Outputs,
+        BatchResultPrepared[]? Prepared = null);
+
+    private SchedulerTaskPackage BuildExternalBatchCommitPackage(string key, string payload)
+    {
+        var request = JsonSerializer.Deserialize<ExternalBatchCommitRecipe>(payload)
+            ?? throw new InvalidDataException("Invalid external batch recipe.");
+        var session = request.Session;
+        var replace = request.Decision == ExternalEditDecision.Save;
+        if (request.Outputs.Length == 0 || session.IsPanorama && (request.Outputs.Length != 1 || replace) ||
+            replace && !PanoramaTransaction.CanSaveMultiple(session,
+                request.Outputs.Select(item => new ExternalBatchOutput(item.SourceIndex, item.Path)).ToArray()))
+            throw new InvalidDataException("Invalid external batch result mapping.");
+        var package = new SchedulerTaskPackage(key);
+        package.AddStep(token =>
+        {
+            if (request.Prepared is not null) return Task.CompletedTask;
+            if (replace)
+            {
+                if (session.InputHashes is not { } hashes || hashes.Length != session.Sources.Length)
+                    throw new IOException("Die ursprüngliche Sitzungsidentität fehlt.");
+                for (var i = 0; i < hashes.Length; i++)
+                    if (WriteHash(session.Sources[i]) != hashes[i])
+                        throw new IOException("Ein Original wurde seit Beginn der externen Bearbeitung verändert.");
+            }
+            var directory = Path.Combine(session.Directory, ".pcasa-internal");
+            Directory.CreateDirectory(directory);
+            var prepared = new List<BatchResultPrepared>();
+            var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var index = 0; index < request.Outputs.Length; index++)
+            {
+                token.ThrowIfCancellationRequested();
+                var output = request.Outputs[index];
+                var sourceIndex = session.IsPanorama ? 0 : output.SourceIndex;
+                if (sourceIndex < 0 || sourceIndex >= session.Sources.Length)
+                    throw new IOException("Ungültige Ergebnis-Zuordnung.");
+                var source = session.Sources[sourceIndex];
+                var result = new FileInfo(output.Path);
+                if (!result.Exists || result.Length != output.Size || result.LastWriteTimeUtc != output.ModifiedUtc)
+                    throw new IOException("External batch result changed after confirmation.");
+                if (session.Sources.Any(original => string.Equals(original, output.Path, StringComparison.OrdinalIgnoreCase)))
+                    throw new IOException("Ein Ausgangsbild darf nicht als Panoramaergebnis übernommen werden.");
+                if (session.IsPanorama && Array.FindIndex(session.Inputs, input =>
+                    string.Equals(input, output.Path, StringComparison.OrdinalIgnoreCase)) is int inputIndex &&
+                    inputIndex >= 0 && (session.InputHashes is null ||
+                    WriteHash(output.Path) == session.InputHashes[inputIndex]))
+                    throw new IOException("Unveränderte Arbeitskopie ist kein Panoramaergebnis.");
+                var staged = Path.Combine(directory, "batch-" + session.Id.ToString("N") + "-" +
+                    index + result.Extension.ToLowerInvariant());
+                if (File.Exists(staged)) File.Delete(staged);
+                ExternalEditTransaction.CopyAtomic(output.Path, staged, false, token);
+                if (RawImageSource.IsRawPath(staged))
+                {
+                    if (session.IsPanorama) throw new IOException("Invalid panorama result format.");
+                    ExternalEditTransaction.ValidateExternalRawResult(staged, token);
+                }
+                else
+                {
+                    EditableImageFormats.ValidateStillImage(staged);
+                    ExternalResultMetadata.CopyAll(source, staged, token);
+                }
+                if (!RawImageSource.IsPsdPath(staged))
+                    ExifDateMetadata.Preserve(source, staged, token);
+                if (session.IsPanorama)
+                {
+                    if (session.Tags.Length > 0)
+                    {
+                        using var writer = new ExifToolKeywordWriter.Session();
+                        writer.Write(staged, session.Tags, token);
+                    }
+                    if (session.Latitude is double lat && session.Longitude is double lon)
+                    {
+                        using var writer = new ExifToolKeywordWriter.Session();
+                        writer.WriteGps(staged, lat, lon, token);
+                    }
+                }
+                var stem = Path.GetFileNameWithoutExtension(source);
+                if (session.IsPanorama) stem += "-" + session.Inputs.Length + "px-Panorama";
+                var desired = Path.Combine(Path.GetDirectoryName(source)!, stem + result.Extension);
+                var target = replace ? source : ExternalCopyNames.NextAvailable(desired, reserved);
+                reserved.Add(target);
+                prepared.Add(new BatchResultPrepared(staged, target, WriteHash(staged),
+                    File.GetCreationTimeUtc(source), output.ModifiedUtc,
+                    replace ? session.InputHashes![sourceIndex] : null));
+            }
+            request = request with { Prepared = prepared.ToArray() };
+            PersistWriteRecipe(key, request);
+            return Task.CompletedTask;
+        });
+        for (var index = 0; index < request.Outputs.Length; index++)
+        {
+            var i = index;
+            package.AddStep(token =>
+            {
+                var item = request.Prepared?[i] ?? throw new IOException("External batch receipt missing.");
+                token.ThrowIfCancellationRequested();
+                _scheduler.ReportProgress(key, UiLanguage.T("Externe Bearbeitung"), i,
+                    request.Outputs.Length, item.Target);
+                using (SourceFileLocks.Enter(item.Target, token))
+                {
+                    var presence = SourceFilePresence.Probe(item.Target);
+                    if (presence != FilePresence.Present || WriteHash(item.Target) != item.Hash)
+                    {
+                        if (WriteHash(item.Staged) != item.Hash)
+                            throw new IOException("Staged external batch result changed.");
+                        if (replace)
+                        {
+                            if (presence != FilePresence.Present || WriteHash(item.Target) != item.OriginalHash)
+                                throw new IOException("Ein Original wurde seit Beginn der externen Bearbeitung verändert.");
+                            new UndoHistoryService(UndoOptions.Load()).CaptureBeforeSave(item.Target, token);
+                        }
+                        else if (presence != FilePresence.ConfirmedMissing)
+                            throw new IOException("External result target is not confirmed free.");
+                        ExternalEditTransaction.CopyAtomic(item.Staged, item.Target,
+                            replace, token, creationUtc: item.CreatedUtc, modifiedUtc: item.ModifiedUtc);
+                    }
+                }
+                IndexAcceptedExternalResult(item.Target, token);
+                _scheduler.ReportProgress(key, UiLanguage.T("Externe Bearbeitung"), i + 1,
+                    request.Outputs.Length, item.Target);
+                return Task.CompletedTask;
+            });
+        }
+        package.AddStep(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            PanoramaTransaction.Cleanup(session);
+            return Task.CompletedTask;
+        });
+        return package;
+    }
+
 }
