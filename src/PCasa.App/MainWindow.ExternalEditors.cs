@@ -543,7 +543,7 @@ public partial class MainWindow
         if (persisted.Finalizing is { } pendingDecision)
         {
             _externalReviewRefreshing = false;
-            await CompleteExternalReviewAsync(pendingDecision);
+            await CompleteExternalReviewAsync(pendingDecision, recheck: false);
             return;
         }
         try
@@ -742,14 +742,14 @@ public partial class MainWindow
     }
 
     private async Task<bool> CompleteExternalReviewAsync(
-        ExternalEditDecision decision, bool returnToGalleryAfterCancel = false)
+        ExternalEditDecision decision, bool returnToGalleryAfterCancel = false, bool recheck = true)
     {
         var review = _externalEditReview;
         if (review is null || !review.Ready || review.Busy || HasPendingExternalWrites()) return false;
         if (review.Combined && decision != ExternalEditDecision.Cancel)
         {
             if (_externalReviewRefreshing) return false;
-            if (GetPendingLiveEditStep() is null)
+            if (recheck && GetPendingLiveEditStep() is null)
                 await PresentExternalResultAsync(review);
             if (!ReferenceEquals(_externalEditReview, review) ||
                 !review.PreviewReady || review.AwaitingReturn || _externalReviewRefreshing) return false;
