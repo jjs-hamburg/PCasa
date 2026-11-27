@@ -3529,92 +3529,101 @@ internal static class TagFlow
             // GPS coordinates, including records whose cached EXIF source
             // fingerprint temporarily differs after a metadata-only write.
             // Context markers are capped; SELECTED photo markers never are.
-            const int selectedGpsCount = 5201;
-            var largeGpsPrefix = Path.Combine(sourceRoot, "gps-load-fixture-");
-            using (var connection = db.OpenConnection())
             {
-                using var transaction = connection.BeginTransaction();
-                for (var first = 1; first <= selectedGpsCount; first += 500)
-                {
-                    using var insert = connection.CreateCommand();
-                    insert.Transaction = transaction;
-                    insert.CommandText = """
-                        WITH RECURSIVE seq(n) AS (
-                            SELECT $first
-                            UNION ALL SELECT n+1 FROM seq WHERE n<$last)
-                        INSERT INTO images (
-                            folder_id,photo_folder_id,local_path,canonical_path,
-                            file_name,extension,file_size,modified_utc_ticks,
-                            width,height,thumbnail_path,indexed_utc)
-                        SELECT $root,$photoFolder,
-                               $prefix||n||'.jpg',$prefix||n||'.jpg',
-                               'gps-load-'||n||'.jpg','.jpg',111,111,
-                               64,64,'',strftime('%Y-%m-%dT%H:%M:%fZ','now')
-                        FROM seq;
-                        """;
-                    insert.Parameters.AddWithValue("$first",first);
-                    insert.Parameters.AddWithValue("$last",
-                        Math.Min(selectedGpsCount,first+499));
-                    insert.Parameters.AddWithValue("$root",root.Id);
-                    insert.Parameters.AddWithValue("$photoFolder",a.Id);
-                    insert.Parameters.AddWithValue("$prefix",largeGpsPrefix);
-                    insert.ExecuteNonQuery();
-                }
-                using var gps = connection.CreateCommand();
-                gps.Transaction = transaction;
-                gps.CommandText = """
-                    INSERT INTO image_exif (
-                        image_id,source_modified_utc_ticks,source_file_size,
-                        exif_json,gps_latitude,gps_longitude)
-                    SELECT id,222,222,'{}',40.0+(id%25)*0.01,-3.7+(id%25)*0.01
-                      FROM images WHERE local_path LIKE $prefix||'%';
-                    """;
-                gps.Parameters.AddWithValue("$prefix",largeGpsPrefix);
-                gps.ExecuteNonQuery();
-                transaction.Commit();
-            }
-            try
-            {
-                long[] loadIds;
+                // These synthetic rows intentionally have no physical source files.
+                // The real idle scanner now removes missing rows directly, so
+                // isolate only this fixture using the existing maintenance gate.
+                var largeFixturePause = actualScheduler.AcquireMaintenancePauseAsync();
+                Until(window, () => largeFixturePause.IsCompleted,
+                    "Catalog mutation workers did not settle for synthetic GPS fixture.");
+                using var largeFixtureLease = largeFixturePause.GetAwaiter().GetResult();
+                const int selectedGpsCount = 5201;
+                var largeGpsPrefix = Path.Combine(sourceRoot, "gps-load-fixture-");
                 using (var connection = db.OpenConnection())
-                using (var cmd = connection.CreateCommand())
                 {
-                    cmd.CommandText =
-                        "SELECT id FROM images WHERE local_path LIKE $prefix||'%' ORDER BY id;";
-                    cmd.Parameters.AddWithValue("$prefix",largeGpsPrefix);
-                    using var reader = cmd.ExecuteReader();
-                    var selectedLoadIds = new List<long>();
-                    while (reader.Read()) selectedLoadIds.Add(reader.GetInt64(0));
-                    loadIds = selectedLoadIds.ToArray();
+                    using var transaction = connection.BeginTransaction();
+                    for (var first = 1; first <= selectedGpsCount; first += 500)
+                    {
+                        using var insert = connection.CreateCommand();
+                        insert.Transaction = transaction;
+                        insert.CommandText = """
+                            WITH RECURSIVE seq(n) AS (
+                                SELECT $first
+                                UNION ALL SELECT n+1 FROM seq WHERE n<$last)
+                            INSERT INTO images (
+                                folder_id,photo_folder_id,local_path,canonical_path,
+                                file_name,extension,file_size,modified_utc_ticks,
+                                width,height,thumbnail_path,indexed_utc)
+                            SELECT $root,$photoFolder,
+                                   $prefix||n||'.jpg',$prefix||n||'.jpg',
+                                   'gps-load-'||n||'.jpg','.jpg',111,111,
+                                   64,64,'',strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                            FROM seq;
+                            """;
+                        insert.Parameters.AddWithValue("$first",first);
+                        insert.Parameters.AddWithValue("$last",
+                            Math.Min(selectedGpsCount,first+499));
+                        insert.Parameters.AddWithValue("$root",root.Id);
+                        insert.Parameters.AddWithValue("$photoFolder",a.Id);
+                        insert.Parameters.AddWithValue("$prefix",largeGpsPrefix);
+                        insert.ExecuteNonQuery();
+                    }
+                    using var gps = connection.CreateCommand();
+                    gps.Transaction = transaction;
+                    gps.CommandText = """
+                        INSERT INTO image_exif (
+                            image_id,source_modified_utc_ticks,source_file_size,
+                            exif_json,gps_latitude,gps_longitude)
+                        SELECT id,222,222,'{}',40.0+(id%25)*0.01,-3.7+(id%25)*0.01
+                          FROM images WHERE local_path LIKE $prefix||'%';
+                        """;
+                    gps.Parameters.AddWithValue("$prefix",largeGpsPrefix);
+                    gps.ExecuteNonQuery();
+                    transaction.Commit();
                 }
-                if (loadIds.Length != selectedGpsCount)
-                    throw new Exception("Large selected GPS test fixture was incomplete.");
-                var allGps = ((System.Collections.IEnumerable)readGps.Invoke(
-                    window,[loadIds,CancellationToken.None,null])!).Cast<object>().ToArray();
-                var selectedAll = allGps.Where(item =>
-                    (bool)item.GetType().GetProperty("Selected")!.GetValue(item)!)
-                    .Select(item => (long)item.GetType().GetProperty("Id")!.GetValue(item)!)
-                    .ToHashSet();
-                if (selectedAll.Count != selectedGpsCount ||
-                    !loadIds.All(selectedAll.Contains))
-                    throw new Exception(
-                        "GPS map omitted selected positions above 5,000 or rejected stale EXIF fingerprints.");
-                var onlyOne = ((System.Collections.IEnumerable)readGps.Invoke(
-                    window,[new long[]{loadIds[0]},CancellationToken.None,null])!)
-                    .Cast<object>().ToArray();
-                if (onlyOne.Length != 1 ||
-                    (long)onlyOne[0].GetType().GetProperty("Id")!.GetValue(onlyOne[0])! != loadIds[0])
-                    throw new Exception(
-                        "Single GPS selection loaded thousands of unrelated catalog photos.");
-            }
-            finally
-            {
-                using var connection = db.OpenConnection();
-                using var delete = connection.CreateCommand();
-                delete.CommandText =
-                    "DELETE FROM images WHERE local_path LIKE $prefix||'%';";
-                delete.Parameters.AddWithValue("$prefix",largeGpsPrefix);
-                delete.ExecuteNonQuery();
+                try
+                {
+                    long[] loadIds;
+                    using (var connection = db.OpenConnection())
+                    using (var cmd = connection.CreateCommand())
+                    {
+                        cmd.CommandText =
+                            "SELECT id FROM images WHERE local_path LIKE $prefix||'%' ORDER BY id;";
+                        cmd.Parameters.AddWithValue("$prefix",largeGpsPrefix);
+                        using var reader = cmd.ExecuteReader();
+                        var selectedLoadIds = new List<long>();
+                        while (reader.Read()) selectedLoadIds.Add(reader.GetInt64(0));
+                        loadIds = selectedLoadIds.ToArray();
+                    }
+                    if (loadIds.Length != selectedGpsCount)
+                        throw new Exception("Large selected GPS test fixture was incomplete.");
+                    var allGps = ((System.Collections.IEnumerable)readGps.Invoke(
+                        window,[loadIds,CancellationToken.None,null])!).Cast<object>().ToArray();
+                    var selectedAll = allGps.Where(item =>
+                        (bool)item.GetType().GetProperty("Selected")!.GetValue(item)!)
+                        .Select(item => (long)item.GetType().GetProperty("Id")!.GetValue(item)!)
+                        .ToHashSet();
+                    if (selectedAll.Count != selectedGpsCount ||
+                        !loadIds.All(selectedAll.Contains))
+                        throw new Exception(
+                            "GPS map omitted selected positions above 5,000 or rejected stale EXIF fingerprints.");
+                    var onlyOne = ((System.Collections.IEnumerable)readGps.Invoke(
+                        window,[new long[]{loadIds[0]},CancellationToken.None,null])!)
+                        .Cast<object>().ToArray();
+                    if (onlyOne.Length != 1 ||
+                        (long)onlyOne[0].GetType().GetProperty("Id")!.GetValue(onlyOne[0])! != loadIds[0])
+                        throw new Exception(
+                            "Single GPS selection loaded thousands of unrelated catalog photos.");
+                }
+                finally
+                {
+                    using var connection = db.OpenConnection();
+                    using var delete = connection.CreateCommand();
+                    delete.CommandText =
+                        "DELETE FROM images WHERE local_path LIKE $prefix||'%';";
+                    delete.Parameters.AddWithValue("$prefix",largeGpsPrefix);
+                    delete.ExecuteNonQuery();
+                }
             }
             Console.WriteLine("PASS: GPS map receives all 5,201 selected positions despite EXIF cache drift.");
 
@@ -3752,89 +3761,98 @@ internal static class TagFlow
             // Reproduce a truly large selected set through the SAME WPF
             // catalog projection, without creating thousands of source files.
             // A hard 5000 cap or a first-chunk-only query must fail this test.
-            long[] worldwideIds;
-            using (var bulkDb = db.OpenConnection())
             {
-                using (var insert = bulkDb.CreateCommand())
+                // These synthetic rows intentionally have no physical source files.
+                // The real idle scanner now removes missing rows directly, so
+                // isolate only this fixture using the existing maintenance gate.
+                var worldwideFixturePause = actualScheduler.AcquireMaintenancePauseAsync();
+                Until(window, () => worldwideFixturePause.IsCompleted,
+                    "Catalog mutation workers did not settle for synthetic GPS fixture.");
+                using var worldwideFixtureLease = worldwideFixturePause.GetAwaiter().GetResult();
+                long[] worldwideIds;
+                using (var bulkDb = db.OpenConnection())
                 {
-                    insert.CommandText = """
-                        WITH RECURSIVE numbers(n) AS (
-                            SELECT 0 UNION ALL SELECT n+1 FROM numbers WHERE n < 6099
-                        )
-                        INSERT INTO images (folder_id, photo_folder_id,
-                            local_path, canonical_path, file_name, extension,
-                            file_size, modified_utc_ticks, width, height,
-                            thumbnail_path, indexed_utc)
-                        SELECT $root, $album,
-                            $prefix || printf('bulk-gps-%04d.jpg', n),
-                            $prefix || printf('bulk-gps-%04d.jpg', n),
-                            printf('bulk-gps-%04d.jpg', n), '.jpg',
-                            1, 1, 10, 10, 'synthetic-test-thumbnail', '2026-01-01'
-                        FROM numbers;
+                    using (var insert = bulkDb.CreateCommand())
+                    {
+                        insert.CommandText = """
+                            WITH RECURSIVE numbers(n) AS (
+                                SELECT 0 UNION ALL SELECT n+1 FROM numbers WHERE n < 6099
+                            )
+                            INSERT INTO images (folder_id, photo_folder_id,
+                                local_path, canonical_path, file_name, extension,
+                                file_size, modified_utc_ticks, width, height,
+                                thumbnail_path, indexed_utc)
+                            SELECT $root, $album,
+                                $prefix || printf('bulk-gps-%04d.jpg', n),
+                                $prefix || printf('bulk-gps-%04d.jpg', n),
+                                printf('bulk-gps-%04d.jpg', n), '.jpg',
+                                1, 1, 10, 10, 'synthetic-test-thumbnail', '2026-01-01'
+                            FROM numbers;
+                            """;
+                        insert.Parameters.AddWithValue("$root", root.Id);
+                        insert.Parameters.AddWithValue("$album", b.Id);
+                        insert.Parameters.AddWithValue("$prefix", albumB + Path.DirectorySeparatorChar);
+                        insert.ExecuteNonQuery();
+                    }
+                    using (var exif = bulkDb.CreateCommand())
+                    {
+                        exif.CommandText = """
+                            INSERT INTO image_exif(image_id, source_modified_utc_ticks,
+                                source_file_size, exif_json, gps_latitude, gps_longitude)
+                            SELECT id, modified_utc_ticks, file_size,
+                                json_object('SourceFile',local_path),
+                                CASE id % 3 WHEN 0 THEN 53.55 WHEN 1 THEN 26.11
+                                    ELSE -25.27 END,
+                                CASE id % 3 WHEN 0 THEN 10.2 WHEN 1 THEN -80.15
+                                    ELSE 133.77 END
+                            FROM images WHERE file_name LIKE 'bulk-gps-%';
+                            """;
+                        exif.ExecuteNonQuery();
+                    }
+                    using var idsCommand = bulkDb.CreateCommand();
+                    idsCommand.CommandText = """
+                        SELECT id FROM images WHERE file_name LIKE 'bulk-gps-%'
+                        ORDER BY id;
                         """;
-                    insert.Parameters.AddWithValue("$root", root.Id);
-                    insert.Parameters.AddWithValue("$album", b.Id);
-                    insert.Parameters.AddWithValue("$prefix", albumB + Path.DirectorySeparatorChar);
-                    insert.ExecuteNonQuery();
+                    using var idsReader = idsCommand.ExecuteReader();
+                    var ids = new List<long>();
+                    while (idsReader.Read()) ids.Add(idsReader.GetInt64(0));
+                    worldwideIds = ids.ToArray();
                 }
-                using (var exif = bulkDb.CreateCommand())
+                try
                 {
-                    exif.CommandText = """
-                        INSERT INTO image_exif(image_id, source_modified_utc_ticks,
-                            source_file_size, exif_json, gps_latitude, gps_longitude)
-                        SELECT id, modified_utc_ticks, file_size,
-                            json_object('SourceFile',local_path),
-                            CASE id % 3 WHEN 0 THEN 53.55 WHEN 1 THEN 26.11
-                                ELSE -25.27 END,
-                            CASE id % 3 WHEN 0 THEN 10.2 WHEN 1 THEN -80.15
-                                ELSE 133.77 END
-                        FROM images WHERE file_name LIKE 'bulk-gps-%';
-                        """;
-                    exif.ExecuteNonQuery();
+                    if (worldwideIds.Length != 6100)
+                        throw new Exception($"Worldwide GPS fixture is incomplete: {worldwideIds.Length} of 6100.");
+                    var worldwidePoints = ((System.Collections.IEnumerable)readGps.Invoke(
+                        window, [worldwideIds, CancellationToken.None, null])!)
+                        .Cast<object>().ToArray();
+                    var locations = worldwidePoints.Select(p => (
+                        Lat: (double)p.GetType().GetProperty("Lat")!.GetValue(p)!,
+                        Lon: (double)p.GetType().GetProperty("Lon")!.GetValue(p)!,
+                        Selected: (bool)p.GetType().GetProperty("Selected")!.GetValue(p)!))
+                        .ToArray();
+                    if (locations.Length != worldwideIds.Length ||
+                        locations.Any(p => !p.Selected) ||
+                        locations.Select(p => (p.Lat, p.Lon)).Distinct().Count() != 3)
+                        throw new Exception("Large GPS selection dropped images or continents.");
+                    Console.WriteLine("PASS: 6100 selected GPS photos from Europe, America and Australia survive the catalog projection.");
                 }
-                using var idsCommand = bulkDb.CreateCommand();
-                idsCommand.CommandText = """
-                    SELECT id FROM images WHERE file_name LIKE 'bulk-gps-%'
-                    ORDER BY id;
-                    """;
-                using var idsReader = idsCommand.ExecuteReader();
-                var ids = new List<long>();
-                while (idsReader.Read()) ids.Add(idsReader.GetInt64(0));
-                worldwideIds = ids.ToArray();
-            }
-            try
-            {
-                if (worldwideIds.Length != 6100)
-                    throw new Exception("Worldwide GPS fixture is incomplete.");
-                var worldwidePoints = ((System.Collections.IEnumerable)readGps.Invoke(
-                    window, [worldwideIds, CancellationToken.None, null])!)
-                    .Cast<object>().ToArray();
-                var locations = worldwidePoints.Select(p => (
-                    Lat: (double)p.GetType().GetProperty("Lat")!.GetValue(p)!,
-                    Lon: (double)p.GetType().GetProperty("Lon")!.GetValue(p)!,
-                    Selected: (bool)p.GetType().GetProperty("Selected")!.GetValue(p)!))
-                    .ToArray();
-                if (locations.Length != worldwideIds.Length ||
-                    locations.Any(p => !p.Selected) ||
-                    locations.Select(p => (p.Lat, p.Lon)).Distinct().Count() != 3)
-                    throw new Exception("Large GPS selection dropped images or continents.");
-                Console.WriteLine("PASS: 6100 selected GPS photos from Europe, America and Australia survive the catalog projection.");
-            }
-            finally
-            {
-                // This test runs before the real gallery-copy smoke test in the
-                // SAME Windows profile. Its synthetic, deliberately non-existent
-                // originals must not contaminate subsequent cache rebuilds.
-                using var cleanupConnection = db.OpenConnection();
-                using var cleanup = cleanupConnection.CreateCommand();
-                cleanup.CommandText = """
-                    DELETE FROM images WHERE file_name LIKE 'bulk-gps-%'
-                      AND photo_folder_id = $folder;
-                    """;
-                cleanup.Parameters.AddWithValue("$folder", b.Id);
-                cleanup.ExecuteNonQuery();
-            }
+                finally
+                {
+                    // This test runs before the real gallery-copy smoke test in the
+                    // SAME Windows profile. Its synthetic, deliberately non-existent
+                    // originals must not contaminate subsequent cache rebuilds.
+                    using var cleanupConnection = db.OpenConnection();
+                    using var cleanup = cleanupConnection.CreateCommand();
+                    cleanup.CommandText = """
+                        DELETE FROM images WHERE file_name LIKE 'bulk-gps-%'
+                          AND photo_folder_id = $folder;
+                        """;
+                    cleanup.Parameters.AddWithValue("$folder", b.Id);
+                    cleanup.ExecuteNonQuery();
+                }
 
+            }
             // Regression: Ctrl+A must survive repeated non-frozen source
             // refreshes and even a reordered browse-index publication. A
             // VERIFIED Remove GPS must immediately remove its source photo
