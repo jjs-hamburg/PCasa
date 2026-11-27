@@ -543,7 +543,10 @@ public partial class MainWindow
         if (persisted.Finalizing is { } pendingDecision)
         {
             _externalReviewRefreshing = false;
-            await CompleteExternalReviewAsync(pendingDecision, recheck: false);
+            // Accepted saves are owned by the durable scheduler, not by a
+            // window-activation callback. A failed intent can be discarded.
+            if (!HasPendingExternalWrites() && pendingDecision == ExternalEditDecision.Cancel)
+                await CompleteExternalReviewAsync(pendingDecision, recheck: false);
             return;
         }
         try
@@ -745,7 +748,10 @@ public partial class MainWindow
         ExternalEditDecision decision, bool returnToGalleryAfterCancel = false, bool recheck = true)
     {
         var review = _externalEditReview;
-        if (review is null || !review.Ready || review.Busy || HasPendingExternalWrites()) return false;
+        if (review is null || !review.Ready || _discardingExternalSession) return false;
+        if (decision == ExternalEditDecision.Cancel)
+            return await DiscardExternalSessionAsync(review.Snapshot.Id, returnToGalleryAfterCancel);
+        if (review.Busy || HasPendingExternalWrites()) return false;
         if (review.Combined && decision != ExternalEditDecision.Cancel)
         {
             if (_externalReviewRefreshing) return false;
@@ -840,6 +846,8 @@ public partial class MainWindow
                         Dispatcher.BeginInvoke(new Action(Close));
                     }
                     await accepted;
+                    if (_discardingExternalSession || !ReferenceEquals(_externalEditReview, review))
+                        return false;
                     if (_shutdownStarted || Dispatcher.HasShutdownStarted) return true;
                     committed = ReadWriteRecipe<ExternalCommitRecipe>(saveKey).Target;
                 }
@@ -901,7 +909,8 @@ public partial class MainWindow
         catch (OperationCanceledException) when (_shutdownStarted || Dispatcher.HasShutdownStarted) { return true; }
         catch (Exception ex)
         {
-            if (_shutdownStarted || Dispatcher.HasShutdownStarted) return false;
+            if (_discardingExternalSession || !ReferenceEquals(_externalEditReview, review) ||
+                _shutdownStarted || Dispatcher.HasShutdownStarted) return false;
             PCasaDiagnostics.Write("ExternalEdit.Commit", ex);
             PcasaDialog.Show(this, ex.Message,
                 UiLanguage.T("Externe Bearbeitung"),

@@ -452,6 +452,19 @@ internal static class ExternalEditSmokeFlow
                 throw new Exception(
                     "Canceled failed finalization trapped the editor or changed source.");
 
+            // Conflict after accepting Save: the original was edited by
+            // somebody else. Discard must preserve those newer bytes too.
+            var conflict = ExternalEditTransaction.Begin(photo);
+            WriteJpeg(photo, 83);
+            var conflictBytes = File.ReadAllBytes(photo);
+            writePending.Invoke(null, [conflict with {
+                Finalizing = ExternalEditDecision.Save, FinalTarget = photo
+            }]);
+            ExternalEditTransaction.Commit(conflict, null, ExternalEditDecision.Cancel);
+            if (ExternalEditTransaction.FindPending() is not null ||
+                !File.ReadAllBytes(photo).SequenceEqual(conflictBytes))
+                throw new Exception("Conflicting original trapped the session or was overwritten on Cancel.");
+
             // Panorama is the SAME flat workspace as a single external
             // session: no extra Panorama root and no session-GUID folder.
             var flatPano = PanoramaTransaction.Begin(

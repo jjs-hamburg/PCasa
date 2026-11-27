@@ -246,7 +246,7 @@ public sealed class SchedulerTaskView
                                 ? "Warte auf Ergebnis oder Entscheidung"
                                 : "Speicherentscheidung wird abgeschlossen"),
                             "Wartet", null, 0, long.MinValue,
-                            false, false, false, false));
+                            false, false, false, true));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                     or InvalidDataException)

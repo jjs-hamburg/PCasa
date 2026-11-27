@@ -549,8 +549,7 @@ public sealed class TaskManagerWindow : Window
             canResume ? "Erstimport mit gespeichertem Fortschritt fortsetzen" :
             canPause ? "Erstimport am nächsten sicheren Punkt pausieren" :
             "Für diese Auftragsart ist sicheres Pausieren noch nicht verfügbar");
-        _delete.IsEnabled = !busy && !InformationalExternal(row) &&
-            row is { Deletable: true };
+        _delete.IsEnabled = !busy && row is { Deletable: true };
         const string moveInfo =
             "Aufträge frei verschieben. Die neue Reihenfolge wird im Scheduler gespeichert; " +
             "laufende Dateischreibvorgänge geben ihren Platz am nächsten sicheren Schritt frei.";
@@ -722,6 +721,8 @@ public sealed class TaskManagerWindow : Window
         // Initial imports and watcher scans use the single original scan
         // owner, never the durable manual-package deleter. For an initial
         // import this delegate removes the queued intent even if held.
+        else if (row.Key.StartsWith("external:session:", StringComparison.Ordinal))
+            _ = PerformDeleteAsync(row.Key, () => _deleteDurableTask(row.Key));
         else if (!row.Durable && _stopAutomaticScan is not null)
             _ = PerformDeleteAsync(row.Key, () => _stopAutomaticScan(row.Key));
         else

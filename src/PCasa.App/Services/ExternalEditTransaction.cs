@@ -671,35 +671,20 @@ public static class ExternalEditTransaction
             token.ThrowIfCancellationRequested();
             CheckIdentity(requested);
             var session = ReadPending()!;
+            // Cancel retires the workspace, not an original-file transaction.
+            // The caller must first stop any accepted writer at its safe
+            // boundary. Never restore, remove or hash a published original
+            // merely to decide whether the local workspace may be discarded.
+            if (decision == ExternalEditDecision.Cancel)
+            {
+                Finish(session);
+                return null;
+            }
             if (session.Finalizing is { } choice && choice != decision &&
                 !(choice == ExternalEditDecision.SaveCopy &&
                   decision == ExternalEditDecision.Save))
-            {
-                // If an earlier Save/Copy was marked finalizing but failed
-                // before publishing anything, Cancel must remain a safe
-                // escape route. NEVER undo a file that was already published.
-                if (decision == ExternalEditDecision.Cancel &&
-                    !OriginalChanged(session) &&
-                    (session.FinalTarget is null ||
-                     session.FinalTarget.Equals(session.OriginalPath,
-                         StringComparison.OrdinalIgnoreCase) ||
-                     !File.Exists(session.FinalTarget)))
-                {
-                    Finish(session);
-                    return null;
-                }
                 throw new InvalidOperationException(
                     "Die externe Bearbeitung wird bereits abgeschlossen.");
-            }
-            if (decision == ExternalEditDecision.Cancel)
-            {
-                // Nothing has ever changed the source image. No restore and
-                // no Undo entry are needed.
-                var finalizing = session with { Finalizing = decision };
-                WritePending(finalizing);
-                Finish(finalizing);
-                return null;
-            }
 
             var source = session.FinalTarget is null
                 ? result : result ?? DetectResult(session);
