@@ -241,14 +241,14 @@ public partial class MainWindow
         _backgroundCurrentScanCancellation?.Cancel();
         _cacheMaintenanceCancellation?.Cancel();
 
-        // In-flight catalog work or owned ExifTool sessions can need an
-        // uninterruptible file transaction or a slow NAS cancellation.
-        // Make this visible before any slow cleanup, not after it.
+        // Show noninteractive progress while active workers are being
+        // drained or canceled, including the bounded wait for blocked reads.
+        // Queued durable work alone never requires a shutdown dialog.
         var busy = _databaseBackupTask is { IsCompleted: false } ||
             ExifToolKeywordWriter.HasActiveWrites ||
+            ExifToolProcessRegistry.LiveCount > 0 ||
+            ExifToolKeywordWriter.HasLiveSessions ||
             _scheduler.Snapshot().Any(job =>
-                job.WorkKind == SchedulerWorkKind.Catalog &&
-                job.Priority <= SchedulerPriority.UserAction &&
                 job.State is SchedulerJobState.Running or SchedulerJobState.YieldRequested);
         // Disable pointer input, NOT the WPF window: IsEnabled=false
         // applies the disabled visual state to every child and makes
