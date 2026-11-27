@@ -69,6 +69,7 @@ public partial class MainWindow : Window
         _scheduler.RegisterDurablePackageType("image-rename-v1", BuildImageRenamePackage);
         _scheduler.RegisterDurablePackageType("folder-rename-v1", BuildFolderRenamePackage);
         _scheduler.RegisterDurablePackageType("folder-filesystem-delete-v1", BuildFolderDeletePackage);
+        _scheduler.RegisterDurablePackageType(ExternalCommitType, BuildExternalCommitPackage);
         _scheduler.RegisterDurablePackageType("manual-folder-scan-v1", BuildManualFolderScanPackage);
         _scheduler.RegisterDurablePackageType("import-error-retry-v1", BuildImportErrorRetryPackage);
         _scheduler.RegisterDurablePackageType("manual-scan-all-v1", BuildScanAllPackage);
@@ -108,9 +109,14 @@ public partial class MainWindow : Window
         // Alpha.47: only the CURRENT process may own an external edit.
         // Abandoned files from a crash are discarded, never resurrected as
         // a task that would suspend the startup/background scanner.
-        try { ExternalEditTransaction.RetirePreviousProcessSession(); }
-        catch (Exception ex) { PCasaDiagnostics.Write("ExternalEdit.StartupCleanup", ex); }
-        RecoverExternalEditSchedulerLease();
+        // Accepted external results belong to durable jobs. Only abandoned,
+        // unconfirmed editor sessions may be retired on startup.
+        if (!HasPendingExternalWrites())
+        {
+            try { ExternalEditTransaction.RetirePreviousProcessSession(); }
+            catch (Exception ex) { PCasaDiagnostics.Write("ExternalEdit.StartupCleanup", ex); }
+            RecoverExternalEditSchedulerLease();
+        }
         _ = WarmExternalEditorIconsAsync();
         LogStartupStage("window-constructed");
     }
