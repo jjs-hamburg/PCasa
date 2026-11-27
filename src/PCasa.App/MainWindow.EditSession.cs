@@ -29,7 +29,7 @@ public partial class MainWindow
 
     private bool EnsureEditSession()
     {
-        if (!_viewerOpen || !_viewerHasOriginal || _viewerImageInfo is not { } info ||
+        if (!_viewerOpen || !_viewerHasOriginal || _externalEditLaunchPending || _viewerImageInfo is not { } info ||
             PhotoViewerImage.Source is not BitmapSource bitmap ||
             _externalBatchReview is not null ||
             (_externalEditReview is not null &&
@@ -256,10 +256,10 @@ public partial class MainWindow
         // Keep all four buttons in a fixed footprint below the histogram.
         // A disabled action is still visible; the histogram never jumps.
         CropApplyButton.Visibility = Visibility.Visible;
-        ViewerToolCancelButton.IsEnabled = !_cropSavePending &&
-            (editingTool);
-        CropApplyButton.IsEnabled = !_cropSavePending &&
-            (editingTool);
+        ViewerToolCancelButton.IsEnabled = !_cropSavePending && !_externalEditLaunchPending &&
+            _viewerHasOriginal && editingTool;
+        CropApplyButton.IsEnabled = !_cropSavePending && !_externalEditLaunchPending &&
+            _viewerHasOriginal && editingTool;
         CropSaveButton.IsEnabled = !_cropSavePending &&
             (_viewerImageInfo is null || !_pendingEditImageIds.Contains(_viewerImageInfo.Id)) &&
             (editingTool || _photoEditSession?.HasChanges == true);
@@ -278,7 +278,7 @@ public partial class MainWindow
                     external.Snapshot.OriginalPath, external.ResultPath!);
             CropCancelButton.IsEnabled = ready;
             var canEditResult = CanEditPendingExternalResult(external.ImageId);
-            CropApplyButton.IsEnabled = canEditResult &&
+            CropApplyButton.IsEnabled = ready && canEditResult &&
                 (editingTool);
             ViewerToolCancelButton.IsEnabled = CropApplyButton.IsEnabled;
             CropUndoButton.IsEnabled = canEditResult &&
