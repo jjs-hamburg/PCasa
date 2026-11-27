@@ -524,7 +524,16 @@ public partial class MainWindow
                 if (!owner._folderRepository.IsCurrentSourceGeneration(folder.CanonicalPath, generation, true))
                     throw new OperationCanceledException("Inventory source changed.");
                 var result = owner._folderScanner.ScanFile(folder, change.Path, progress, token,
-                    forceExifRefresh: change.ForceExifRefresh);
+                    publishCatalogChange: false, forceExifRefresh: change.ForceExifRefresh);
+                if (result.CatalogChanged)
+                {
+                    // Manual refresh is explicit P0 work, not a deferred background
+                    // projection. Publish each committed image during the traversal.
+                    var canonical = FolderScanner.ResolveCanonicalFullPath(folder, change.Path);
+                    if (owner._imageCatalog.GetImageId(canonical) is long id)
+                        owner.PublishCommittedGalleryImage(owner._activeBrowseTier, id, null);
+                    CatalogChanges.PublishImageCommitted();
+                }
                 scanned += result.ImageFilesSeen;
                 updated += result.Updated;
                 failed += result.Failed;
