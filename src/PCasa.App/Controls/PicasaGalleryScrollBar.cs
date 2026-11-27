@@ -188,6 +188,10 @@ public sealed class PicasaGalleryScrollBar : UserControl
         parent.Children.Add(arrow);
     }
 
+    // Notify the owner before issuing a real user scroll, not after WPF's
+    // asynchronous ScrollChanged. A pending layout anchor must not undo it.
+    public event Action? UserScrollStarting;
+
     public void Attach(ScrollViewer scrollViewer, BrowseGallerySurface gallery)
     {
         _viewer = scrollViewer;
@@ -212,9 +216,18 @@ public sealed class PicasaGalleryScrollBar : UserControl
                 _viewer.VerticalOffset, _viewer.ViewportHeight)
             : _gallery.GetAdjacentImageRowOffset(
                 _viewer.VerticalOffset, direction);
+        // At the last caption there can still be trailing layout space.
+        // A downward arrow must reach the physical end in that case.
+        if (direction > 0 && target <= _viewer.VerticalOffset)
+            target = _viewer.ScrollableHeight;
+        if (direction < 0 && target >= _viewer.VerticalOffset)
+            target = 0;
         if (TryScrollTarget(_viewer.VerticalOffset, _viewer.ScrollableHeight,
                 target - _viewer.VerticalOffset, out var offset))
+        {
+            UserScrollStarting?.Invoke();
             _viewer.ScrollToVerticalOffset(offset);
+        }
     }
 
     private void MovePages(int direction)
@@ -279,6 +292,7 @@ public sealed class PicasaGalleryScrollBar : UserControl
         if (!TryScrollTarget(_pageStart, _viewer.ScrollableHeight,
                 direction * Math.Max(1, _viewer.ViewportHeight * 0.9), out _pageTarget))
             return;
+        UserScrollStarting?.Invoke();
         _paging = true;
         _pageElapsed = 0;
         StartClock();
@@ -378,6 +392,9 @@ public sealed class PicasaGalleryScrollBar : UserControl
     {
         if (_viewer is null || !double.IsFinite(pixels)) return;
         if (TryScrollTarget(_viewer.VerticalOffset, _viewer.ScrollableHeight, pixels, out var target))
+        {
+            UserScrollStarting?.Invoke();
             _viewer.ScrollToVerticalOffset(target);
+        }
     }
 }
