@@ -270,6 +270,7 @@ public partial class MainWindow
     private void UpdateEditComparisonFromSession()
     {
         if (_editCompareMode == EditCompareMode.Single ||
+            _cropSavePending || _externalEditReview is { Busy: true } ||
             _editCompareHoldingOriginal ||
             _editCompareImageId != _viewerImageInfo?.Id ||
             _photoEditSession is not { } session ||
