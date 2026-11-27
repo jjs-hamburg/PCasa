@@ -916,7 +916,7 @@
                                 IsMoveToPointEnabled="True"
                                 ValueChanged="PhotoViewerZoom_ValueChanged"
                                 VerticalAlignment="Center" />
-                        <TextBlock x:Name="PhotoZoomLabel" Text="Fit"
+                        <TextBlock x:Name="PhotoZoomLabel" Text="Fit" FontSize="10" FontWeight="Light"
                                    MinWidth="73" Margin="9,0,0,0"
                                    VerticalAlignment="Center" />
                     </StackPanel>
@@ -1561,7 +1561,7 @@
                                 <TextBlock Text="{loc:Tr Key='Winkel'}" FontSize="11"
                                            Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,5,0,11">
-                                    <TextBlock x:Name="StraightenAngleValue" Width="65"
+                                    <TextBlock x:Name="StraightenAngleValue" Width="65" Visibility="Collapsed"
                                                Text="0,00°" FontSize="9" FontWeight="Light" TextAlignment="Left"
                                                VerticalAlignment="Center"/>
                                 </StackPanel>
@@ -1876,6 +1876,11 @@
                                 TickFrequency=".05" IsSnapToTickEnabled="False"
                                 IsMoveToPointEnabled="True"
                                 ToolTip="{loc:Tr Key='Fein: Pfeiltasten 0,05°. Erweiterter Bereich mit ±45°.'}"/>
+                        <TextBlock Text="{Binding Text, ElementName=StraightenAngleValue}"
+                                   Visibility="{Binding Visibility, ElementName=StraightenAngleSlider}"
+                                   FontSize="9" FontWeight="Light" Panel.ZIndex="10"
+                                   HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                   Margin="0,0,0,4" IsHitTestVisible="False"/>
                         <!-- Original/edited comparison of ONE image. The split
                              clips identical, registered views rather than
                              stretching two halves into different proportions. -->
