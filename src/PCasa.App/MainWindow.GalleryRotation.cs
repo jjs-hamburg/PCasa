@@ -64,10 +64,10 @@ public partial class MainWindow
         BrowseSurface.SetPreviewRotations(preview);
     }
 
-    private void FlushGalleryRotations()
+    private bool FlushGalleryRotations()
     {
         _galleryRotationTimer?.Stop();
-        if (_galleryRotationDraft.Count == 0) return;
+        if (_galleryRotationDraft.Count == 0) return true;
         var items = _galleryRotationDraft.ToArray();
         _galleryRotationDraft.Clear();
         foreach (var (id, angle) in items)
@@ -88,6 +88,7 @@ public partial class MainWindow
             var task = _scheduler.EnqueueDurableRecipeAsync(key, RotationRecipeType, payload,
                     SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
             _ = ObserveGalleryRotationAsync(task, key, items.Select(item => item.Key).ToArray(), title);
+            return true;
         }
         catch (Exception ex)
         {
@@ -95,6 +96,7 @@ public partial class MainWindow
             {
                 _galleryRotationWriting.Remove(id);
                 _pendingEditImageIds.Remove(id);
+                _galleryRotationDraft[id] = items.First(item => item.Key == id).Value;
             }
             UpdateGalleryRotationPreview();
             UpdateGalleryRotationButtons();
@@ -102,6 +104,7 @@ public partial class MainWindow
             EndVisibleManualOperation(key);
             PCasaDiagnostics.Write("Image.GalleryRotation.Enqueue", ex);
             PcasaDialog.Show(this, ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
         }
     }
 
