@@ -69,12 +69,8 @@ public partial class MainWindow
                                 request.InternalSteps, token);
                         else
                         {
-                            using var input = new FileStream(request.ResultPath, FileMode.Open,
-                                FileAccess.Read, FileShare.Read);
-                            using var output = new FileStream(staged, FileMode.CreateNew,
-                                FileAccess.Write, FileShare.None, 131072, FileOptions.WriteThrough);
-                            input.CopyTo(output);
-                            output.Flush(true);
+                            ExternalEditTransaction.CopyAtomic(request.ResultPath, staged, false,
+                                token, modifiedUtc: request.ResultWriteUtc);
                         }
                     }
                     request = request with { StagedPath = staged };
@@ -137,6 +133,12 @@ public partial class MainWindow
             {
                 var request = ReadWriteRecipe<ExternalCommitRecipe>(key);
                 if (request.Snapshot.Id == review.Snapshot.Id) _externalEditReview = null;
+            }
+            if (key.StartsWith("external:batch-commit:", StringComparison.Ordinal))
+            {
+                _externalBatchReview = null;
+                _panoramaSession = null;
+                ReleasePanoramaEditorProcess();
             }
             _viewerOriginalCache.Clear();
             await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
