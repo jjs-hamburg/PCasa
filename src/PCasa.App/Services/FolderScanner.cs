@@ -683,9 +683,7 @@ public sealed class FolderScanner
                                 folder.Id, photoFolderId, localPath, canonicalPath,
                                 file.Name, extension.ToLowerInvariant(), fileLength,
                                 modifiedUtcTicks, thumbnail.Width, thumbnail.Height,
-                                thumbnail.Path, createdUtcTicks));
-                            if (fingerprint is not null)
-                                scanSession.SaveContentFingerprint(canonicalPath, fingerprint);
+                                thumbnail.Path, createdUtcTicks), fingerprint);
                             scanSession.SaveExif(canonicalPath, modifiedUtcTicks, fileLength, exif);
                             if (keywords is not null)
                                 scanSession.SaveTags(canonicalPath, modifiedUtcTicks, keywords);
