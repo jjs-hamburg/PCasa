@@ -175,6 +175,7 @@ internal static class Program
         Run("Missing thumbnail tier is rebuilt", MissingThumbnailCanRebuild, failures);
         Run("Repeated browse index keeps decoded thumbnail pages", IdenticalIndexRetainsPage, failures);
         Run("Manual thumbnail rebuild updates one image without evicting its neighbors", TargetedThumbnailRebuildRetainsNeighbor, failures);
+        Run("New discoveries import before inventory completion; same-stamp replacement rebuilds content", ImmediateInventoryAndFingerprint, failures);
         Run("Per-folder gallery sorting preserves tree order for all six sort fields", PerFolderSortAllFields, failures);
         Run("Gallery sorting reads EXIF capture date, file dates, size and original dimensions from one index", GallerySortUsesCatalogMetadata, failures);
         Run("External Topaz result supports an in-workspace crop before explicit Save without touching original",
@@ -4408,6 +4409,60 @@ internal static class Program
         cache.SetIndex(Array.Empty<BrowseThumbnailIndexEntry>());
         if (cache.Count != 0 || cache.TryGet(0, out _))
             throw new Exception("Changed browse index did not invalidate obsolete pages.");
+    }
+
+    private static void ImmediateInventoryAndFingerprint()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "same-stamp.bmp");
+        void WriteBmp(byte value)
+        {
+            var pixels = Enumerable.Repeat(value, 32 * 32 * 3).ToArray();
+            var bitmap = BitmapSource.Create(32, 32, 96, 96, PixelFormats.Bgr24, null, pixels, 32 * 3);
+            var encoder = new BmpBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(bitmap));
+            using var stream = File.Create(path);
+            encoder.Save(stream);
+        }
+        WriteBmp(40);
+        var (db, root, scanner) = sandbox.Prepare();
+        var called = false;
+        var finished = false;
+        var result = new CatalogInventoryCheck(db).Check(root, [], [], CancellationToken.None,
+            (count, p) => finished = true,
+            importNewImmediately: change =>
+            {
+                if (finished || change.Path != path)
+                    throw new Exception("Discovery was postponed until inventory completion.");
+                if (scanner.ScanFile(root, change.Path).Updated != 1)
+                    throw new Exception("Immediate discovery was not indexed.");
+                called = true;
+            });
+        if (!called || !finished || result.Changes.Count != 0)
+            throw new Exception("Streaming discovery did not consume the new file exactly once.");
+        var tier = new BrowseThumbnailProfileRepository(db).Get().Tiers[0];
+        var cache = new BrowseCacheRepository(db);
+        var old = cache.GetIndex(tier).Single();
+        var before = new PhotoViewerImageRepository(db).Get(old.ImageId)!;
+        if (before.ContentFingerprint is null ||
+            !before.ContentFingerprint.SequenceEqual(SHA256.HashData(File.ReadAllBytes(path))))
+            throw new Exception("Initial import did not store its content fingerprint.");
+        var stamp = File.GetLastWriteTimeUtc(path);
+        var length = new FileInfo(path).Length;
+        WriteBmp(200);
+        File.SetLastWriteTimeUtc(path, stamp);
+        if (new FileInfo(path).Length != length)
+            throw new Exception("Invalid same-stamp fixture.");
+        var verified = PhotoViewerImageLoader.LoadVerified(before, 32, CancellationToken.None);
+        if (before.ContentFingerprint.SequenceEqual(verified.Hash))
+            throw new Exception("Viewer accepted unchanged stamp as unchanged pixels.");
+        if (scanner.ScanFile(root, path, forceContentRefresh: true).Updated != 1)
+            throw new Exception("Changed bytes did not force a full thumbnail rebuild.");
+        var after = new PhotoViewerImageRepository(db).Get(old.ImageId)!;
+        var replacement = cache.GetIndexEntry(tier, old.ImageId)!;
+        if (after.ContentFingerprint is null || !after.ContentFingerprint.SequenceEqual(verified.Hash) ||
+            (replacement.PackFile == old.PackFile && replacement.ByteOffset == old.ByteOffset))
+            throw new Exception("Fingerprint or packed thumbnail was not replaced.");
     }
 
     private static void TargetedThumbnailRebuildRetainsNeighbor()
