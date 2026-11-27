@@ -504,7 +504,7 @@ public static class ExternalEditTransaction
         return ExternalCopyNames.NextAvailable(desired);
     }
 
-    private static void CopyAtomic(string source, string target,
+    internal static void CopyAtomic(string source, string target,
         bool replace, CancellationToken token,
         Action<long, long>? progress = null,
         DateTime? creationUtc = null, DateTime? modifiedUtc = null)
