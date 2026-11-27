@@ -240,6 +240,26 @@ public partial class MainWindow
             BeginVisibleManualOperation(key, UiLanguage.T("EXIF-Datumsfelder speichern"), 1);
             _ = ObserveCaptureDatePackageAsync(completion, key);
         }
+        else if (key.StartsWith("image:edit:", StringComparison.Ordinal))
+        {
+            var record = new DurablePackageJournal(_database).Pending().FirstOrDefault(p => p.Key == key);
+            if (record is not null && System.Text.Json.JsonSerializer.Deserialize<EditWriteRecipe>(record.Payload) is { } edit)
+            {
+                _pendingEditImageIds.Add(edit.ImageId);
+                BeginVisibleManualOperation(key, UiLanguage.T("Bildbearbeitung speichern"),
+                    edit.CopyPath is null ? 1 : 2);
+                _ = ObserveEditCommitAsync(completion, key, edit);
+            }
+        }
+        else if (key.StartsWith("undo:restore:", StringComparison.Ordinal))
+        {
+            var record = new DurablePackageJournal(_database).Pending().FirstOrDefault(p => p.Key == key);
+            if (record is not null && System.Text.Json.JsonSerializer.Deserialize<UndoRestoreRecipe>(record.Payload) is { } restore)
+            {
+                BeginVisibleManualOperation(key, UiLanguage.T("Bild wiederherstellen"), 1);
+                _ = ObserveUndoRestoreAsync(completion, key, restore);
+            }
+        }
         else if (key.StartsWith("image:gallery-rotation:", StringComparison.Ordinal))
         {
             var record = new DurablePackageJournal(_database).Pending().FirstOrDefault(p => p.Key == key);
