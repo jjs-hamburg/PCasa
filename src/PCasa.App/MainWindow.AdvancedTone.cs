@@ -59,17 +59,16 @@ public partial class MainWindow
             _pendingEditImageIds.Contains(viewer.Id))
             return;
 
-        // A slider is one transaction step, even when dragged through
-        // hundreds of positions. Switching sliders commits the last value
-        // to the shared Undo history before the next live preview starts.
+        // Switching tools must never silently append an undo step.
         if (_advancedToneActive && _advancedToneKind != kind)
-            ApplyEditTool();
+            DiscardLiveEditTool();
 
         if (!_advancedToneActive)
         {
             if (Math.Abs(amount) < .00001) return;
-            if (_cropActive || _straightenActive || _brightnessActive)
-                ApplyEditTool();
+            if (_cropActive || _straightenActive || _brightnessActive ||
+                _pendingAutomaticEdit is not null)
+                DiscardLiveEditTool();
             if (!EnsureEditSession())
             {
                 ResetAdvancedSlider(kind);
