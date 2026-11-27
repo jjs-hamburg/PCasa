@@ -134,7 +134,7 @@ public partial class MainWindow
                     draft.ValueKind == JsonValueKind.True) continue;
                 if (!item.TryGetProperty("tag_name", out var tag)) continue;
                 var version = PcasaReleaseVersion.TryParse(tag.GetString());
-                if (version is null || version.Value.CompareTo(installed.Value) <= 0)
+                if (version is null || version.Value.CompareTo(installed.Value) < 0)
                     continue;
                 if (latest is not null && version.Value.CompareTo(latest.Value) <= 0)
                     continue;
@@ -183,32 +183,52 @@ public partial class MainWindow
                 installerBytes = candidateBytes;
             }
 
-            if (latest is null)
+            if (latest is null || installerUrl is null || installerDigest is null)
             {
                 PcasaDialog.Show(this,
-                    UiLanguage.T("Es ist keine neuere PCasa-Version als GitHub Release verfügbar.") +
-                    Environment.NewLine +
-                    $"{UiLanguage.T("Installiert")}: {CurrentProductVersion}",
+                    UiLanguage.T("Es ist keine neuere PCasa-Version als GitHub Release verfügbar."),
                     UiLanguage.T("Nach Updates suchen"),
-                    MessageBoxButton.OK, MessageBoxImage.Information);
+                    MessageBoxButton.OKCancel, MessageBoxImage.Information);
                 return;
             }
-
+            var newer = latest.Value.CompareTo(installed.Value) > 0;
             var result = PcasaDialog.Show(this,
-                UiLanguage.T("Eine neuere PCasa-Version ist auf GitHub verfügbar.") +
-                Environment.NewLine +
-                $"{UiLanguage.T("Installiert")}: {CurrentProductVersion}" +
-                Environment.NewLine +
-                $"{UiLanguage.T("Verfügbar")}: {latest.Value}" +
-                Environment.NewLine + Environment.NewLine +
-                UiLanguage.T("Soll der geprüfte Installer heruntergeladen und nach dem Beenden von PCasa gestartet werden?") +
-                Environment.NewLine +
-                UiLanguage.T("Offene PCasa-Aufträge werden vorher geordnet beendet."),
+                UiLanguage.T(newer ? "Eine neuere PCasa-Version ist auf GitHub verfügbar." :
+                    "Es ist keine neuere PCasa-Version als GitHub Release verfügbar.") +
+                Environment.NewLine + $"{UiLanguage.T("Installiert")}: {CurrentProductVersion}" +
+                Environment.NewLine + $"{UiLanguage.T("Verfügbar")}: {latest.Value}",
                 UiLanguage.T("Nach Updates suchen"),
-                MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (result == MessageBoxResult.Yes && installerUrl is not null &&
-                installerDigest is not null)
+                newer ? MessageBoxButton.YesNoCancel : MessageBoxButton.OKCancel,
+                MessageBoxImage.Information, MessageBoxResult.Cancel,
+                new Dictionary<MessageBoxResult, string>
+                {
+                    [MessageBoxResult.Yes] = UiLanguage.T("Upgrade"),
+                    [MessageBoxResult.No] = UiLanguage.T("Setup speichern unter"),
+                    [MessageBoxResult.OK] = UiLanguage.T("Setup speichern unter")
+                });
+            if (result is MessageBoxResult.No or MessageBoxResult.OK)
             {
+                var picker = new Microsoft.Win32.SaveFileDialog
+                {
+                    FileName = "PCasa-Setup-" + latest.Value + ".exe",
+                    Filter = "Setup (*.exe)|*.exe",
+                    DefaultExt = ".exe",
+                    AddExtension = true
+                };
+                if (picker.ShowDialog(this) != true) return;
+                var saved = await DownloadVerifiedInstallerAsync(
+                    latest.Value.ToString(), installerUrl, installerDigest, installerBytes);
+                if (saved is not null)
+                {
+                    try { File.Copy(saved, picker.FileName, overwrite: true); }
+                    finally { File.Delete(saved); }
+                }
+                return;
+            }
+            if (newer && result == MessageBoxResult.Yes)
+            {
+                // Only truly unsaved edits may prevent a controlled close.
+                if (_viewerOpen && !ConfirmCropExit()) return;
                 var paused = await PauseReadsForUpdateAsync();
                 var installerStarted = false;
                 try
@@ -221,8 +241,9 @@ public partial class MainWindow
                     // THIS process to release the SQLite catalog/scheduler
                     // before opening the downloaded, hash-verified installer.
                     var quoted = downloaded.Replace("'", "''", StringComparison.Ordinal);
+                    var language = UiLanguage.Current.Code == "en" ? "en" : "de";
                     var command = $"Wait-Process -Id {Environment.ProcessId} -ErrorAction SilentlyContinue; " +
-                        $"Start-Process -FilePath '{quoted}'";
+                        $"Start-Process -FilePath '{quoted}' -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /PCASAUPGRADE /LANG={language}'";
                     var start = new ProcessStartInfo("powershell.exe")
                     {
                         UseShellExecute = false,
