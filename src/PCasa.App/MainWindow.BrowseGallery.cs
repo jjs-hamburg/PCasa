@@ -240,6 +240,11 @@ public partial class MainWindow
             BeginVisibleManualOperation(key, UiLanguage.T("EXIF-Datumsfelder speichern"), 1);
             _ = ObserveCaptureDatePackageAsync(completion, key);
         }
+        else if (key.StartsWith("image:rename:", StringComparison.Ordinal))
+        {
+            BeginVisibleManualOperation(key, UiLanguage.T("Bild umbenennen"), 1);
+            _ = ObserveCaptureDatePackageAsync(completion, key);
+        }
         else if (key.StartsWith("image:edit:", StringComparison.Ordinal))
         {
             var record = new DurablePackageJournal(_database).Pending().FirstOrDefault(p => p.Key == key);
