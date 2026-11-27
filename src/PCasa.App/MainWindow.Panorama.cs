@@ -348,7 +348,7 @@ public partial class MainWindow
         ExternalEditDecision decision)
     {
         var review = _externalBatchReview;
-        if (review is null || review.Busy || _panoramaImportRunning)
+        if (review is null || review.Busy || _panoramaImportRunning || HasPendingExternalWrites())
             return false;
         var session = review.Session;
         if (!ReferenceEquals(_panoramaSession, session)) return false;
@@ -385,76 +385,19 @@ public partial class MainWindow
             var catalogWarnings = new List<string>();
             try
             {
-                saved = await _scheduler.RunAsync(key,
-                    SchedulerPriority.ManualAction, token =>
-                    {
-                        var staged = review.Outputs.Select(output => output with
-                        {
-                            Path = Path.GetDirectoryName(Path.GetFullPath(output.Path))!
-                                .Equals(session.Directory, StringComparison.OrdinalIgnoreCase)
-                                ? output.Path
-                                : PanoramaTransaction.StageExternalResult(
-                                    session, output.Path, token)
-                        }).ToArray();
-                        string[] files;
-                        if (session.IsPanorama)
-                        {
-                            var output = staged.Single();
-                            files = [PanoramaTransaction.Import(session, output.Path,
-                                token, (completed, total) =>
-                                    _scheduler.ReportProgress(key, label,
-                                        total == 0 ? 100 : (int)(completed * 100 / total),
-                                        100, output.Path))];
-                        }
-                        else
-                        {
-                            files = PanoramaTransaction.ImportMultiple(session,
-                                staged, token, (completed, total) =>
-                                    _scheduler.ReportProgress(key, label,
-                                        total == 0 ? 100 : (int)(completed * 100 / total),
-                                        100, session.Sources[0]),
-                                replaceOriginals: decision == ExternalEditDecision.Save);
-                        }
-                        // File publication is finished: a catalog failure must
-                        // never cause a second physical import on retry.
-                        foreach (var file in files)
-                        {
-                            try
-                            {
-                                token.ThrowIfCancellationRequested();
-                                var root = FolderExclusionRules.FindOwner(file,
-                                    _folderRepository.GetAll()) ??
-                                    throw new IOException(
-                                        "Ausgabeverzeichnis nicht im Katalog: " + file);
-                                var indexed = _folderScanner.ScanFile(root, file,
-                                    cancellationToken: token, publishCatalogChange: false,
-                                    forceExifRefresh: true);
-                                if (indexed.Failed > 0 || indexed.ImageFilesSeen == 0)
-                                    throw new IOException(
-                                        "Gespeichert, aber Katalogisierung fehlgeschlagen: " + file);
-                                // The result's packed thumbnail belongs to this
-                                // SAME P0 transaction, never a later P4 scan.
-                                using var lookup = _database.OpenConnection();
-                                using var command = lookup.CreateCommand();
-                                command.CommandText =
-                                    "SELECT id FROM images WHERE local_path=$path COLLATE NOCASE LIMIT 1;";
-                                command.Parameters.AddWithValue("$path", file);
-                                if (command.ExecuteScalar() is { } found)
-                                    new BrowseCacheBuilder(
-                                        new BrowseCacheRepository(_database),
-                                        new BrowseThumbnailProfileRepository(_database))
-                                        .RebuildSingleImage(Convert.ToInt64(found), token);
-                            }
-                            catch (OperationCanceledException) { throw; }
-                            catch (Exception ex)
-                            {
-                                PCasaDiagnostics.Write("ExternalBatch.Catalog", ex);
-                                catalogWarnings.Add(Path.GetFileName(file) + ": " +
-                                    ex.Message);
-                            }
-                        }
-                        return files;
-                    }, workKind: SchedulerWorkKind.Catalog);
+                var outputs = review.Outputs.Select(output =>
+                {
+                    var info = new FileInfo(output.Path);
+                    return new BatchResultInput(output.SourceIndex, output.Path,
+                        info.Length, info.LastWriteTimeUtc);
+                }).ToArray();
+                var accepted = _scheduler.EnqueueDurableRecipeAsync(key, ExternalBatchCommitType,
+                    System.Text.Json.JsonSerializer.Serialize(new ExternalBatchCommitRecipe(
+                        session, decision, outputs)), SchedulerPriority.ManualAction);
+                await accepted;
+                if (_shutdownStarted || Dispatcher.HasShutdownStarted) return true;
+                saved = ReadWriteRecipe<ExternalBatchCommitRecipe>(key).Prepared!
+                    .Select(item => item.Target).ToArray();
             }
             finally { EndVisibleManualOperation(key); }
 
@@ -498,8 +441,10 @@ public partial class MainWindow
                     MessageBoxButton.OK, MessageBoxImage.Warning);
             return true;
         }
+        catch (OperationCanceledException) when (_shutdownStarted || Dispatcher.HasShutdownStarted) { return true; }
         catch (Exception ex)
         {
+            if (_shutdownStarted || Dispatcher.HasShutdownStarted) return false;
             PCasaDiagnostics.Write("ExternalBatch.Commit", ex);
             PcasaDialog.Show(this, ex.Message, UiLanguage.T("Externe Bearbeitung"),
                 MessageBoxButton.OK, MessageBoxImage.Error);
