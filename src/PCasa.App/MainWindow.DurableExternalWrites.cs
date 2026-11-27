@@ -14,7 +14,7 @@ public partial class MainWindow
         => new DurablePackageJournal(_database).Pending().Any(row =>
             row.Type is ExternalCommitType or ExternalBatchCommitType);
 
-    private T ReadWriteRecipe<T>(string key)
+    private T ReadWriteRecipe<T>(string key) where T : class
     {
         using var db = _database.OpenConnection();
         using var command = db.CreateCommand();
