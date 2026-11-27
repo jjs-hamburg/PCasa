@@ -721,6 +721,8 @@ public partial class MainWindow
     {
         var review = _externalEditReview;
         if (review is null || !review.Ready || review.Busy || HasPendingExternalWrites()) return false;
+        if (review.Combined && decision != ExternalEditDecision.Cancel &&
+            (!review.PreviewReady || review.AwaitingReturn || _externalReviewRefreshing)) return false;
         // A crop/rotation/tonal adjustment to Topaz's displayed result
         // belongs to the SAME external Save/Copy/Cancel decision, not to a
         // second save request against the untouched original.
@@ -737,7 +739,9 @@ public partial class MainWindow
         PhotoEditStep[] internalSteps = decision == ExternalEditDecision.Cancel ||
             _photoEditSession?.ImageId != review.ImageId
             ? [] : _photoEditSession.AppliedSteps.ToArray();
+        if (review.Combined && decision != ExternalEditDecision.Cancel && internalSteps.Length == 0) return false;
         review.Busy = true;
+        _cropSavePending = review.Combined && decision != ExternalEditDecision.Cancel;
         UpdateEditControls();
         try
         {
@@ -770,14 +774,44 @@ public partial class MainWindow
                 }
                 else
                 {
-                    var result = review.InternalResultPath ?? review.ResultPath
-                        ?? throw new IOException("Das externe Programm hat kein Ergebnis gespeichert.");
-                    var request = new ExternalCommitRecipe(review.ImageId, review.Snapshot,
-                        decision, result, review.ResultSize, review.ResultWriteUtc,
-                        review.InternalEditsStaged ? [] : internalSteps);
+                    ExternalCommitRecipe request;
+                    if (review.Combined)
+                    {
+                        // Resolve the current cursor into ONE private full-resolution
+                        // result before the durable final-save admission. No history
+                        // file is required by the accepted recipe or its restart.
+                        request = await _scheduler.RunAsync(saveKey + ":prepare",
+                            SchedulerPriority.ManualAction, token =>
+                            {
+                                var snapshot = ExternalEditTransaction.FindPending(review.Snapshot.OriginalPath)
+                                    ?? throw new IOException("External session is missing.");
+                                var directory = Path.Combine(snapshot.DirectoryPath, ".pcasa-internal");
+                                Directory.CreateDirectory(directory);
+                                foreach (var old in Directory.EnumerateFiles(directory, "result.*")) File.Delete(old);
+                                var staged = JpegCropWriter.MaterializeWorkingImage(snapshot.BeforePath,
+                                    directory, "result", internalSteps, token);
+                                var info = new FileInfo(staged);
+                                return new ExternalCommitRecipe(review.ImageId, snapshot, decision,
+                                    staged, info.Length, info.LastWriteTimeUtc, [], StagedPath: staged);
+                            }, workKind: SchedulerWorkKind.Catalog);
+                    }
+                    else
+                    {
+                        var result = review.InternalResultPath ?? review.ResultPath
+                            ?? throw new IOException("Das externe Programm hat kein Ergebnis gespeichert.");
+                        request = new ExternalCommitRecipe(review.ImageId, review.Snapshot,
+                            decision, result, review.ResultSize, review.ResultWriteUtc,
+                            review.InternalEditsStaged ? [] : internalSteps);
+                    }
                     var accepted = _scheduler.EnqueueDurableRecipeAsync(saveKey,
                         ExternalCommitType, System.Text.Json.JsonSerializer.Serialize(request),
                         SchedulerPriority.ManualAction);
+                    _cropSavePending = false;
+                    if (_closeAfterEditAdmission)
+                    {
+                        _closeAfterEditAdmission = false;
+                        Dispatcher.BeginInvoke(new Action(Close));
+                    }
                     await accepted;
                     if (_shutdownStarted || Dispatcher.HasShutdownStarted) return true;
                     committed = ReadWriteRecipe<ExternalCommitRecipe>(saveKey).Target;
@@ -787,6 +821,7 @@ public partial class MainWindow
             // The file transaction is now complete, even if a subsequent
             // catalog refresh fails. It must not be submitted a second time.
             _externalEditReview = null;
+            _photoEditSession = null;
             if (_cropActive) EndCrop();
             if (_straightenActive) LeaveStraighten();
             if (_brightnessActive) LeaveBrightness();
@@ -849,6 +884,12 @@ public partial class MainWindow
         finally
         {
             review.Busy = false;
+            _cropSavePending = false;
+            if (_closeAfterEditAdmission)
+            {
+                _closeAfterEditAdmission = false;
+                Dispatcher.BeginInvoke(new Action(Close));
+            }
             if (!Dispatcher.HasShutdownStarted) UpdateEditControls();
         }
     }
