@@ -9,7 +9,7 @@ namespace PCasa.App;
 public partial class MainWindow
 {
     private sealed record UndoRestoreRecipe(string Path, Guid VersionId,
-        long ImageId, long MonitoredFolderId);
+        long ImageId, long MonitoredFolderId, WriteFingerprint? Fingerprint = null);
 
     private void UndoOptions_Click(object sender, RoutedEventArgs e)
     {
@@ -88,9 +88,8 @@ public partial class MainWindow
         Task task;
         try
         {
-            task = StartDirectImageWrite(key, UiLanguage.T("Bild wiederherstellen"),
-                request.Path, BuildUndoRestorePackage(key, JsonSerializer.Serialize(request)),
-                request.MonitoredFolderId, reindexOriginal: true);
+            task = _scheduler.EnqueueDurableRecipeAsync(key, "undo-restore-v2",
+                JsonSerializer.Serialize(request), SchedulerPriority.ManualAction);
             _taskManagerWindow?.RequestRefresh();
         }
         catch (Exception ex)
@@ -111,9 +110,15 @@ public partial class MainWindow
         {
             token.ThrowIfCancellationRequested();
             _scheduler.ReportProgress(key,UiLanguage.T("Bild wiederherstellen"),0,1,request.Path);
-            new UndoHistoryService(UndoOptions.Load()).Restore(
-                request.Path,request.VersionId,token);
-            new BrowseCacheRepository(_database).InvalidateImage(request.ImageId);
+            PublishDurableImage(request.Path, request.Path, request.Fingerprint,
+                fingerprint =>
+                {
+                    request = request with { Fingerprint = fingerprint };
+                    PersistWriteRecipe(key, request);
+                },
+                beforePublish => new UndoHistoryService(UndoOptions.Load()).Restore(
+                    request.Path, request.VersionId, token, beforePublish), token);
+            ReindexDurableImage(request.ImageId, request.MonitoredFolderId, request.Path);
             _scheduler.ReportProgress(key,UiLanguage.T("Bild wiederherstellen"),1,1,request.Path);
             return Task.CompletedTask;
         });
