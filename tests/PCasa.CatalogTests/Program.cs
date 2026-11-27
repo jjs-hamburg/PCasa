@@ -4414,17 +4414,18 @@ internal static class Program
     private static void ImmediateInventoryAndFingerprint()
     {
         using var sandbox = new Sandbox();
-        var path = Path.Combine(sandbox.Images, "same-stamp.bmp");
-        void WriteBmp(byte value)
+        // Uncompressed TIFF guarantees equal file sizes and has a native libvips decoder.
+        var path = Path.Combine(sandbox.Images, "same-stamp.tif");
+        void WriteTiff(byte value)
         {
             var pixels = Enumerable.Repeat(value, 32 * 32 * 3).ToArray();
             var bitmap = BitmapSource.Create(32, 32, 96, 96, PixelFormats.Bgr24, null, pixels, 32 * 3);
-            var encoder = new BmpBitmapEncoder();
+            var encoder = new TiffBitmapEncoder { Compression = TiffCompressOption.None };
             encoder.Frames.Add(BitmapFrame.Create(bitmap));
             using var stream = File.Create(path);
             encoder.Save(stream);
         }
-        WriteBmp(40);
+        WriteTiff(40);
         var (db, root, scanner) = sandbox.Prepare();
         var called = false;
         var finished = false;
@@ -4434,8 +4435,9 @@ internal static class Program
             {
                 if (finished || change.Path != path)
                     throw new Exception("Discovery was postponed until inventory completion.");
-                if (scanner.ScanFile(root, change.Path).Updated != 1)
-                    throw new Exception("Immediate discovery was not indexed.");
+                var imported = scanner.ScanFile(root, change.Path);
+                if (imported.Updated != 1 || imported.Failed != 0)
+                    throw new Exception($"Immediate discovery failed: {imported}.");
                 called = true;
             });
         if (!called || !finished || result.Changes.Count != 0)
@@ -4444,20 +4446,24 @@ internal static class Program
         var cache = new BrowseCacheRepository(db);
         var old = cache.GetIndex(tier).Single();
         var before = new PhotoViewerImageRepository(db).Get(old.ImageId)!;
+        var expectedHash = SHA256.HashData(File.ReadAllBytes(path));
         if (before.ContentFingerprint is null ||
-            !before.ContentFingerprint.SequenceEqual(SHA256.HashData(File.ReadAllBytes(path))))
-            throw new Exception("Initial import did not store its content fingerprint.");
+            !before.ContentFingerprint.SequenceEqual(expectedHash))
+            throw new Exception($"Initial import fingerprint: expected {Convert.ToHexString(expectedHash)}, " +
+                $"actual {(before.ContentFingerprint is null ? "NULL" : Convert.ToHexString(before.ContentFingerprint))}, " +
+                $"catalog path {before.LocalPath}.");
         var stamp = File.GetLastWriteTimeUtc(path);
         var length = new FileInfo(path).Length;
-        WriteBmp(200);
+        WriteTiff(200);
         File.SetLastWriteTimeUtc(path, stamp);
         if (new FileInfo(path).Length != length)
             throw new Exception("Invalid same-stamp fixture.");
         var verified = PhotoViewerImageLoader.LoadVerified(before, 32, CancellationToken.None);
         if (before.ContentFingerprint.SequenceEqual(verified.Hash))
             throw new Exception("Viewer accepted unchanged stamp as unchanged pixels.");
-        if (scanner.ScanFile(root, path, forceContentRefresh: true).Updated != 1)
-            throw new Exception("Changed bytes did not force a full thumbnail rebuild.");
+        var rebuilt = scanner.ScanFile(root, path, forceContentRefresh: true);
+        if (rebuilt.Updated != 1 || rebuilt.Failed != 0)
+            throw new Exception($"Changed bytes did not force a full thumbnail rebuild: {rebuilt}.");
         var after = new PhotoViewerImageRepository(db).Get(old.ImageId)!;
         var replacement = cache.GetIndexEntry(tier, old.ImageId)!;
         if (after.ContentFingerprint is null || !after.ContentFingerprint.SequenceEqual(verified.Hash) ||
