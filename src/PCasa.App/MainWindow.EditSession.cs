@@ -326,7 +326,7 @@ public partial class MainWindow
         EditorToolTabs.IsEnabled = internalToolsEnabled;
         ViewerPanelLight.IsEnabled = internalToolsEnabled;
         ViewerPanelColor.IsEnabled = internalToolsEnabled;
-        ViewerPanelDetails.IsEnabled = internalToolsEnabled;
+        ViewerPanelDetail.IsEnabled = internalToolsEnabled;
         ViewerToolsList.Visibility = internalToolsVisible
             ? Visibility.Visible : Visibility.Collapsed;
         ViewerAutoToolsList.Visibility = internalToolsVisible
