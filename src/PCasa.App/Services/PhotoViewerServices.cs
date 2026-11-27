@@ -7,7 +7,8 @@ using PCasa.App.Data;
 namespace PCasa.App.Services;
 
 public sealed record PhotoViewerImageInfo(
-    long Id, string LocalPath, string FileName, int Width, int Height);
+    long Id, string LocalPath, string FileName, int Width, int Height,
+    byte[]? ContentFingerprint = null);
 
 public sealed class PhotoViewerImageRepository
 {
@@ -20,7 +21,7 @@ public sealed class PhotoViewerImageRepository
         using var connection = _database.OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText =
-            "SELECT local_path, file_name, width, height FROM images WHERE id = $id LIMIT 1;";
+            "SELECT local_path, file_name, width, height, content_sha256 FROM images WHERE id = $id LIMIT 1;";
         command.Parameters.AddWithValue("$id", imageId);
         using var reader = command.ExecuteReader();
         if (!reader.Read())
@@ -30,7 +31,8 @@ public sealed class PhotoViewerImageRepository
 
         return new PhotoViewerImageInfo(imageId,
             reader.GetString(0), reader.GetString(1),
-            reader.GetInt32(2), reader.GetInt32(3));
+            reader.GetInt32(2), reader.GetInt32(3),
+            reader.IsDBNull(4) ? null : (byte[])reader.GetValue(4));
     }
 }
 
@@ -47,10 +49,33 @@ public static class PhotoViewerImageLoader
         return LoadLocked(info, requiredSize, cancellationToken);
     }
 
+    public static (BitmapSource Bitmap, byte[] Hash) LoadVerified(
+        PhotoViewerImageInfo info, int requiredSize, CancellationToken token)
+    {
+        using var lease = SourceFileLocks.Enter(info.LocalPath, token);
+        using var input = new FileStream(info.LocalPath, FileMode.Open, FileAccess.Read,
+            FileShare.Read, 128 * 1024, FileOptions.SequentialScan);
+        // Common compressed formats share one NAS read between SHA-256 and WIC.
+        // Limit buffering; very large/other codecs use a streaming hash.
+        var ext = Path.GetExtension(info.LocalPath).ToLowerInvariant();
+        if (input.Length <= 128L * 1024 * 1024 &&
+            ext is ".jpg" or ".jpeg" or ".png" or ".bmp" or ".gif" or ".tif" or ".tiff")
+        {
+            var bytes = new byte[(int)input.Length];
+            input.ReadExactlyAsync(bytes.AsMemory(), token).GetAwaiter().GetResult();
+            var hash = System.Security.Cryptography.SHA256.HashData(bytes);
+            using var memory = new MemoryStream(bytes, writable: false);
+            return (LoadLocked(info, requiredSize, token, memory), hash);
+        }
+        var fingerprint = System.Security.Cryptography.SHA256.HashDataAsync(input, token)
+            .GetAwaiter().GetResult();
+        return (LoadLocked(info, requiredSize, token), fingerprint);
+    }
+
     private static BitmapSource LoadLocked(
         PhotoViewerImageInfo info,
         int requiredSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, Stream? verifiedInput = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var size = Math.Clamp(requiredSize, 1, 32768);
@@ -69,7 +94,7 @@ public static class PhotoViewerImageLoader
         {
             try
             {
-                using var input = new FileStream(
+                using var input = verifiedInput ?? new FileStream(
                     info.LocalPath,
                     FileMode.Open,
                     FileAccess.Read,
