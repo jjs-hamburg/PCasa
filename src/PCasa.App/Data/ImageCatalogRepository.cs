@@ -810,6 +810,19 @@ public sealed class CatalogScanSession : IDisposable
         RegisterWrite();
     }
 
+    public void SaveContentFingerprint(string canonicalPath, byte[] fingerprint)
+    {
+        ThrowIfDisposed();
+        EnsureTransaction();
+        using var cmd = _connection.CreateCommand();
+        cmd.Transaction = _transaction;
+        cmd.CommandText = "UPDATE images SET content_sha256=$hash WHERE canonical_path=$path;";
+        cmd.Parameters.AddWithValue("$path", canonicalPath);
+        cmd.Parameters.AddWithValue("$hash", fingerprint);
+        cmd.ExecuteNonQuery();
+        RegisterWrite();
+    }
+
     public void SaveExif(string canonicalPath, long ticks, long size, ImageExifData exif)
     {
         ThrowIfDisposed();
