@@ -529,6 +529,7 @@ public sealed class SchedulerTaskView
             "image-rename-v1" => UiLanguage.T("Bild umbenennen"),
             "folder-rename-v1" => UiLanguage.T("Ordner umbenennen"),
             "folder-filesystem-delete-v1" => UiLanguage.T("Ordner auf Datenträger löschen"),
+            "external-commit-v1" or "external-batch-commit-v1" => UiLanguage.T("Externe Bearbeitung"),
             "tag-recovery-v1" or "tag-recovery-v2" => UiLanguage.T("Tags wiederherstellen"),
             "manual-folder-scan-v1" => UiLanguage.T("Ordner aktualisieren"),
             "import-error-retry-v1" => UiLanguage.T("Erneut einlesen"),
