@@ -240,6 +240,13 @@ public partial class MainWindow
             BeginVisibleManualOperation(key, UiLanguage.T("EXIF-Datumsfelder speichern"), 1);
             _ = ObserveCaptureDatePackageAsync(completion, key);
         }
+        else if (key.StartsWith("folder:rename:", StringComparison.Ordinal) ||
+                 key.StartsWith("folder:filesystem-delete:", StringComparison.Ordinal))
+        {
+            BeginVisibleManualOperation(key, UiLanguage.T(key.StartsWith("folder:rename:",
+                StringComparison.Ordinal) ? "Ordner umbenennen" : "Ordner auf Datenträger löschen"), 1);
+            _ = ObserveRecoveredFolderMutationAsync(completion, key);
+        }
         else if (key.StartsWith("image:rename:", StringComparison.Ordinal))
         {
             BeginVisibleManualOperation(key, UiLanguage.T("Bild umbenennen"), 1);
