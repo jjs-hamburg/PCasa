@@ -29,7 +29,7 @@ public partial class MainWindow
 
     private bool EnsureEditSession()
     {
-        if (!_viewerOpen || _viewerImageInfo is not { } info ||
+        if (!_viewerOpen || !_viewerHasOriginal || _viewerImageInfo is not { } info ||
             PhotoViewerImage.Source is not BitmapSource bitmap ||
             _externalBatchReview is not null ||
             (_externalEditReview is not null &&
@@ -255,9 +255,9 @@ public partial class MainWindow
         // A disabled action is still visible; the histogram never jumps.
         CropApplyButton.Visibility = Visibility.Visible;
         ViewerToolCancelButton.IsEnabled = !_cropSavePending &&
-            (_cropActive || _straightenActive);
+            (editingTool);
         CropApplyButton.IsEnabled = !_cropSavePending &&
-            (_cropActive || _straightenActive);
+            (editingTool);
         CropSaveButton.IsEnabled = !_cropSavePending &&
             (_viewerImageInfo is null || !_pendingEditImageIds.Contains(_viewerImageInfo.Id)) &&
             (editingTool || _photoEditSession?.HasChanges == true);
@@ -277,7 +277,7 @@ public partial class MainWindow
             CropCancelButton.IsEnabled = ready;
             var canEditResult = CanEditPendingExternalResult(external.ImageId);
             CropApplyButton.IsEnabled = canEditResult &&
-                (_cropActive || _straightenActive);
+                (editingTool);
             ViewerToolCancelButton.IsEnabled = CropApplyButton.IsEnabled;
             CropUndoButton.IsEnabled = canEditResult &&
                 _photoEditSession?.CanUndo == true;
@@ -317,13 +317,16 @@ public partial class MainWindow
         // internal or external editing action. Topaz may temporarily own
         // editing rights, but it must not collapse tabs or select Quick.
         var internalToolsVisible = editable;
-        var internalToolsEnabled = editable &&
+        var internalToolsEnabled = _viewerHasOriginal && editable &&
             (noExternalEdit ||
              (_viewerImageInfo is { } readyImage &&
               CanEditPendingExternalResult(readyImage.Id)));
         EditorToolTabs.Visibility = internalToolsVisible
             ? Visibility.Visible : Visibility.Collapsed;
         EditorToolTabs.IsEnabled = internalToolsEnabled;
+        ViewerPanelLight.IsEnabled = internalToolsEnabled;
+        ViewerPanelColor.IsEnabled = internalToolsEnabled;
+        ViewerPanelDetails.IsEnabled = internalToolsEnabled;
         ViewerToolsList.Visibility = internalToolsVisible
             ? Visibility.Visible : Visibility.Collapsed;
         ViewerAutoToolsList.Visibility = internalToolsVisible
@@ -340,7 +343,7 @@ public partial class MainWindow
             _externalEditReview is { Ready: true, Busy: false, ResultPath: null };
         foreach (var card in ExternalEditorToolsList.Children.OfType<StackPanel>())
             foreach (var button in card.Children.OfType<Button>())
-                button.IsEnabled = canChooseAnotherEditor;
+                button.IsEnabled = _viewerHasOriginal && canChooseAnotherEditor;
         // Undo/Redo are internal actions too: show each only when it can
         // actually operate. Low-contrast disabled arrow glyphs are not a
         // usable availability cue for everyone.
