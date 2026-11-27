@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.IO;
+using System.Text.Json;
+using PCasa.App.Data;
 using System.Windows;
 using System.Windows.Controls;
 using PCasa.App.Models;
@@ -210,66 +212,125 @@ public partial class MainWindow
         var key = $"folder:filesystem-delete:{Guid.NewGuid():N}";
         try
         {
-            // The existing removal owner invalidates ongoing catalog scans,
-            // detaches the catalog and publishes the change. Never create
-            // a parallel SQLite deletion implementation.
-            await RemoveFolderFromPcasaAsync(owner.Id, path, root);
             BeginVisibleManualOperation(key, "Ordner auf Datenträger löschen", 1);
             try
             {
-                await _scheduler.EnqueueAsync(key, SchedulerPriority.ManualAction,
-                    token =>
-                    {
-                        token.ThrowIfCancellationRequested();
-                        _scheduler.ReportProgress(key, "Dateisystemordner löschen", 0, 1, path);
-                        // Recheck without trusting a stale TreeView selection.
-                        if (Path.GetPathRoot(path) is string driveRoot &&
-                            string.Equals(path.TrimEnd('\\'),
-                                driveRoot.TrimEnd('\\'),
-                                StringComparison.OrdinalIgnoreCase))
-                            throw new IOException("Laufwerks- und Freigabewurzeln dürfen nicht gelöscht werden.");
-                        if (!Directory.Exists(path))
-                            throw new DirectoryNotFoundException(
-                                "Der Ordner ist nicht erreichbar; er wurde nicht gelöscht: " + path);
-                        // Never traverse a junction, symbolic link or mount
-                        // point while performing an irreversible recursive delete.
-                        var stack = new Stack<string>();
-                        stack.Push(path);
-                        while (stack.Count > 0)
-                        {
-                            token.ThrowIfCancellationRequested();
-                            var current = stack.Pop();
-                            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                                throw new IOException("Verknüpfter Ordner wird nicht gelöscht: " + current);
-                            foreach (var child in Directory.EnumerateFileSystemEntries(current))
-                            {
-                                var attrs = File.GetAttributes(child);
-                                if ((attrs & FileAttributes.ReparsePoint) != 0)
-                                    throw new IOException(
-                                        "Ordner enthält eine Dateisystem-Verknüpfung: " + child);
-                                if ((attrs & FileAttributes.Directory) != 0)
-                                    stack.Push(child);
-                            }
-                        }
-                        token.ThrowIfCancellationRequested();
-                        Directory.Delete(path, recursive: true);
-                        _scheduler.ReportProgress(key, "Datenträgerordner gelöscht", 1, 1, path);
-                        return Task.CompletedTask;
-                    }, workKind: SchedulerWorkKind.SourceProbe);
+                await _scheduler.EnqueueDurableRecipeAsync(key, "folder-filesystem-delete-v1",
+                    JsonSerializer.Serialize(new FolderDeleteRecipe(owner.Id, path, root)),
+                    SchedulerPriority.ManualAction);
+                if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
+                await RefreshFolderMutationProjectionAsync();
             }
-            finally
-            {
-                EndVisibleManualOperation(key);
-            }
+            finally { EndVisibleManualOperation(key); }
             StatusText.Text = UiLanguage.T("Ordner dauerhaft gelöscht: ") + path;
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
+            if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
             PCasaDiagnostics.Write("FolderContext.PhysicalDelete", ex);
             PcasaDialog.Show(this,
                 UiLanguage.T("Der Dateisystemordner konnte nicht vollständig gelöscht werden. Die PCasa-Katalogentfernung wurde möglicherweise bereits durchgeführt.") + "\n\n" +
                 ex.Message, UiLanguage.T("Ordner löschen"), MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private sealed record FolderDeleteRecipe(long FolderId, string Path, bool RemoveRoot,
+        long? CreationTicks = null);
+
+    private SchedulerTaskPackage BuildFolderDeletePackage(string key, string payload)
+    {
+        var request = JsonSerializer.Deserialize<FolderDeleteRecipe>(payload)
+            ?? throw new InvalidDataException("Invalid folder deletion recipe.");
+        var package = new SchedulerTaskPackage(key);
+        package.AddStep(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            var path = request.Path;
+            _scheduler.ReportProgress(key, "Dateisystemordner löschen", 0, 1, path);
+            if (Path.GetPathRoot(path) is string driveRoot &&
+                string.Equals(path.TrimEnd('\\'), driveRoot.TrimEnd('\\'),
+                    StringComparison.OrdinalIgnoreCase))
+                throw new IOException("Laufwerks- und Freigabewurzeln dürfen nicht gelöscht werden.");
+
+            var roots = _folderRepository.GetAll();
+            if (roots.Any(entry => entry.Id != request.FolderId &&
+                FolderExclusionRules.IsAtOrBelow(entry.LocalPath, path)))
+                throw new IOException("Ein weiterer überwachter Stammordner liegt im Löschbereich.");
+            var owner = roots.FirstOrDefault(entry => entry.Id == request.FolderId);
+            if (owner is not null &&
+                (!FolderExclusionRules.IsAtOrBelow(path, owner.LocalPath) ||
+                 request.RemoveRoot != string.Equals(path, FolderExclusionRules.Normalize(owner.LocalPath),
+                     StringComparison.OrdinalIgnoreCase)))
+                throw new IOException("Löschbereich hat sich geändert.");
+
+            var presence = SourceFilePresence.Probe(path);
+            if (presence == FilePresence.ConfirmedMissing && request.CreationTicks.HasValue)
+            {
+                // A previous execution deleted the confirmed directory.
+                // Never delete anything on an unreachable source.
+            }
+            else
+            {
+                if (presence != FilePresence.Present || !Directory.Exists(path) ||
+                    (owner is null && (!request.RemoveRoot || !request.CreationTicks.HasValue)))
+                    throw new IOException("Der Ordner ist nicht erreichbar; er wurde nicht gelöscht: " + path);
+                var creation = Directory.GetCreationTimeUtc(path).Ticks;
+                if (request.CreationTicks is long prepared && creation != prepared)
+                    throw new IOException("Der Ordner wurde seit der Löschvorbereitung ersetzt: " + path);
+                // Validate the entire tree before any irreversible mutation.
+                var stack = new Stack<string>();
+                stack.Push(path);
+                while (stack.Count > 0)
+                {
+                    token.ThrowIfCancellationRequested();
+                    var current = stack.Pop();
+                    if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                        throw new IOException("Verknüpfter Ordner wird nicht gelöscht: " + current);
+                    foreach (var child in Directory.EnumerateFileSystemEntries(current))
+                    {
+                        var attrs = File.GetAttributes(child);
+                        if ((attrs & FileAttributes.ReparsePoint) != 0)
+                            throw new IOException("Ordner enthält eine Dateisystem-Verknüpfung: " + child);
+                        if ((attrs & FileAttributes.Directory) != 0) stack.Push(child);
+                    }
+                }
+                request = request with { CreationTicks = creation };
+                PersistWriteRecipe(key, request);
+            }
+            // Use the same atomic catalogue-domain removal as the normal
+            // exclusion/root-removal path; never recursively queue a second job.
+            if (owner is not null)
+            {
+                if (request.RemoveRoot)
+                    _folderRepository.Remove(request.FolderId);
+                else
+                    new FolderManagerSelectionService(_database)
+                        .ChangeExclusion(request.FolderId, path, true, token);
+            }
+            if (presence == FilePresence.Present)
+            {
+                token.ThrowIfCancellationRequested();
+                if (Directory.GetCreationTimeUtc(path).Ticks != request.CreationTicks)
+                    throw new IOException("Der Ordner wurde seit der Löschvorbereitung ersetzt: " + path);
+                Directory.Delete(path, recursive: true);
+            }
+            _scheduler.ReportProgress(key, "Datenträgerordner gelöscht", 1, 1, path);
+            return Task.CompletedTask;
+        });
+        return package;
+    }
+
+    private async Task RefreshFolderMutationProjectionAsync()
+    {
+        if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
+        _dropTargetProjection = await _galleryCatalogReader.ReadAsync(
+            _ => ReadFolderTreeConfigurationSnapshot());
+        if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
+        _dragTargetValidity.Clear();
+        await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
+        RefreshFolderTree(preserveGalleryAnchor: true);
+        RefreshBackgroundMonitor();
     }
 
     private void FolderContext_OpenExplorer_Click(object sender, RoutedEventArgs e)

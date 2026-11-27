@@ -270,6 +270,18 @@ public static class ExternalEditTransaction
         { PCasaDiagnostics.Write("ExternalEdit.CleanupPending", ex); }
     }
 
+    // Only a journaled accepted job calls this after verifying its published
+    // candidate hash. Never clean another active editor's workspace.
+    internal static void FinishPublished(ExternalEditSnapshot requested)
+    {
+        lock (Gate)
+        {
+            var active = ReadPending();
+            if (active is not null && active.Id == requested.Id)
+                Finish(active);
+        }
+    }
+
     private static void Finish(ExternalEditSnapshot session)
     {
         File.Delete(SessionFile);
@@ -492,7 +504,7 @@ public static class ExternalEditTransaction
         return ExternalCopyNames.NextAvailable(desired);
     }
 
-    private static void CopyAtomic(string source, string target,
+    internal static void CopyAtomic(string source, string target,
         bool replace, CancellationToken token,
         Action<long, long>? progress = null,
         DateTime? creationUtc = null, DateTime? modifiedUtc = null)
@@ -547,7 +559,8 @@ public static class ExternalEditTransaction
 
     public static string? Commit(ExternalEditSnapshot requested, string? result,
         ExternalEditDecision decision, CancellationToken token = default,
-        Action<long, long>? progress = null, UndoOptions? undoOptions = null)
+        Action<long, long>? progress = null, UndoOptions? undoOptions = null,
+        Action<string, string>? beforePublish = null)
     {
         lock (Gate)
         {
@@ -658,6 +671,7 @@ public static class ExternalEditTransaction
                         ExternalResultMetadata.CopyAll(session.OriginalPath, source, token);
                     // A crash after the replace but before cleanup must NOT
                     // produce a second Undo copy of the edited file.
+                    beforePublish?.Invoke(session.OriginalPath, Hash(source));
                     if (Hash(session.OriginalPath) != Hash(source))
                     {
                         if (OriginalChanged(session))
@@ -690,6 +704,7 @@ public static class ExternalEditTransaction
                     Finalizing = decision, FinalTarget = destination
                 };
                 if (session.Finalizing is null) WritePending(copying);
+                beforePublish?.Invoke(destination, Hash(source));
                 if (!File.Exists(destination))
                     CopyAtomic(source, destination, replace: false, token,
                         progress, originalCreatedUtc, sourceModifiedUtc);

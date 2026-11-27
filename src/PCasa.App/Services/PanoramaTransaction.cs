@@ -578,6 +578,10 @@ public static class PanoramaTransaction
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
         }
+        var privateResults = Path.Combine(session.Directory, ".pcasa-internal");
+        try { if (Directory.Exists(privateResults)) Directory.Delete(privateResults, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
         try { File.Delete(marker); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }

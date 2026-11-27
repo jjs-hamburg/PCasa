@@ -240,6 +240,44 @@ public partial class MainWindow
             BeginVisibleManualOperation(key, UiLanguage.T("EXIF-Datumsfelder speichern"), 1);
             _ = ObserveCaptureDatePackageAsync(completion, key);
         }
+        else if (key.StartsWith("external:commit:", StringComparison.Ordinal) ||
+                 key.StartsWith("external:batch-commit:", StringComparison.Ordinal))
+        {
+            BeginVisibleManualOperation(key, UiLanguage.T("Externe Bearbeitung"), 100);
+            _ = ObserveRecoveredExternalWriteAsync(completion, key);
+        }
+        else if (key.StartsWith("folder:rename:", StringComparison.Ordinal) ||
+                 key.StartsWith("folder:filesystem-delete:", StringComparison.Ordinal))
+        {
+            BeginVisibleManualOperation(key, UiLanguage.T(key.StartsWith("folder:rename:",
+                StringComparison.Ordinal) ? "Ordner umbenennen" : "Ordner auf Datenträger löschen"), 1);
+            _ = ObserveRecoveredFolderMutationAsync(completion, key);
+        }
+        else if (key.StartsWith("image:rename:", StringComparison.Ordinal))
+        {
+            BeginVisibleManualOperation(key, UiLanguage.T("Bild umbenennen"), 1);
+            _ = ObserveCaptureDatePackageAsync(completion, key);
+        }
+        else if (key.StartsWith("image:edit:", StringComparison.Ordinal))
+        {
+            var record = new DurablePackageJournal(_database).Pending().FirstOrDefault(p => p.Key == key);
+            if (record is not null && System.Text.Json.JsonSerializer.Deserialize<EditWriteRecipe>(record.Payload) is { } edit)
+            {
+                _pendingEditImageIds.Add(edit.ImageId);
+                BeginVisibleManualOperation(key, UiLanguage.T("Bildbearbeitung speichern"),
+                    edit.CopyPath is null ? 1 : 2);
+                _ = ObserveEditCommitAsync(completion, key, edit);
+            }
+        }
+        else if (key.StartsWith("undo:restore:", StringComparison.Ordinal))
+        {
+            var record = new DurablePackageJournal(_database).Pending().FirstOrDefault(p => p.Key == key);
+            if (record is not null && System.Text.Json.JsonSerializer.Deserialize<UndoRestoreRecipe>(record.Payload) is { } restore)
+            {
+                BeginVisibleManualOperation(key, UiLanguage.T("Bild wiederherstellen"), 1);
+                _ = ObserveUndoRestoreAsync(completion, key, restore);
+            }
+        }
         else if (key.StartsWith("image:gallery-rotation:", StringComparison.Ordinal))
         {
             var record = new DurablePackageJournal(_database).Pending().FirstOrDefault(p => p.Key == key);
@@ -1936,15 +1974,13 @@ public partial class MainWindow
         PicasaGalleryScrollBar.StopMotion();
         const double pixelsPerWheelNotch = 96.0;
         var movement = e.Delta / 120.0 * pixelsPerWheelNotch;
-        var previous = BrowseScrollViewer.VerticalOffset;
-        var target = Math.Clamp(
-            BrowseScrollViewer.VerticalOffset - movement,
-            0.0,
-            BrowseScrollViewer.ScrollableHeight);
-        BrowseScrollViewer.ScrollToVerticalOffset(target);
-        if (Math.Abs(previous - target) > 0.5)
-            RegisterGalleryUserScroll();
         e.Handled = true;
+        if (!PCasa.App.Controls.PicasaGalleryScrollBar.TryScrollTarget(
+                BrowseScrollViewer.VerticalOffset, BrowseScrollViewer.ScrollableHeight,
+                -movement, out var target))
+            return;
+        BrowseScrollViewer.ScrollToVerticalOffset(target);
+        RegisterGalleryUserScroll();
     }
 
     private void BrowseScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)

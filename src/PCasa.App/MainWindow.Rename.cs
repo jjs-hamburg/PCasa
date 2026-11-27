@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using PCasa.App.Services;
@@ -111,47 +112,71 @@ public partial class MainWindow
         BeginVisibleManualOperation(key, UiLanguage.T("Bild umbenennen"), 1);
         try
         {
-            var work = new SchedulerTaskPackage(key);
-            work.AddStep(token =>
-                {
-                    var root = _folderRepository.GetAll().Where(entry =>
-                        FolderExclusionRules.IsAtOrBelow(source, entry.LocalPath))
-                        .OrderByDescending(entry => entry.LocalPath.Length)
-                        .FirstOrDefault() ?? throw new IOException(
-                            "Bild liegt nicht in einem überwachten Ordner.");
-                    using var guard = SourceFileLocks.EnterPair(source, target, token);
-                    if (!File.Exists(source)) throw new FileNotFoundException(
-                        "Originaldatei ist nicht erreichbar.", source);
-                    if (File.Exists(target) || Directory.Exists(target))
-                        throw new IOException("Zieldatei existiert bereits: " + target);
-                    var intent = Guid.NewGuid().ToString("N");
-                    _imageCatalog.BeginRelocationIntent(intent, imageId, source, target, root.Id);
-                    File.Move(source, target);
-                    // This existing relocation path preserves image identity,
-                    // packed thumbnails, tags, GPS and every EXIF cache row.
-                    if (!_imageCatalog.RelocateImage(imageId, source, target, root,
-                            token, relocationIntentId: intent))
-                        throw new IOException(
-                            "Datei wurde umbenannt; Katalogaktualisierung ausstehend.");
-                    try
-                    {
-                        new UndoHistoryService(UndoOptions.Load())
-                            .RebaseSourcePaths(source, target, subtree: false);
-                    }
-                    catch (Exception ex)
-                    { PCasaDiagnostics.Write("Rename.ImageUndo", ex); }
-                    return Task.CompletedTask;
-                });
-            await StartDirectImageWrite(key, UiLanguage.T("Bild umbenennen"),
-                source, work, folderId: 0, reindexOriginal: false);
+            var request = new ImageRenameRecipe(imageId, source, target);
+            await _scheduler.EnqueueDurableRecipeAsync(key, "image-rename-v1",
+                JsonSerializer.Serialize(request), SchedulerPriority.ManualAction);
             if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: false);
             _ = RefreshRestoreBadgesAsync();
             StatusText.Text = UiLanguage.T("Umbenannt: ") + Path.GetFileName(target);
         }
-        catch (Exception ex) { ShowFileActionError(ex); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { if (!_shutdownStarted) ShowFileActionError(ex); }
         finally { EndVisibleManualOperation(key); }
+    }
+
+    private sealed record ImageRenameRecipe(long ImageId, string Path,
+        string Destination, string? OriginalHash = null);
+
+    private SchedulerTaskPackage BuildImageRenamePackage(string key, string payload)
+    {
+        var request = JsonSerializer.Deserialize<ImageRenameRecipe>(payload)
+            ?? throw new InvalidDataException("Invalid image rename recipe.");
+        var package = new SchedulerTaskPackage(key);
+        package.AddStep(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            var source = request.Path;
+            var target = request.Destination;
+            _scheduler.ReportProgress(key, UiLanguage.T("Bild umbenennen"), 0, 1, source);
+            var root = _folderRepository.GetAll().Where(entry =>
+                FolderExclusionRules.IsAtOrBelow(source, entry.LocalPath))
+                .OrderByDescending(entry => entry.LocalPath.Length)
+                .FirstOrDefault() ?? throw new IOException(
+                    "Bild liegt nicht in einem überwachten Ordner.");
+            using var guard = SourceFileLocks.EnterPair(source, target, token);
+            var sourcePresence = SourceFilePresence.Probe(source);
+            var targetPresence = SourceFilePresence.Probe(target);
+            var intent = key;
+            if (sourcePresence == FilePresence.Present &&
+                targetPresence == FilePresence.ConfirmedMissing &&
+                CatalogImageIdAtPath(source) == request.ImageId)
+            {
+                var hash = WriteHash(source);
+                if (request.OriginalHash is not null && hash != request.OriginalHash)
+                    throw new IOException("Rename source changed after preparation.");
+                request = request with { OriginalHash = hash };
+                PersistWriteRecipe(key, request);
+                if (!_imageCatalog.PendingRelocationIds().Contains(intent))
+                    _imageCatalog.BeginRelocationIntent(intent, request.ImageId, source, target, root.Id);
+                File.Move(source, target);
+            }
+            else if (sourcePresence != FilePresence.ConfirmedMissing ||
+                targetPresence != FilePresence.Present || request.OriginalHash is null ||
+                WriteHash(target) != request.OriginalHash)
+                throw new IOException("Unklarer oder inzwischen veränderter Dateizustand: " + source);
+
+            if (CatalogImageIdAtPath(target) != request.ImageId &&
+                !_imageCatalog.RelocateImage(request.ImageId, source, target, root,
+                    token, relocationIntentId: intent))
+                throw new IOException("Datei wurde umbenannt; Katalogaktualisierung ausstehend.");
+            new UndoHistoryService(UndoOptions.Load())
+                .RebaseSourcePaths(source, target, subtree: false);
+            _scheduler.ReportProgress(key, UiLanguage.T("Bild umbenennen"), 1, 1, target);
+            return Task.CompletedTask;
+        });
+        return package;
     }
 
     private async Task RenameFolderAsync(string source)
@@ -178,71 +203,10 @@ public partial class MainWindow
         BeginVisibleManualOperation(key, UiLanguage.T("Ordner umbenennen"), 1);
         try
         {
-            var (oldCanonical, newCanonical, renameReceiptId) =
-                await _scheduler.RunAsync(
-                key, SchedulerPriority.ManualAction, token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    var roots = _folderRepository.GetAll();
-                    var owner = roots.Where(entry =>
-                        FolderExclusionRules.IsAtOrBelow(source, entry.LocalPath))
-                        .OrderByDescending(entry => entry.LocalPath.Length)
-                        .FirstOrDefault() ?? throw new IOException(
-                            "Ordner liegt nicht innerhalb eines überwachten Bereichs.");
-                    if (!Directory.Exists(source))
-                        throw new DirectoryNotFoundException(
-                            "Quellordner nicht erreichbar: " + source);
-                    if (Directory.Exists(destination) || File.Exists(destination))
-                        throw new IOException("Zielordner existiert bereits: " + destination);
-                    var canonicalSource = FolderScanner.ResolveCanonicalFullPath(owner, source);
-                    var canonicalTarget = CatalogRenameService.CanonicalTarget(
-                        owner, source, destination);
-                    var rename = new CatalogRenameService(_database);
-                    var receiptId = Guid.NewGuid().ToString("N");
-                    // A durable receipt is written BEFORE Directory.Move.
-                    // A process crash after moving the folder but before
-                    // the SQLite commit is reconciled at next startup.
-                    rename.PrepareDirectoryRename(receiptId, source, destination,
-                        canonicalSource, canonicalTarget);
-                    try
-                    {
-                        token.ThrowIfCancellationRequested();
-                        Directory.Move(source, destination);
-                        // A single SQLite commit rebases all descendant
-                        // paths and marks the receipt catalog-applied.
-                        rename.RebaseDirectory(source, destination,
-                            canonicalSource, canonicalTarget, receiptId);
-                    }
-                    catch
-                    {
-                        try
-                        {
-                            // If the physical move completed but SQLite
-                            // failed, attempt to put the directory back.
-                            // If rollback ALSO fails, retain the receipt:
-                            // next startup will reconcile the moved tree.
-                            if (!Directory.Exists(source) &&
-                                Directory.Exists(destination))
-                                Directory.Move(destination, source);
-                            if (Directory.Exists(source) &&
-                                !Directory.Exists(destination))
-                                rename.AbortDirectoryRename(receiptId);
-                        }
-                        catch (Exception rollback)
-                        { PCasaDiagnostics.Write("Rename.FolderRollback", rollback); }
-                        throw;
-                    }
-                    return (canonicalSource, canonicalTarget, receiptId);
-                }, workKind: SchedulerWorkKind.Catalog);
-            RebaseRenamedTreePreferences(source, destination,
-                oldCanonical, newCanonical);
-            // Keep the receipt until the central Undo metadata has also been
-            // moved. This path runs only once; interrupted completion is
-            // replayed on next startup without touching thumbnail bytes.
-            await Task.Run(() => new UndoHistoryService(UndoOptions.Load())
-                .RebaseSourcePaths(source, destination, subtree: true));
-            new CatalogRenameService(_database)
-                .CompleteDirectoryRename(renameReceiptId);
+            await _scheduler.EnqueueDurableRecipeAsync(key, "folder-rename-v1",
+                JsonSerializer.Serialize(new FolderRenameRecipe(source, destination)),
+                SchedulerPriority.ManualAction);
+            if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
             // The current WPF nodes still carry OLD paths. The new tree must
             // use the just-rebased persisted expansion set rather than taking
             // an obsolete snapshot of those old UI node identities.
@@ -267,6 +231,98 @@ public partial class MainWindow
         }
         catch (Exception ex) { ShowFileActionError(ex); }
         finally { EndVisibleManualOperation(key); }
+    }
+
+    private sealed record FolderRenameRecipe(string Path, string Destination,
+        string? CanonicalSource = null, string? CanonicalTarget = null);
+
+    private SchedulerTaskPackage BuildFolderRenamePackage(string key, string payload)
+    {
+        var request = JsonSerializer.Deserialize<FolderRenameRecipe>(payload)
+            ?? throw new InvalidDataException("Invalid folder rename recipe.");
+        var package = new SchedulerTaskPackage(key);
+        package.AddStep(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            var source = request.Path;
+            var target = request.Destination;
+            var rename = new CatalogRenameService(_database);
+            var receipt = rename.PendingRenames().FirstOrDefault(row => row.Id == key);
+            var sourcePresence = SourceFilePresence.Probe(source);
+            var targetPresence = SourceFilePresence.Probe(target);
+            if (sourcePresence == FilePresence.Present &&
+                targetPresence == FilePresence.ConfirmedMissing &&
+                receipt?.CatalogApplied != true)
+            {
+                if (!Directory.Exists(source))
+                    throw new IOException("Rename source is not a directory.");
+                var owner = _folderRepository.GetAll().Where(entry =>
+                    FolderExclusionRules.IsAtOrBelow(source, entry.LocalPath))
+                    .OrderByDescending(entry => entry.LocalPath.Length)
+                    .FirstOrDefault() ?? throw new IOException(
+                        "Ordner liegt nicht innerhalb eines überwachten Bereichs.");
+                var canonicalSource = FolderScanner.ResolveCanonicalFullPath(owner, source);
+                var canonicalTarget = CatalogRenameService.CanonicalTarget(owner, source, target);
+                if (request.CanonicalSource is not null &&
+                    (!string.Equals(request.CanonicalSource, canonicalSource, StringComparison.OrdinalIgnoreCase) ||
+                     !string.Equals(request.CanonicalTarget, canonicalTarget, StringComparison.OrdinalIgnoreCase)))
+                    throw new IOException("Folder rename source changed after preparation.");
+                request = request with { CanonicalSource = canonicalSource, CanonicalTarget = canonicalTarget };
+                PersistWriteRecipe(key, request);
+                if (receipt is null)
+                    rename.PrepareDirectoryRename(key, source, target, canonicalSource, canonicalTarget);
+                token.ThrowIfCancellationRequested();
+                Directory.Move(source, target);
+                rename.RebaseDirectory(source, target, canonicalSource, canonicalTarget, key);
+            }
+            else if (sourcePresence == FilePresence.ConfirmedMissing &&
+                targetPresence == FilePresence.Present && Directory.Exists(target) &&
+                receipt is not null)
+            {
+                if (!receipt.CatalogApplied)
+                    rename.RebaseDirectory(source, target, receipt.CanonicalSource, receipt.CanonicalTarget, key);
+                request = request with { CanonicalSource = receipt.CanonicalSource,
+                    CanonicalTarget = receipt.CanonicalTarget };
+                PersistWriteRecipe(key, request);
+            }
+            else throw new IOException("Unklarer oder inzwischen veränderter Ordnerzustand: " + source);
+            _scheduler.ReportProgress(key, UiLanguage.T("Ordner umbenennen"), 1, 2, target);
+            return Task.CompletedTask;
+        });
+        package.AddStep(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            if (request.CanonicalSource is not { } oldCanonical ||
+                request.CanonicalTarget is not { } newCanonical)
+                throw new IOException("Folder rename receipt incomplete.");
+            new UndoHistoryService(UndoOptions.Load())
+                .RebaseSourcePaths(request.Path, request.Destination, subtree: true);
+            Dispatcher.Invoke(() => RebaseRenamedTreePreferences(request.Path,
+                request.Destination, oldCanonical, newCanonical));
+            var rename = new CatalogRenameService(_database);
+            if (rename.PendingRenames().Any(row => row.Id == key && row.CatalogApplied))
+                rename.CompleteDirectoryRename(key);
+            _scheduler.ReportProgress(key, UiLanguage.T("Ordner umbenennen"), 2, 2, request.Destination);
+            return Task.CompletedTask;
+        });
+        return package;
+    }
+
+    private async Task ObserveRecoveredFolderMutationAsync(Task completion, string key)
+    {
+        try
+        {
+            await completion;
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
+                await RefreshFolderMutationProjectionAsync();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { PCasaDiagnostics.Write("Folder.Mutation.Recovery", ex); }
+        finally
+        {
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
+                EndVisibleManualOperation(key);
+        }
     }
 
     private void RebaseRenamedTreePreferences(string oldPath, string newPath,

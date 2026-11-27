@@ -535,6 +535,7 @@
   "Ordner dauerhaft gelöscht: ": "Folder permanently deleted: ",
   "Ordner einschließlich sämtlicher Unterordner und Dateien DAUERHAFT auf dem Datenträger löschen?": "PERMANENTLY delete this folder, all its subfolders and all files from disk?",
   "Ordner einschließlich Unterordnern aus PCasa entfernen?\n\n{0}\n\n{1:N0} katalogisierte Bilder verschwinden sofort aus PCasa.\n": "Remove this folder and its subfolders from PCasa?\n\n{0}\n\n{1:N0} indexed images will immediately disappear from PCasa.\n",
+  "Ordner auf Datenträger löschen": "Delete folder from disk",
   "Ordner endgültig löschen": "Delete folder permanently",
   "Ordner entfernen": "Removing folder",
   "Ordner entfernt": "Folder removed",

@@ -62,8 +62,15 @@ public partial class MainWindow : Window
         _scheduler.RegisterDurablePackageType(RotationRecipeType, BuildGalleryRotationPackage);
         _scheduler.RegisterDurablePackageType("gpx-write-v1", BuildGpxWritePackage);
         _scheduler.RegisterDurablePackageType("undo-restore-v1", BuildUndoRestorePackage);
+        _scheduler.RegisterDurablePackageType("undo-restore-v2", BuildUndoRestorePackage);
         _scheduler.RegisterDurablePackageType("image-crop-v1", BuildCropPackage);
         _scheduler.RegisterDurablePackageType("image-edit-v1", BuildEditPackage);
+        _scheduler.RegisterDurablePackageType("image-edit-v2", BuildEditPackage);
+        _scheduler.RegisterDurablePackageType("image-rename-v1", BuildImageRenamePackage);
+        _scheduler.RegisterDurablePackageType("folder-rename-v1", BuildFolderRenamePackage);
+        _scheduler.RegisterDurablePackageType("folder-filesystem-delete-v1", BuildFolderDeletePackage);
+        _scheduler.RegisterDurablePackageType(ExternalCommitType, BuildExternalCommitPackage);
+        _scheduler.RegisterDurablePackageType(ExternalBatchCommitType, BuildExternalBatchCommitPackage);
         _scheduler.RegisterDurablePackageType("manual-folder-scan-v1", BuildManualFolderScanPackage);
         _scheduler.RegisterDurablePackageType("import-error-retry-v1", BuildImportErrorRetryPackage);
         _scheduler.RegisterDurablePackageType("manual-scan-all-v1", BuildScanAllPackage);
@@ -84,7 +91,9 @@ public partial class MainWindow : Window
                 new UndoHistoryService(UndoOptions.Load())
                     .RebaseSourcePaths(recovered.Source, recovered.Target,
                         subtree: true);
-                renameService.CompleteDirectoryRename(recovered.Id);
+                if (!new DurablePackageJournal(_database).Pending().Any(row =>
+                    row.Key == recovered.Id && row.Type == "folder-rename-v1"))
+                    renameService.CompleteDirectoryRename(recovered.Id);
                 PCasaDiagnostics.WriteMessage("Rename.FolderRecovered",
                     $"Completed interrupted folder rename {recovered.Source} -> {recovered.Target}");
             }
@@ -101,9 +110,14 @@ public partial class MainWindow : Window
         // Alpha.47: only the CURRENT process may own an external edit.
         // Abandoned files from a crash are discarded, never resurrected as
         // a task that would suspend the startup/background scanner.
-        try { ExternalEditTransaction.RetirePreviousProcessSession(); }
-        catch (Exception ex) { PCasaDiagnostics.Write("ExternalEdit.StartupCleanup", ex); }
-        RecoverExternalEditSchedulerLease();
+        // Accepted external results belong to durable jobs. Only abandoned,
+        // unconfirmed editor sessions may be retired on startup.
+        if (!HasPendingExternalWrites())
+        {
+            try { ExternalEditTransaction.RetirePreviousProcessSession(); }
+            catch (Exception ex) { PCasaDiagnostics.Write("ExternalEdit.StartupCleanup", ex); }
+            RecoverExternalEditSchedulerLease();
+        }
         _ = WarmExternalEditorIconsAsync();
         LogStartupStage("window-constructed");
     }

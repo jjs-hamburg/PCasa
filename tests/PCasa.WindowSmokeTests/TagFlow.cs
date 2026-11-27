@@ -275,27 +275,73 @@ internal static class TagFlow
                 gripFace.Effect is null)
                 throw new Exception("Picasa joystick lacks PCasa 3D shadow.");
 
+            // Wait for the startup viewport and queued WPF scroll commands
+            // before generating artificial input. ScrollToVerticalOffset
+            // posts a command; reading VerticalOffset immediately after it
+            // can still report the previous (bottom) position.
+            var galleryPublished = typeof(PCasa.App.MainWindow).GetField(
+                "_startupGalleryPublished",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            Until(window, () => galleryPublished.GetValue(window) is true,
+                "Gallery startup did not publish its viewport.");
             scroller.ScrollToVerticalOffset(0);
+            Until(window, () => scroller.VerticalOffset <= 0.01,
+                "Gallery did not reach its initial top position.");
             if (scroller.ScrollableHeight > 10)
             {
-                arrows[2].RaiseEvent(new RoutedEventArgs(
-                    ButtonBase.ClickEvent, arrows[2]));
-                Until(window, () => scroller.VerticalOffset >= 10,
-                    "Picasa line-down arrow did not scroll original gallery.");
-                picasaBar.StopMotion();
-                // The tiny synthetic gallery may already be at its lower
-                // boundary after the line step. Start the independent
-                // animated-page probe at the actual gallery beginning.
-                scroller.ScrollToVerticalOffset(0);
+                void ClickArrow(int index) => arrows[index].RaiseEvent(new RoutedEventArgs(
+                    ButtonBase.ClickEvent, arrows[index]));
+                void Wheel(int delta)
+                {
+                    var wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice,
+                        Environment.TickCount, delta)
+                    {
+                        RoutedEvent = UIElement.PreviewMouseWheelEvent
+                    };
+                    scroller.RaiseEvent(wheel);
+                    if (!wheel.Handled)
+                        throw new Exception("Gallery wheel was not consumed.");
+                }
+
+                ClickArrow(0);
+                ClickArrow(1);
+                Wheel(120);
                 window.UpdateLayout();
-                var beforePage = scroller.VerticalOffset;
-                arrows[3].RaiseEvent(new RoutedEventArgs(
-                    ButtonBase.ClickEvent, arrows[3]));
-                Until(window, () => scroller.VerticalOffset > beforePage + 1,
+                if (scroller.VerticalOffset > 0.01)
+                    throw new Exception("Outward input moved the gallery at its top.");
+                ClickArrow(2);
+                Until(window, () => scroller.VerticalOffset > 0,
+                    $"Picasa line-down arrow did not scroll original gallery; extent={scroller.ScrollableHeight}, viewport={scroller.ViewportHeight}.");
+                picasaBar.StopMotion();
+
+                scroller.ScrollToEnd();
+                Until(window, () => scroller.ScrollableHeight > 10 &&
+                    Math.Abs(scroller.VerticalOffset - scroller.ScrollableHeight) <= 0.01,
+                    "Gallery did not reach its bottom position.");
+                ClickArrow(2);
+                ClickArrow(3);
+                Wheel(-120);
+                window.UpdateLayout();
+                if (Math.Abs(scroller.VerticalOffset - scroller.ScrollableHeight) > 0.01)
+                    throw new Exception("Outward input moved the gallery at its bottom.");
+                Wheel(120);
+                Until(window, () => scroller.VerticalOffset < scroller.ScrollableHeight - 0.01,
+                    "Gallery did not accept immediate reversal at its bottom.");
+
+                // Start the independent animated-page probe at the actual top.
+                scroller.ScrollToVerticalOffset(0);
+                Until(window, () => scroller.VerticalOffset <= 0.01,
+                    "Gallery did not return to its top for page-down.");
+                ClickArrow(3);
+                Until(window, () => scroller.VerticalOffset > 1,
                     "Picasa animated page-down arrow did not scroll original gallery.");
                 picasaBar.StopMotion();
                 scroller.ScrollToVerticalOffset(0);
+                Until(window, () => scroller.VerticalOffset <= 0.01,
+                    "Gallery did not return to its top after page-down.");
             }
+            Console.WriteLine("PASS: Actual WPF gallery edges consume outward input and permit reversal.");
             Console.WriteLine("PASS: Picasa scrollbar retains the original ScrollViewer with four arrows and accelerated motion.");
 
             // The agreed default is Name ASCENDING, independently within

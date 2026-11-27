@@ -24,8 +24,9 @@ public static class JpegCropWriter
     /// before replacing the original. No sidecars.
     /// </summary>
     public static void Save(string originalPath,
-        IReadOnlyList<PhotoEditStep> operations, CancellationToken token)
-        => SaveCore(originalPath, null, operations, token);
+        IReadOnlyList<PhotoEditStep> operations, CancellationToken token,
+        Action<string>? beforePublish = null)
+        => SaveCore(originalPath, null, operations, token, beforePublish: beforePublish);
 
     // The destination name is picked outside the UI dispatcher and persisted
     // in the same durable edit recipe as the source image and the steps.
@@ -99,8 +100,9 @@ public static class JpegCropWriter
     }
 
     public static void SaveAsCopy(string originalPath, string copyPath,
-        IReadOnlyList<PhotoEditStep> operations, CancellationToken token)
-        => SaveCore(originalPath, copyPath, operations, token);
+        IReadOnlyList<PhotoEditStep> operations, CancellationToken token,
+        Action<string>? beforePublish = null)
+        => SaveCore(originalPath, copyPath, operations, token, beforePublish: beforePublish);
 
     // An external editor has not yet committed its result to the gallery.
     // Apply approved internal adjustments to that EXISTING isolated output,
@@ -232,6 +234,8 @@ public static class JpegCropWriter
             {
                 // File.Move never replaces an existing file. A racing
                 // process or durable retry therefore cannot destroy a copy.
+                beforePublish?.Invoke(staged);
+                token.ThrowIfCancellationRequested();
                 try { File.Move(staged, destination); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {

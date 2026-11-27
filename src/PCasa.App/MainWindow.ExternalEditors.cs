@@ -279,7 +279,7 @@ public partial class MainWindow
                     return;
             }
             if (_externalEditReview is not null || _externalEditLaunchPending ||
-                _panoramaSession is not null)
+                _panoramaSession is not null || HasPendingExternalWrites())
                 throw new InvalidOperationException(UiLanguage.T(
                     "Bitte die laufende externe Bearbeitung zuerst abschließen."));
             _externalEditLaunchPending = true;
@@ -645,7 +645,7 @@ public partial class MainWindow
         ExternalEditDecision decision, bool returnToGalleryAfterCancel = false)
     {
         var review = _externalEditReview;
-        if (review is null || !review.Ready || review.Busy) return false;
+        if (review is null || !review.Ready || review.Busy || HasPendingExternalWrites()) return false;
         // A crop/rotation/tonal adjustment to Topaz's displayed result
         // belongs to the SAME external Save/Copy/Cancel decision, not to a
         // second save request against the untouched original.
@@ -686,46 +686,27 @@ public partial class MainWindow
             string? committed;
             try
             {
-                committed = await _scheduler.RunAsync(saveKey,
-                    SchedulerPriority.ManualAction, token =>
-                    {
-                        var result = decision == ExternalEditDecision.Cancel ? null :
-                            review.InternalResultPath ??
-                            ExternalEditTransaction.DetectResult(review.Snapshot);
-                        if (result is not null && internalSteps.Length > 0 &&
-                            !review.InternalEditsStaged)
-                        {
-                            // An external re-export after the last visible
-                            // preview may not inherit the user's crop of the
-                            // PREVIOUS revision. Never apply it blindly.
-                            var detected = new FileInfo(result);
-                            if (!string.Equals(result, review.ResultPath,
-                                    StringComparison.OrdinalIgnoreCase) ||
-                                detected.Length != review.ResultSize ||
-                                detected.LastWriteTimeUtc != review.ResultWriteUtc)
-                                throw new IOException(
-                                    "Das externe Ergebnis wurde nach der internen Bearbeitung geändert. Bitte Ergebnis erneut prüfen.");
-                            var staged = JpegCropWriter.EditExternalWorkspaceResult(
-                                result, review.Snapshot.DirectoryPath,
-                                internalSteps, token);
-                            review.InternalResultPath = staged;
-                            review.InternalEditsStaged = true;
-                            result = staged;
-                        }
-                        _scheduler.ReportProgress(saveKey,
-                            UiLanguage.T("Externe Bearbeitung"), 0, 100,
-                            review.Snapshot.OriginalPath);
-                        var output = ExternalEditTransaction.Commit(review.Snapshot,
-                            result, decision, token,
-                            (done, total) => _scheduler.ReportProgress(saveKey,
-                                UiLanguage.T("Externe Bearbeitung"),
-                                total <= 0 ? 100 : (int)(done * 100 / total),
-                                100, review.Snapshot.OriginalPath));
-                        _scheduler.ReportProgress(saveKey,
-                            UiLanguage.T("Externe Bearbeitung"), 100, 100,
-                            review.Snapshot.OriginalPath);
-                        return output;
-                    }, workKind: SchedulerWorkKind.Catalog);
+                if (decision == ExternalEditDecision.Cancel)
+                {
+                    committed = await _scheduler.RunAsync(saveKey,
+                        SchedulerPriority.ManualAction, token =>
+                            ExternalEditTransaction.Commit(review.Snapshot, null, decision, token),
+                        workKind: SchedulerWorkKind.Catalog);
+                }
+                else
+                {
+                    var result = review.InternalResultPath ?? review.ResultPath
+                        ?? throw new IOException("Das externe Programm hat kein Ergebnis gespeichert.");
+                    var request = new ExternalCommitRecipe(review.ImageId, review.Snapshot,
+                        decision, result, review.ResultSize, review.ResultWriteUtc,
+                        review.InternalEditsStaged ? [] : internalSteps);
+                    var accepted = _scheduler.EnqueueDurableRecipeAsync(saveKey,
+                        ExternalCommitType, System.Text.Json.JsonSerializer.Serialize(request),
+                        SchedulerPriority.ManualAction);
+                    await accepted;
+                    if (_shutdownStarted || Dispatcher.HasShutdownStarted) return true;
+                    committed = ReadWriteRecipe<ExternalCommitRecipe>(saveKey).Target;
+                }
             }
             finally { EndVisibleManualOperation(saveKey); }
             // The file transaction is now complete, even if a subsequent
@@ -745,7 +726,8 @@ public partial class MainWindow
 
             try
             {
-                await RefreshExternalEditCatalogAsync(review, committed);
+                await RefreshExternalEditCatalogAsync(review, committed,
+                    alreadyIndexed: decision != ExternalEditDecision.Cancel);
             }
             catch (Exception ex)
             {
@@ -779,8 +761,10 @@ public partial class MainWindow
             _scheduler.NotifyTaskViewChanged();
             return true;
         }
+        catch (OperationCanceledException) when (_shutdownStarted || Dispatcher.HasShutdownStarted) { return true; }
         catch (Exception ex)
         {
+            if (_shutdownStarted || Dispatcher.HasShutdownStarted) return false;
             PCasaDiagnostics.Write("ExternalEdit.Commit", ex);
             PcasaDialog.Show(this, ex.Message,
                 UiLanguage.T("Externe Bearbeitung"),
@@ -795,7 +779,7 @@ public partial class MainWindow
     }
 
     private async Task RefreshExternalEditCatalogAsync(
-        ExternalEditReview review, string? committed)
+        ExternalEditReview review, string? committed, bool alreadyIndexed = false)
     {
         var original = review.Snapshot.OriginalPath;
         if (committed is null)
@@ -817,6 +801,8 @@ public partial class MainWindow
             return command.ExecuteScalar() is { } v
                 ? Convert.ToInt64(v) : 0L;
         });
+        if (!alreadyIndexed)
+        {
         var label = UiLanguage.T("Externe Bearbeitung katalogisieren");
         var key = "external:catalog:" + Guid.NewGuid().ToString("N");
         BeginVisibleManualOperation(key, label, committed is not null &&
@@ -868,6 +854,7 @@ public partial class MainWindow
                 });
         }
         finally { EndVisibleManualOperation(key); }
+        }
 
         _viewerOriginalCache.Remove(review.ImageId);
         _ = RefreshRestoreBadgesAsync();
