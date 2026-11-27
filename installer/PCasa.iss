@@ -22,7 +22,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 UsePreviousPrivileges=no
-UsePreviousAppDir=no
+UsePreviousAppDir=yes
 DisableDirPage=yes
 UninstallDisplayIcon={app}\PCasa.App.exe
 CloseApplications=yes
@@ -139,7 +139,7 @@ Source: "..\default-textures\*.jpg"; DestDir: "{localappdata}\PCasa\Texturen"; F
 Source: "Check-DesktopRuntime.ps1"; Flags: dontcopy
 
 [Registry]
-Root: HKCU; Subkey: "Software\\PCasa"; ValueType: string; ValueName: "PendingSetupLanguage"; ValueData: "{language}"
+Root: HKCU; Subkey: "Software\\PCasa"; ValueType: string; ValueName: "PendingSetupLanguage"; ValueData: "{language}"; Check: not IsUpgrade
 
 [Icons]
 Name: "{commonprograms}\PCasa"; Filename: "{app}\PCasa.App.exe"; Check: IsAllUsersSelected
@@ -149,6 +149,7 @@ Name: "{userdesktop}\PCasa"; Filename: "{app}\PCasa.App.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\PCasa.App.exe"; Description: "{cm:LaunchProgram,PCasa}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\\PCasa.App.exe"; Flags: nowait runasoriginaluser; Check: IsUpgrade
 
 [Code]
 function OldSelfContainedInstallation(): Boolean;
@@ -161,6 +162,11 @@ end;
 var
   RuntimeDownloadPage: TDownloadWizardPage;
   InstallScopePage: TInputOptionWizardPage;
+
+function IsUpgrade(): Boolean;
+begin
+  Result := Pos('/PCASAUPGRADE', UpperCase(GetCmdTail())) > 0;
+end;
 
 function IsAllUsersSelected(): Boolean;
 begin
