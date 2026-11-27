@@ -62,15 +62,43 @@ public partial class MainWindow
             GalleryReturnToDepartureButton.IsEnabled = false;
     }
 
+    private bool _restoringRememberedBookmark;
+
+    private void RestoreRememberedGalleryBookmark()
+    {
+        if (_appearance.BookmarkFolderId is not long folder ||
+            _appearance.BookmarkImageId is not long image) return;
+        _rememberedGalleryPosition = (folder, _appearance.BookmarkRelativeTop,
+            (image, _appearance.BookmarkImageRelativeY));
+        _restoringRememberedBookmark = true;
+        try
+        {
+            GalleryRememberPositionToggle.IsChecked = true;
+            GalleryRememberPositionToggle.ToolTip = UiLanguage.T("Gemerkte Position löschen");
+            GalleryReturnToRememberedButton.IsEnabled = true;
+        }
+        finally { _restoringRememberedBookmark = false; }
+    }
+
+    private void PersistRememberedGalleryBookmark()
+    {
+        _appearance.BookmarkFolderId = _rememberedGalleryPosition?.FolderId;
+        _appearance.BookmarkRelativeTop = _rememberedGalleryPosition?.RelativeTop ?? 0;
+        _appearance.BookmarkImageId = _rememberedGalleryPosition?.ImageAnchor?.ImageId;
+        _appearance.BookmarkImageRelativeY = _rememberedGalleryPosition?.ImageAnchor?.RelativeY ?? 0;
+        SaveAppearance();
+    }
+
     private void GalleryRememberPosition_Changed(object sender, RoutedEventArgs e)
     {
-        if (GalleryRememberPositionToggle is null ||
+        if (_restoringRememberedBookmark || GalleryRememberPositionToggle is null ||
             GalleryReturnToRememberedButton is null)
             return;
 
         if (GalleryRememberPositionToggle.IsChecked != true)
         {
             _rememberedGalleryPosition = null;
+            PersistRememberedGalleryBookmark();
             ClearBookmarkDeparture();
             GalleryReturnToRememberedButton.IsEnabled = false;
             GalleryRememberPositionToggle.ToolTip =
@@ -85,6 +113,7 @@ public partial class MainWindow
             return;
         }
         _rememberedGalleryPosition = position;
+        PersistRememberedGalleryBookmark();
         ClearBookmarkDeparture();
         GalleryRememberPositionToggle.ToolTip =
             UiLanguage.T("Gemerkte Position löschen");
