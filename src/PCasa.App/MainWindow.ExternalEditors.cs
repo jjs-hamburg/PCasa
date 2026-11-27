@@ -282,7 +282,7 @@ public partial class MainWindow
                     await PresentExternalResultAsync(previous);
                     return;
                 }
-                if (!previous.Combined || _photoEditSession?.HasChanges != true)
+                if (!previous.Combined)
                 {
                     if (!await CompleteExternalReviewAsync(ExternalEditDecision.Cancel)) return;
                     previous = null;
@@ -436,7 +436,7 @@ public partial class MainWindow
         finally
         {
             _externalEditLaunchPending = false;
-            if (_externalEditReview is { } current && !HasPendingExternalWrites()) current.Busy = false;
+            if (_externalEditReview is { } current) current.Busy = false;
             if (_cropToolsReady && !Dispatcher.HasShutdownStarted) UpdateEditControls();
         }
     }
@@ -678,10 +678,13 @@ public partial class MainWindow
                         // Cancel remains available until finalization begins.
                         PCasaDiagnostics.Write("ExternalEdit.Preview", ex);
                         previewFailed = true;
+                        if (_photoEditSession?.HasChanges != true)
+                            review.Combined = false; // Preserve legacy Save when preview cannot decode.
                     }
                 }
             }
-            if (review.Combined && result is null && _photoEditSession?.ImageId == review.ImageId)
+            if (review.Combined && result is null && _viewerHasOriginal &&
+                _viewerImageInfo?.Id == review.ImageId)
                 review.PreviewReady = true;
             StatusText.Text = previewFailed
                 ? UiLanguage.T("Vorschau nicht verfügbar; externes Ergebnis kann gespeichert werden.") +
