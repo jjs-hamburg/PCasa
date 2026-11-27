@@ -276,7 +276,8 @@ public sealed class UndoHistoryService
         }
     }
 
-    public void Restore(string originalPath, Guid versionId, CancellationToken token)
+    public void Restore(string originalPath, Guid versionId, CancellationToken token,
+        Action<string>? beforePublish = null)
     {
         var path = Path.GetFullPath(originalPath);
         if (!IsEditableImage(path))
@@ -300,6 +301,8 @@ public sealed class UndoHistoryService
                 // their archived complete original byte state unchanged.
                 if (Path.GetExtension(path).ToLowerInvariant() is ".jpg" or ".jpeg")
                     PreserveCurrentGpsAndTags(path,temp,token);
+                token.ThrowIfCancellationRequested();
+                beforePublish?.Invoke(temp);
                 token.ThrowIfCancellationRequested();
                 File.Move(temp,path,true);
             }
