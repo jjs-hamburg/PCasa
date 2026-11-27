@@ -18,6 +18,7 @@ public partial class MainWindow
         string? CopyPath = null, WriteFingerprint? Fingerprint = null);
 
     private PhotoEditSession? _photoEditSession;
+    private PhotoEditStep? _pendingAutomaticEdit;
     // The durable P0 recipe owns the pixels after enqueue. UI navigation may
     // continue; only a second write of the SAME image stays disabled.
     private readonly HashSet<long> _pendingEditImageIds = [];
@@ -95,9 +96,8 @@ public partial class MainWindow
     private void BeginStraighten()
     {
         if (!EnsureEditSession()) return;
-        if (_cropActive) EndCrop();
-        if (_brightnessActive) ApplyEditTool();
-        if (_advancedToneActive) ApplyEditTool();
+        if (_straightenActive) return;
+        DiscardLiveEditTool();
         _straightenPreviewBase = _photoEditSession!.Render();
         _straightenPreviewQuarterTurns = int.MinValue;
         _straightenActive = true;
@@ -250,9 +250,7 @@ public partial class MainWindow
             _photoEditSession?.CanUndo == true;
         CropRedoButton.IsEnabled = !_cropSavePending &&
             _photoEditSession?.CanRedo == true;
-        var editingTool = _cropActive || _straightenActive ||
-            (_brightnessActive && Math.Abs(_brightnessAmount) > .00001) ||
-            (_advancedToneActive && Math.Abs(_advancedToneAmount) > .00001);
+        var editingTool = GetPendingLiveEditStep() is not null;
         // Keep all four buttons in a fixed footprint below the histogram.
         // A disabled action is still visible; the histogram never jumps.
         CropApplyButton.Visibility = Visibility.Visible;
@@ -335,6 +333,8 @@ public partial class MainWindow
             (noExternalEdit ||
              (_viewerImageInfo is { } readyImage &&
               CanEditPendingExternalResult(readyImage.Id)));
+        ViewerToolDecisionRow.Visibility = internalToolsVisible
+            ? Visibility.Visible : Visibility.Collapsed;
         EditorToolTabs.Visibility = internalToolsVisible
             ? Visibility.Visible : Visibility.Collapsed;
         EditorToolTabs.IsEnabled = internalToolsEnabled;
@@ -384,6 +384,7 @@ public partial class MainWindow
     // existing Save/Undo transaction. All image pixels still use PhotoEditSession.Render.
     private PhotoEditStep? GetActiveEditStep()
     {
+        if (_pendingAutomaticEdit is not null) return _pendingAutomaticEdit;
         if (_cropActive)
         {
             var area = FitToImageAspect(_cropRect);
@@ -421,34 +422,46 @@ public partial class MainWindow
             ? step : null;
     }
 
+    private void DiscardLiveEditTool()
+    {
+        _pendingAutomaticEdit = null;
+        if (_cropActive) EndCrop();
+        if (_straightenActive) LeaveStraighten();
+        if (_brightnessActive) LeaveBrightness();
+        if (_advancedToneActive) LeaveAdvancedTone();
+        if (_photoEditSession is not null)
+        {
+            SetViewerBitmap(_photoEditSession.Render());
+            ApplyViewerImageLayout();
+        }
+        UpdateEditControls();
+    }
+
     private bool ApplyEditTool()
     {
         if (_photoEditSession is null) return false;
-        if (!_cropActive && !_straightenActive && !_brightnessActive &&
-            !_advancedToneActive) return false;
-        var step = GetActiveEditStep();
-        if (_cropActive && step is null) return false;
-        // Commit BEFORE Leave* updates comparison availability. Otherwise
-        // the live-preview-only comparison briefly resets and loses its mode.
-        if (step is not null)
-            _photoEditSession.Apply(step);
-        if (_cropActive) EndCrop();
-        else if (_straightenActive) LeaveStraighten();
-        else if (_brightnessActive) LeaveBrightness();
-        else if (_advancedToneActive) LeaveAdvancedTone();
-        SetViewerBitmap(_photoEditSession.Render());
-        ApplyViewerImageLayout();
-        UpdateEditControls();
+        var step = GetPendingLiveEditStep();
+        if (step is not null) _photoEditSession.Apply(step);
+        DiscardLiveEditTool();
         return true;
+    }
+
+    // The tool decision is distinct from exiting the editor or saving a file.
+    private void DecideLiveEditTool(bool apply)
+    {
+        var crop = _cropActive;
+        var straighten = _straightenActive;
+        if (apply) ApplyEditTool();
+        else DiscardLiveEditTool();
+        if (crop) BeginCrop();
+        else if (straighten) BeginStraighten();
+        // Slider panels are independent of draft state and remain selected.
     }
 
     private void MoveEditHistory(int direction)
     {
         if (_cropSavePending || _externalEditLaunchPending || _externalEditReview is { Busy: true } || _photoEditSession is null) return;
-        if (_cropActive) EndCrop();
-        if (_straightenActive) LeaveStraighten();
-        if (_brightnessActive) LeaveBrightness();
-        if (_advancedToneActive) LeaveAdvancedTone();
+        DiscardLiveEditTool();
         if (direction < 0) _photoEditSession.Undo();
         else _photoEditSession.Redo();
         SetViewerBitmap(_photoEditSession.Render());
@@ -478,6 +491,7 @@ public partial class MainWindow
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) LeaveBrightness();
         if (_advancedToneActive) LeaveAdvancedTone();
+        _pendingAutomaticEdit = null;
         var original = _photoEditSession?.Original;
         _photoEditSession = null;
         if (original is not null)
@@ -516,9 +530,7 @@ public partial class MainWindow
         }
         if (_cropSavePending || _viewerImageInfo is not { } info ||
             _pendingEditImageIds.Contains(info.Id)) return;
-        if (_cropActive || _straightenActive || _brightnessActive ||
-            _advancedToneActive)
-            if (!ApplyEditTool()) return;
+        if (GetPendingLiveEditStep() is not null && !ApplyEditTool()) return;
         if (_photoEditSession is not { HasChanges: true } session ||
             session.ImageId != info.Id) return;
 
