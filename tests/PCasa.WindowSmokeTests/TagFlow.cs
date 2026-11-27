@@ -104,8 +104,8 @@ internal static class TagFlow
                 update.Parameters.AddWithValue("$a", a.Id);
                 update.ExecuteNonQuery();
             }
-            // A controlled UI test should not run an independent folder monitor.
-            new BackgroundScanSettings { Enabled = false }.Save();
+            // Monitoring is always enabled for registered roots since Alpha.40.
+            // Offline-file fixtures must not send real deletion/rename events.
 
             var app = new PCasa.App.App();
             app.InitializeComponent();
@@ -283,8 +283,18 @@ internal static class TagFlow
                 "_startupGalleryPublished",
                 System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)!;
-            Until(window, () => galleryPublished.GetValue(window) is true,
-                "Gallery startup did not publish its viewport.");
+            var pendingAnchorField = typeof(PCasa.App.MainWindow).GetField(
+                "_pendingGalleryAnchor",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var restoringAnchorField = typeof(PCasa.App.MainWindow).GetField(
+                "_restoringGalleryLayoutAnchor",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            Until(window, () => galleryPublished.GetValue(window) is true &&
+                pendingAnchorField.GetValue(window) is null &&
+                restoringAnchorField.GetValue(window) is false,
+                "Gallery startup and queued thumbnail reflow did not settle.");
             scroller.ScrollToVerticalOffset(0);
             Until(window, () => scroller.VerticalOffset <= 0.01,
                 "Gallery did not reach its initial top position.");
@@ -310,9 +320,21 @@ internal static class TagFlow
                 window.UpdateLayout();
                 if (scroller.VerticalOffset > 0.01)
                     throw new Exception("Outward input moved the gallery at its top.");
+                // Deliberately queue an obsolete top anchor before the
+                // real user click. The scrollbar must invalidate it
+                // synchronously, before WPF processes ScrollToVerticalOffset.
+                var topAnchor = surface.CaptureImageAnchor(0)
+                    ?? throw new Exception("Gallery has no top image anchor.");
+                pendingAnchorField.SetValue(window, topAnchor);
+                restoringAnchorField.SetValue(window, true);
+                var lineTarget = surface.GetNextImageRowCaptionOffset(
+                    scroller.VerticalOffset, scroller.ViewportHeight);
                 ClickArrow(2);
+                if (pendingAnchorField.GetValue(window) is not null ||
+                    restoringAnchorField.GetValue(window) is true)
+                    throw new Exception("Real scrollbar input did not supersede the obsolete layout anchor.");
                 Until(window, () => scroller.VerticalOffset > 0,
-                    $"Picasa line-down arrow did not scroll original gallery; extent={scroller.ScrollableHeight}, viewport={scroller.ViewportHeight}.");
+                    $"Picasa line-down arrow did not scroll original gallery; target={lineTarget}, extent={scroller.ScrollableHeight}, viewport={scroller.ViewportHeight}.");
                 picasaBar.StopMotion();
 
                 scroller.ScrollToEnd();
@@ -2675,14 +2697,17 @@ internal static class TagFlow
             const string recoveredTag = "Recovered P0 Tag";
             const string unavailableTag = "Offline P0 Tag";
             var unavailableImage = Path.Combine(albumA, "a-01-topaz.jpg");
-            var hiddenOriginal = unavailableImage + ".unreachable";
             var repoForRecovery = new ImageTagRepository(db);
             if (repoForRecovery.QueueTagEdit(
                     new[] { editorIds[0] }, recoveredTag, false) != 1 ||
                 repoForRecovery.QueueTagEdit(
                     new[] { editorIds[1] }, unavailableTag, false) != 1)
                 throw new Exception("Cannot seed the durable tag recovery test.");
-            File.Move(unavailableImage, hiddenOriginal);
+            // A rename is a genuine deletion event for the always-on watcher.
+            // Simulate an unavailable existing original with an exclusive
+            // Windows handle, keeping its catalog ID and pending revisions.
+            using var unavailableHandle = new FileStream(unavailableImage,
+                FileMode.Open, FileAccess.Read, FileShare.None);
             // Red folder markers are driven ONLY by pending_tag_edits.
             // Recompute once for our synthetic test setup; all later
             // transitions must refresh themselves from scheduler callbacks.
@@ -2754,7 +2779,7 @@ internal static class TagFlow
                     throw new Exception(
                         "Red pending-tag marker disappeared although one original was still offline.");
 
-                File.Move(hiddenOriginal, unavailableImage);
+                unavailableHandle.Dispose();
                 // Recreate the exact same versioned recipe. Persisted DB
                 // revisions, not a newly staged tag edit, are replayed.
                 var resumed = scheduler.EnqueueDurablePackageAsync(
@@ -2793,8 +2818,7 @@ internal static class TagFlow
             }
             finally
             {
-                if (File.Exists(hiddenOriginal) && !File.Exists(unavailableImage))
-                    File.Move(hiddenOriginal, unavailableImage);
+                unavailableHandle.Dispose();
             }
 
 

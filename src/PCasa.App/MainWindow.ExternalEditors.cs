@@ -182,6 +182,9 @@ public partial class MainWindow
         // True ONLY after the actual external-result pixels are displayed.
         // A failed preview must never make tools edit the old source image.
         public bool PreviewReady { get; set; }
+        // Still-image sessions have one cursor spanning external and internal steps.
+        public bool Combined { get; set; }
+        public bool AwaitingReturn { get; set; }
         // The shared full-resolution writer stages these steps only ONCE.
         // Retrying a failed outer file commit must not crop twice.
         public bool InternalEditsStaged { get; set; }
@@ -195,7 +198,10 @@ public partial class MainWindow
             { Ready: true, Busy: false, PreviewReady: true,
               InternalEditsStaged: false, ResultPath: string path } review &&
            review.ImageId == imageId &&
-           EditableImageFormats.Supports(path);
+           EditableImageFormats.Supports(path) ||
+           _externalEditReview is { Combined: true, Ready: true, Busy: false,
+               PreviewReady: true, AwaitingReturn: false } combined && combined.ImageId == imageId &&
+           EditableImageFormats.Supports(_photoEditSession?.LatestExternalPath ?? combined.Snapshot.OriginalPath);
     private IDisposable? _externalEditSchedulerLease;
     private bool _externalEditLaunchPending;
 
@@ -260,14 +266,15 @@ public partial class MainWindow
 
     private async Task StartExternalEditorAsync(long id, ExternalEditorProgram? editor)
     {
+        if (_externalEditLaunchPending) return;
+        _externalEditLaunchPending = true;
         try
         {
-            if (_externalEditReview is { Ready: true, Busy: false, ResultPath: null } previous)
+            var previous = _externalEditReview;
+            if (previous is { Ready: true, Busy: false, ResultPath: null })
             {
-                // Selecting another editor is an explicit switch, without
-                // forcing the user to click the separate Cancel footer.
-                // Never discard an exported result that has not yet been
-                // presented after a focus change.
+                // An export that arrived since activation belongs to the
+                // existing cursor. Present it before allowing another launch.
                 var output = await Task.Run(() =>
                     ExternalEditTransaction.DetectResult(previous.Snapshot));
                 if (output is not null)
@@ -275,36 +282,49 @@ public partial class MainWindow
                     await PresentExternalResultAsync(previous);
                     return;
                 }
-                if (!await CompleteExternalReviewAsync(ExternalEditDecision.Cancel))
-                    return;
+                if (!previous.Combined)
+                {
+                    if (!await CompleteExternalReviewAsync(ExternalEditDecision.Cancel)) return;
+                    previous = null;
+                }
             }
-            if (_externalEditReview is not null || _externalEditLaunchPending ||
-                _panoramaSession is not null || HasPendingExternalWrites())
+            if ((previous is not null && (!previous.Combined || previous.ImageId != id ||
+                    previous.Busy || !previous.PreviewReady || previous.AwaitingReturn)) ||
+                _externalReviewRefreshing || _panoramaSession is not null || HasPendingExternalWrites())
                 throw new InvalidOperationException(UiLanguage.T(
                     "Bitte die laufende externe Bearbeitung zuerst abschließen."));
-            _externalEditLaunchPending = true;
-            var source = (await SelectedGalleryPathsAsync([id])).FirstOrDefault();
+            var source = previous?.Snapshot.OriginalPath ??
+                (await SelectedGalleryPathsAsync([id])).FirstOrDefault();
             if (string.IsNullOrWhiteSpace(source)) return;
-            if (editor is null || !editor.Matches(source))
+            var edit = _photoEditSession?.ImageId == id ? _photoEditSession : null;
+            if (_viewerOpen && (!_viewerHasOriginal || _viewerImageInfo?.Id != id)) return;
+            // Only accepted steps are handed off. The user can Apply or
+            // Cancel the active adjustment before choosing another editor.
+            if (GetPendingLiveEditStep() is not null) return;
+            if (editor is null || !editor.Matches(edit?.LatestExternalPath ?? source))
                 throw new InvalidOperationException(UiLanguage.T(
                     "Dieses Programm ist für das Dateiformat nicht konfiguriert."));
             if (_cropSavePending || _pendingEditImageIds.Contains(id) ||
                 await HasUnfinishedImageEditAsync(id))
                 throw new InvalidOperationException(UiLanguage.T(
                     "Für dieses Bild ist ein Speicherauftrag noch nicht abgeschlossen. Bitte im Taskmanager prüfen."));
-            if (_viewerOpen && !ConfirmCropExit()) return;
-
+            if (_cropActive) EndCrop();
+            if (_straightenActive) LeaveStraighten();
+            if (_brightnessActive) LeaveBrightness();
+            if (_advancedToneActive) LeaveAdvancedTone();
+            var steps = edit?.AppliedSteps.ToArray() ?? [];
+            // Freeze tools while the immutable input is prepared and launched.
+            if (previous is not null) previous.Busy = true;
+            UpdateEditControls();
             EnsureExternalReviewActivationHook();
             StatusText.Text = UiLanguage.T(
                 "Externe Bearbeitung: automatische Einlesevorgänge anhalten …");
             SuspendSchedulerForExternalEdit();
-            // Reopening the same image after a crash restores the durable
-            // review. A different image is blocked by Begin's manifest gate.
             var pending = await Task.Run(() => ExternalEditTransaction.FindPending(source));
-            if (pending is not null)
+            if (pending is not null && previous is null)
             {
                 var old = new ExternalEditReview(pending, id, editor.Name,
-                    VideoFormats.IsVideo(source)) { Ready = true };
+                    VideoFormats.IsVideo(source)) { Ready = true, Combined = !VideoFormats.IsVideo(source) };
                 _externalEditReview = old;
                 await PresentExternalResultAsync(old);
                 return;
@@ -318,18 +338,22 @@ public partial class MainWindow
             {
                 snapshot = await _scheduler.RunAsync(stageKey,
                     SchedulerPriority.ManualAction,
-                    token => ExternalEditTransaction.Begin(source, token,
+                    token => previous is not null
+                        ? ExternalEditTransaction.PrepareNextInput(previous.Snapshot, steps,
+                            editor.ExchangeDirectory, token)
+                        : ExternalEditTransaction.Begin(source, token,
                         (completed, total) => _scheduler.ReportProgress(stageKey,
                             UiLanguage.T("Lokale Arbeitskopie erstellen …"),
                             total <= 0 ? 100 : (int)(completed * 100 / total),
-                            100, source), editor.ExchangeDirectory),
+                            100, source), editor.ExchangeDirectory, steps),
                     workKind: SchedulerWorkKind.Catalog);
             }
             finally { EndVisibleManualOperation(stageKey); }
             if (Dispatcher.HasShutdownStarted) return; // Manifest survives crash.
 
             var review = new ExternalEditReview(snapshot, id, editor.Name,
-                VideoFormats.IsVideo(source)) { Ready = true };
+                VideoFormats.IsVideo(source)) { Ready = true,
+                    Combined = !VideoFormats.IsVideo(source), AwaitingReturn = true };
             // A fresh external session always supersedes the earlier session's
             // before/after comparison for this viewer identity.
             if (_latestExternalComparison?.ImageId == id)
@@ -375,10 +399,19 @@ public partial class MainWindow
                 // removes only the local work directory; source is untouched.
                 if (ReferenceEquals(_externalEditReview, review))
                 {
-                    await Task.Run(() => ExternalEditTransaction.Commit(
-                        snapshot, null, ExternalEditDecision.Cancel));
-                    _externalEditReview = null;
-                    ResumeSchedulerAfterExternalEdit();
+                    if (previous is not null || steps.Length > 0)
+                    {
+                        // A failed launch may not discard earlier accepted edits.
+                        review.AwaitingReturn = false;
+                        review.PreviewReady = true;
+                    }
+                    else
+                    {
+                        await Task.Run(() => ExternalEditTransaction.Commit(
+                            snapshot, null, ExternalEditDecision.Cancel));
+                        _externalEditReview = null;
+                        ResumeSchedulerAfterExternalEdit();
+                    }
                     UpdateEditControls();
                 }
                 throw;
@@ -400,7 +433,12 @@ public partial class MainWindow
             }
             ShowFileActionError(ex);
         }
-        finally { _externalEditLaunchPending = false; }
+        finally
+        {
+            _externalEditLaunchPending = false;
+            if (_externalEditReview is { } current) current.Busy = false;
+            if (_cropToolsReady && !Dispatcher.HasShutdownStarted) UpdateEditControls();
+        }
     }
 
     private bool _unchangedExternalReleasePending;
@@ -408,6 +446,7 @@ public partial class MainWindow
     private async Task ReleaseUnchangedExternalEditorAsync(
         ExternalEditReview review, Action continueAfterRelease)
     {
+        if (review.Combined && _photoEditSession?.HasChanges == true) return;
         if (_unchangedExternalReleasePending ||
             !ReferenceEquals(_externalEditReview, review) ||
             !review.Ready || review.Busy || review.ResultPath is not null)
@@ -516,6 +555,10 @@ public partial class MainWindow
                 var f = new FileInfo(result);
                 return (Length: f.Length, Time: f.LastWriteTimeUtc);
             }) : (Length: 0L, Time: DateTime.MinValue);
+            // An active tool owns its live preview. Delay newly arriving exports
+            // until that tool has been accepted or canceled.
+            if (review.Combined && GetPendingLiveEditStep() is not null) return;
+            review.AwaitingReturn = false;
             var changed = !string.Equals(result, review.ResultPath,
                     StringComparison.OrdinalIgnoreCase) ||
                 (result is not null && (metadata.Length != review.ResultSize ||
@@ -526,7 +569,7 @@ public partial class MainWindow
                 // A fresh Topaz export supersedes any local edits made to
                 // the previous result. A committed external session never
                 // shares the old edit-buffer identity with a new result.
-                if (_photoEditSession?.ImageId == review.ImageId)
+                if (!review.Combined && _photoEditSession?.ImageId == review.ImageId)
                     _photoEditSession = null;
                 // An editor re-export invalidates the private internal copy;
                 // never import old straighten/crop steps over newer pixels.
@@ -573,27 +616,57 @@ public partial class MainWindow
                     BrowseSurface_ImageOpened(BrowseSurface,
                         new PCasa.App.Controls.BrowseImageClickedEventArgs(
                             review.ImageId, System.Windows.Input.ModifierKeys.None));
-                if (changed && result is not null && _viewerOpen &&
+                if ((changed || !review.PreviewReady) && result is not null && _viewerOpen &&
                     _viewerSequence is not null && _viewerCurrentIndex >= 0 &&
                     _viewerSequence.At(_viewerCurrentIndex).ImageId == review.ImageId)
                 {
                     try
                     {
                         var size = GetViewerRequiredPixelSize();
+                        var historyPath = review.Combined ? await Task.Run(() =>
+                            ExternalEditTransaction.CaptureHistoryResult(review.Snapshot, result,
+                                metadata.Length, metadata.Time)) : result;
                         var bitmap = await Task.Run(() =>
                         {
-                            var (width, height) = EditableImageFormats.Dimensions(result);
+                            var (width, height) = EditableImageFormats.Dimensions(historyPath);
                             return PhotoViewerImageLoader.Load(
-                                new PhotoViewerImageInfo(review.ImageId, result,
-                                    Path.GetFileName(result), width, height),
+                                new PhotoViewerImageInfo(review.ImageId, historyPath,
+                                    Path.GetFileName(historyPath), width, height),
                                 size, CancellationToken.None);
                         });
-                        if (!ReferenceEquals(_externalEditReview, review)) return;
+                        BitmapSource? originalPixels = null;
+                        if (review.Combined && _photoEditSession?.ImageId != review.ImageId)
+                            originalPixels = await Task.Run(() =>
+                            {
+                                var originalPath = review.Snapshot.BeforePath;
+                                var dimensions = EditableImageFormats.Dimensions(originalPath);
+                                return PhotoViewerImageLoader.Load(new PhotoViewerImageInfo(review.ImageId,
+                                    originalPath, Path.GetFileName(originalPath), dimensions.Width,
+                                    dimensions.Height), size, CancellationToken.None);
+                            });
+                        var originalInfo = _viewerImageInfo ?? await Task.Run(() =>
+                            new PhotoViewerImageRepository(_database).Get(review.ImageId));
+                        if (!ReferenceEquals(_externalEditReview, review) || !_viewerOpen ||
+                            _viewerSequence is null || _viewerCurrentIndex < 0 ||
+                            _viewerSequence.At(_viewerCurrentIndex).ImageId != review.ImageId) return;
                         _viewerDecodeCancellation?.Cancel();
                         ++_viewerImageRequest;
-                        _photoEditSession = null;
+                        _viewerPendingOriginalImageId = null;
+                        _viewerPendingOriginalPixels = 0;
+                        _viewerImageInfo = originalInfo;
+                        if (review.Combined)
+                        {
+                            if (_photoEditSession?.ImageId != review.ImageId)
+                                _photoEditSession = new PhotoEditSession(review.ImageId, originalPixels!);
+                            _photoEditSession.Apply(new PhotoEditStep("external", ExternalPath: historyPath,
+                                ExternalName: review.Name));
+                        }
+                        else _photoEditSession = null;
+                        ResetEditComparison();
                         SetViewerBitmap(bitmap);
+                        _viewerHasOriginal = true;
                         review.PreviewReady = true;
+                        SetViewerQualityMessage(null);
                         ApplyViewerImageLayout();
                     }
                     catch (Exception ex)
@@ -605,9 +678,14 @@ public partial class MainWindow
                         // Cancel remains available until finalization begins.
                         PCasaDiagnostics.Write("ExternalEdit.Preview", ex);
                         previewFailed = true;
+                        if (_photoEditSession?.HasChanges != true)
+                            review.Combined = false; // Preserve legacy Save when preview cannot decode.
                     }
                 }
             }
+            if (review.Combined && result is null && _viewerHasOriginal &&
+                _viewerImageInfo?.Id == review.ImageId)
+                review.PreviewReady = true;
             StatusText.Text = previewFailed
                 ? UiLanguage.T("Vorschau nicht verfügbar; externes Ergebnis kann gespeichert werden.") +
                     " · " + Path.GetFileName(result)
@@ -646,6 +724,8 @@ public partial class MainWindow
     {
         var review = _externalEditReview;
         if (review is null || !review.Ready || review.Busy || HasPendingExternalWrites()) return false;
+        if (review.Combined && decision != ExternalEditDecision.Cancel &&
+            (!review.PreviewReady || review.AwaitingReturn || _externalReviewRefreshing)) return false;
         // A crop/rotation/tonal adjustment to Topaz's displayed result
         // belongs to the SAME external Save/Copy/Cancel decision, not to a
         // second save request against the untouched original.
@@ -662,7 +742,9 @@ public partial class MainWindow
         PhotoEditStep[] internalSteps = decision == ExternalEditDecision.Cancel ||
             _photoEditSession?.ImageId != review.ImageId
             ? [] : _photoEditSession.AppliedSteps.ToArray();
+        if (review.Combined && decision != ExternalEditDecision.Cancel && internalSteps.Length == 0) return false;
         review.Busy = true;
+        _cropSavePending = review.Combined && decision != ExternalEditDecision.Cancel;
         UpdateEditControls();
         try
         {
@@ -695,14 +777,44 @@ public partial class MainWindow
                 }
                 else
                 {
-                    var result = review.InternalResultPath ?? review.ResultPath
-                        ?? throw new IOException("Das externe Programm hat kein Ergebnis gespeichert.");
-                    var request = new ExternalCommitRecipe(review.ImageId, review.Snapshot,
-                        decision, result, review.ResultSize, review.ResultWriteUtc,
-                        review.InternalEditsStaged ? [] : internalSteps);
+                    ExternalCommitRecipe request;
+                    if (review.Combined)
+                    {
+                        // Resolve the current cursor into ONE private full-resolution
+                        // result before the durable final-save admission. No history
+                        // file is required by the accepted recipe or its restart.
+                        request = await _scheduler.RunAsync(saveKey + ":prepare",
+                            SchedulerPriority.ManualAction, token =>
+                            {
+                                var snapshot = ExternalEditTransaction.FindPending(review.Snapshot.OriginalPath)
+                                    ?? throw new IOException("External session is missing.");
+                                var directory = Path.Combine(snapshot.DirectoryPath, ".pcasa-internal");
+                                Directory.CreateDirectory(directory);
+                                foreach (var old in Directory.EnumerateFiles(directory, "result.*")) File.Delete(old);
+                                var staged = JpegCropWriter.MaterializeWorkingImage(snapshot.BeforePath,
+                                    directory, "result", internalSteps, token);
+                                var info = new FileInfo(staged);
+                                return new ExternalCommitRecipe(review.ImageId, snapshot, decision,
+                                    staged, info.Length, info.LastWriteTimeUtc, [], StagedPath: staged);
+                            }, workKind: SchedulerWorkKind.Catalog);
+                    }
+                    else
+                    {
+                        var result = review.InternalResultPath ?? review.ResultPath
+                            ?? throw new IOException("Das externe Programm hat kein Ergebnis gespeichert.");
+                        request = new ExternalCommitRecipe(review.ImageId, review.Snapshot,
+                            decision, result, review.ResultSize, review.ResultWriteUtc,
+                            review.InternalEditsStaged ? [] : internalSteps);
+                    }
                     var accepted = _scheduler.EnqueueDurableRecipeAsync(saveKey,
                         ExternalCommitType, System.Text.Json.JsonSerializer.Serialize(request),
                         SchedulerPriority.ManualAction);
+                    _cropSavePending = false;
+                    if (_closeAfterEditAdmission)
+                    {
+                        _closeAfterEditAdmission = false;
+                        Dispatcher.BeginInvoke(new Action(Close));
+                    }
                     await accepted;
                     if (_shutdownStarted || Dispatcher.HasShutdownStarted) return true;
                     committed = ReadWriteRecipe<ExternalCommitRecipe>(saveKey).Target;
@@ -712,6 +824,7 @@ public partial class MainWindow
             // The file transaction is now complete, even if a subsequent
             // catalog refresh fails. It must not be submitted a second time.
             _externalEditReview = null;
+            _photoEditSession = null;
             if (_cropActive) EndCrop();
             if (_straightenActive) LeaveStraighten();
             if (_brightnessActive) LeaveBrightness();
@@ -774,6 +887,12 @@ public partial class MainWindow
         finally
         {
             review.Busy = false;
+            _cropSavePending = false;
+            if (_closeAfterEditAdmission)
+            {
+                _closeAfterEditAdmission = false;
+                Dispatcher.BeginInvoke(new Action(Close));
+            }
             if (!Dispatcher.HasShutdownStarted) UpdateEditControls();
         }
     }

@@ -627,9 +627,12 @@ internal static class Program
             {
                 if (window.FindName(toneName) is not Slider tone ||
                     window.FindName(toneName + "Axis") is not Grid axis ||
-                    axis.Children.OfType<TextBlock>().Count() != 2 ||
-                    axis.Children.OfType<TextBlock>().First().Text != UiLanguage.T(low) ||
-                    axis.Children.OfType<TextBlock>().Last().Text != UiLanguage.T(high) ||
+                    axis.Children.OfType<TextBlock>().Count() != (toneName == "BrightnessSlider" ? 2 : 3) ||
+                    axis.Children.OfType<TextBlock>().Single(label => label.HorizontalAlignment == HorizontalAlignment.Left).Text != UiLanguage.T(low) ||
+                    axis.Children.OfType<TextBlock>().Single(label => label.HorizontalAlignment == HorizontalAlignment.Right).Text != UiLanguage.T(high) ||
+                    (toneName != "BrightnessSlider" && !axis.Children.OfType<TextBlock>().Any(label =>
+                        label.HorizontalAlignment == HorizontalAlignment.Center &&
+                        label.GetBindingExpression(TextBlock.TextProperty) is not null)) ||
                     axis.IsHitTestVisible ||
                     axis.Children.OfType<TextBlock>().Any(label =>
                         label.FontSize > 10) ||
@@ -799,8 +802,14 @@ internal static class Program
                 System.Reflection.BindingFlags.NonPublic)!;
             var oldSequence = seqField.GetValue(window);
             var oldIndex = indexField.GetValue(window);
+            var refinedField = typeof(PCasa.App.MainWindow).GetField("_viewerHasOriginal",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var oldRefined = refinedField.GetValue(window);
             try
             {
+                // A fully decoded RAW must still reject all internal editing.
+                refinedField.SetValue(window, true);
                 var rawIndex = new[] { thumbEntries[2] with { FileName = "photo.arw" } };
                 seqField.SetValue(window, PhotoSequence.Create(rawIndex,
                     new HashSet<long>(), 12L, PhotoSequenceScope.Gallery));
@@ -812,14 +821,20 @@ internal static class Program
                 var jpegIndex = new[] { thumbEntries[2] };
                 seqField.SetValue(window, PhotoSequence.Create(jpegIndex,
                     new HashSet<long>(), 12L, PhotoSequenceScope.Gallery));
+                refinedField.SetValue(window, false);
+                controlsMethod.Invoke(window, null);
+                if (tabs.IsEnabled || toolButtons.Any(btn => btn.IsEnabled))
+                    throw new Exception("JPEG thumbnail unlocked editing before refined decode.");
+                refinedField.SetValue(window, true);
                 controlsMethod.Invoke(window, null);
                 if (!tabs.IsEnabled || toolButtons.Any(btn => !btn.IsEnabled))
-                    throw new Exception("JPEG editor did not become available.");
+                    throw new Exception("Refined JPEG editor did not become available.");
             }
             finally
             {
                 seqField.SetValue(window, oldSequence);
                 indexField.SetValue(window, oldIndex);
+                refinedField.SetValue(window, oldRefined);
                 controlsMethod.Invoke(window, null);
             }
 
@@ -4097,6 +4112,8 @@ internal static class Program
                 System.Reflection.BindingFlags.Instance;
             var viewerOpenField = viewerType.GetField("_viewerOpen", reflectFlags)!;
             var viewerInfoField = viewerType.GetField("_viewerImageInfo", reflectFlags)!;
+            var viewerRefinedField = viewerType.GetField("_viewerHasOriginal", reflectFlags)!;
+            var previousRefined = viewerRefinedField.GetValue(window);
             // The synthetic photo is not in the catalog. Isolate its
             // viewer state from any real photo sequence created by an
             // earlier smoke fixture: delayed Fit refinement must not
@@ -4127,6 +4144,7 @@ internal static class Program
             {
                 viewerSequenceForFixture.SetValue(window, null);
                 viewerOpenField.SetValue(window, true);
+                viewerRefinedField.SetValue(window, true); // Synthetic bitmap represents a completed refined decode.
                 viewerInfoField.SetValue(window, new PhotoViewerImageInfo(
                     999, @"C:\synthetic\no-file.jpg", "no-file.jpg", 4000, 1000));
                 panel.Visibility = Visibility.Visible;
@@ -4194,6 +4212,11 @@ internal static class Program
                         throw new Exception(
                             "Unsupported PSD displayed disabled internal editor tools.");
                     viewerInfoField.SetValue(window, oldViewerInfo);
+                    viewerRefinedField.SetValue(window, false);
+                    editControls.Invoke(window, null);
+                    if (internalTabs.IsEnabled || ((StackPanel)window.FindName("ViewerPanelLight")!).IsEnabled)
+                        throw new Exception("Thumbnail-only preview allowed image editing.");
+                    viewerRefinedField.SetValue(window, true);
                     editControls.Invoke(window, null);
                     if (internalTabs.Visibility != Visibility.Visible ||
                         internalTools.Visibility != Visibility.Visible ||
@@ -5188,6 +5211,7 @@ internal static class Program
                     stillOpen.Close();
                 viewerOpenField.SetValue(window, false);
                 viewerInfoField.SetValue(window, null);
+                viewerRefinedField.SetValue(window, previousRefined);
                 viewerSequenceForFixture.SetValue(window, previousViewerSequence);
                 panel.Visibility = Visibility.Collapsed;
             }

@@ -29,14 +29,15 @@ public partial class MainWindow
 
     private bool EnsureEditSession()
     {
-        if (!_viewerOpen || _viewerImageInfo is not { } info ||
+        if (!_viewerOpen || !_viewerHasOriginal || _externalEditLaunchPending || _viewerImageInfo is not { } info ||
             PhotoViewerImage.Source is not BitmapSource bitmap ||
             _externalBatchReview is not null ||
             (_externalEditReview is not null &&
              !CanEditPendingExternalResult(info.Id)) ||
             _pendingEditImageIds.Contains(info.Id))
             return false;
-        if (!EditableImageFormats.Supports(info.LocalPath))
+        if (!EditableImageFormats.Supports(info.LocalPath) ||
+            (_photoEditSession?.LatestExternalPath is string latest && !EditableImageFormats.Supports(latest)))
         {
             PcasaDialog.Show(this, UiLanguage.T(
                 "Dieses Format kann nicht bearbeitet werden. RAW und Videos bleiben unverändert."),
@@ -227,6 +228,7 @@ public partial class MainWindow
             "temperature" => UiLanguage.T("Farbtemperatur"),
             "tint" => UiLanguage.T("Farbstich (Grün/Magenta)"),
             "saturation" => UiLanguage.T("Sättigung"),
+            "external" => step.ExternalName ?? UiLanguage.T("Externe Bearbeitung"),
             _ => UiLanguage.T("Bildbearbeitung")
         };
         var undo = _photoEditSession?.NextUndoStep;
@@ -254,10 +256,10 @@ public partial class MainWindow
         // Keep all four buttons in a fixed footprint below the histogram.
         // A disabled action is still visible; the histogram never jumps.
         CropApplyButton.Visibility = Visibility.Visible;
-        ViewerToolCancelButton.IsEnabled = !_cropSavePending &&
-            (_cropActive || _straightenActive);
-        CropApplyButton.IsEnabled = !_cropSavePending &&
-            (_cropActive || _straightenActive);
+        ViewerToolCancelButton.IsEnabled = !_cropSavePending && !_externalEditLaunchPending &&
+            _viewerHasOriginal && editingTool;
+        CropApplyButton.IsEnabled = !_cropSavePending && !_externalEditLaunchPending &&
+            _viewerHasOriginal && editingTool;
         CropSaveButton.IsEnabled = !_cropSavePending &&
             (_viewerImageInfo is null || !_pendingEditImageIds.Contains(_viewerImageInfo.Id)) &&
             (editingTool || _photoEditSession?.HasChanges == true);
@@ -269,20 +271,31 @@ public partial class MainWindow
             // The SAME three Crop footer buttons now own an external edit.
             // Never permit another tool to start while the original is in
             // an unresolved external-editor transaction.
-            var ready = external.Ready && !external.Busy;
+            var ready = external.Ready && !external.Busy && !_externalEditLaunchPending;
             CropSaveCopyButton.IsEnabled = ready && external.ResultPath is not null;
             CropSaveButton.IsEnabled = CropSaveCopyButton.IsEnabled &&
                 !ExternalEditTransaction.RequiresNewFile(
                     external.Snapshot.OriginalPath, external.ResultPath!);
             CropCancelButton.IsEnabled = ready;
             var canEditResult = CanEditPendingExternalResult(external.ImageId);
-            CropApplyButton.IsEnabled = canEditResult &&
-                (_cropActive || _straightenActive);
+            CropApplyButton.IsEnabled = ready && canEditResult &&
+                (editingTool);
             ViewerToolCancelButton.IsEnabled = CropApplyButton.IsEnabled;
             CropUndoButton.IsEnabled = canEditResult &&
                 _photoEditSession?.CanUndo == true;
             CropRedoButton.IsEnabled = canEditResult &&
                 _photoEditSession?.CanRedo == true;
+            if (external.Combined)
+            {
+                var cursorReady = ready && external.PreviewReady && !external.AwaitingReturn;
+                var resultPath = _photoEditSession?.LatestExternalPath ?? external.Snapshot.OriginalPath;
+                CropSaveCopyButton.IsEnabled = cursorReady &&
+                    (editingTool || _photoEditSession?.HasChanges == true);
+                CropSaveButton.IsEnabled = CropSaveCopyButton.IsEnabled &&
+                    !ExternalEditTransaction.RequiresNewFile(external.Snapshot.OriginalPath, resultPath);
+                CropUndoButton.IsEnabled = cursorReady && _photoEditSession?.CanUndo == true;
+                CropRedoButton.IsEnabled = cursorReady && _photoEditSession?.CanRedo == true;
+            }
         }
         if (_externalBatchReview is { } batch)
         {
@@ -305,7 +318,8 @@ public partial class MainWindow
                 ? seq.At(_viewerCurrentIndex).FileName
                 : _viewerImageInfo?.LocalPath;
         var editable = currentFile is not null &&
-            EditableImageFormats.Supports(currentFile);
+            EditableImageFormats.Supports(currentFile) &&
+            (_photoEditSession?.LatestExternalPath is not string currentResult || EditableImageFormats.Supports(currentResult));
         var noExternalEdit = _externalEditReview is null &&
             _externalBatchReview is null;
         // The user must not have to decode low-contrast disabled icons.
@@ -317,13 +331,16 @@ public partial class MainWindow
         // internal or external editing action. Topaz may temporarily own
         // editing rights, but it must not collapse tabs or select Quick.
         var internalToolsVisible = editable;
-        var internalToolsEnabled = editable &&
+        var internalToolsEnabled = _viewerHasOriginal && editable && !_externalEditLaunchPending &&
             (noExternalEdit ||
              (_viewerImageInfo is { } readyImage &&
               CanEditPendingExternalResult(readyImage.Id)));
         EditorToolTabs.Visibility = internalToolsVisible
             ? Visibility.Visible : Visibility.Collapsed;
         EditorToolTabs.IsEnabled = internalToolsEnabled;
+        ViewerPanelLight.IsEnabled = internalToolsEnabled;
+        ViewerPanelColor.IsEnabled = internalToolsEnabled;
+        ViewerPanelDetail.IsEnabled = internalToolsEnabled;
         ViewerToolsList.Visibility = internalToolsVisible
             ? Visibility.Visible : Visibility.Collapsed;
         ViewerAutoToolsList.Visibility = internalToolsVisible
@@ -336,11 +353,19 @@ public partial class MainWindow
             SwitchEditorPanel("Quick");
         // With no detected external result, a deliberate click on another
         // editor automatically discards the unchanged working copy.
-        var canChooseAnotherEditor = noExternalEdit ||
-            _externalEditReview is { Ready: true, Busy: false, ResultPath: null };
+        var canChooseAnotherEditor = !_externalEditLaunchPending && !editingTool &&
+            (noExternalEdit ||
+             _externalEditReview is { Ready: true, Busy: false, ResultPath: null } ||
+             _externalEditReview is { Combined: true, Ready: true, Busy: false, PreviewReady: true, AwaitingReturn: false });
+        if (_viewerImageInfo is { } viewer && currentFile is not null)
+        {
+            var editorFile = Path.GetFileName(_photoEditSession?.LatestExternalPath ?? currentFile);
+            if (!string.Equals(editorFile, _externalEditorDisplayedFileName, StringComparison.OrdinalIgnoreCase))
+                RefreshExternalEditorToolButtons(viewer.Id, editorFile);
+        }
         foreach (var card in ExternalEditorToolsList.Children.OfType<StackPanel>())
             foreach (var button in card.Children.OfType<Button>())
-                button.IsEnabled = canChooseAnotherEditor;
+                button.IsEnabled = _viewerHasOriginal && canChooseAnotherEditor;
         // Undo/Redo are internal actions too: show each only when it can
         // actually operate. Low-contrast disabled arrow glyphs are not a
         // usable availability cue for everyone.
@@ -419,7 +444,7 @@ public partial class MainWindow
 
     private void MoveEditHistory(int direction)
     {
-        if (_cropSavePending || _photoEditSession is null) return;
+        if (_cropSavePending || _externalEditLaunchPending || _externalEditReview is { Busy: true } || _photoEditSession is null) return;
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) LeaveBrightness();

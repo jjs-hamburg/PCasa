@@ -280,6 +280,15 @@ public partial class MainWindow
             }
             else if (_straightenActive)
                 LeaveStraighten();
+            else if (_brightnessActive)
+                LeaveBrightness();
+            else if (_advancedToneActive)
+                LeaveAdvancedTone();
+            if (_photoEditSession is not null)
+            {
+                SetViewerBitmap(_photoEditSession.Render());
+                ApplyViewerImageLayout();
+            }
             UpdateEditControls();
         };
         CropSaveButton.Click += (_, _) => SaveEdits();

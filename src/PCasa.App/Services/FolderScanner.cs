@@ -556,6 +556,8 @@ public sealed class FolderScanner
                         existing.ImportError is null &&
                         existing.FileSize == fileLength &&
                         existing.ModifiedUtcTicks == modifiedUtcTicks &&
+                        (folder.IsNetwork || existing.CreatedUtcTicks is null or <= 0 ||
+                         existing.CreatedUtcTicks == createdUtcTicks) &&
                         File.Exists(existing.ThumbnailPath) &&
                         (!_thumbnailCache.IsRawPath(localPath) ||
                          Path.GetFileName(existing.ThumbnailPath).StartsWith(

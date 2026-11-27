@@ -916,7 +916,7 @@
                                 IsMoveToPointEnabled="True"
                                 ValueChanged="PhotoViewerZoom_ValueChanged"
                                 VerticalAlignment="Center" />
-                        <TextBlock x:Name="PhotoZoomLabel" Text="Fit"
+                        <TextBlock x:Name="PhotoZoomLabel" Text="Fit" FontSize="10" FontWeight="Light"
                                    MinWidth="73" Margin="9,0,0,0"
                                    VerticalAlignment="Center" />
                     </StackPanel>
@@ -1181,7 +1181,7 @@
                                         ToolTip="{loc:Tr Key='Helligkeitskorrektur auf null zurücksetzen'}"/>
                                 <TextBlock x:Name="BrightnessValueText" Grid.Row="1" Grid.Column="1"
                                            Text="0,00 EV" HorizontalAlignment="Center"
-                                           FontSize="11" TextAlignment="Center"/>
+                                           FontSize="9" FontWeight="Light" TextAlignment="Center"/>
                                 <Grid x:Name="BrightnessSliderAxis" Grid.Row="1" Grid.Column="1"
                                       Margin="4,0,4,0" IsHitTestVisible="False">
                                     <TextBlock Text="−" FontSize="9" FontWeight="Light"
@@ -1208,6 +1208,7 @@
     <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
     <Grid x:Name="HighlightsSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
           IsHitTestVisible="False">
+        <TextBlock Text="{Binding Value, ElementName=HighlightsSlider, StringFormat=0.00}" FontSize="9" FontWeight="Light" HorizontalAlignment="Center" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
         <TextBlock Text="−" FontSize="9" FontWeight="Light"
                    Foreground="{DynamicResource PcasaMutedTextBrush}"
                    HorizontalAlignment="Left"/>
@@ -1235,6 +1236,7 @@
     <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
     <Grid x:Name="ShadowsSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
           IsHitTestVisible="False">
+        <TextBlock Text="{Binding Value, ElementName=ShadowsSlider, StringFormat=0.00}" FontSize="9" FontWeight="Light" HorizontalAlignment="Center" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
         <TextBlock Text="−" FontSize="9" FontWeight="Light"
                    Foreground="{DynamicResource PcasaMutedTextBrush}"
                    HorizontalAlignment="Left"/>
@@ -1262,6 +1264,7 @@
     <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
     <Grid x:Name="ContrastSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
           IsHitTestVisible="False">
+        <TextBlock Text="{Binding Value, ElementName=ContrastSlider, StringFormat=0.00}" FontSize="9" FontWeight="Light" HorizontalAlignment="Center" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
         <TextBlock Text="−" FontSize="9" FontWeight="Light"
                    Foreground="{DynamicResource PcasaMutedTextBrush}"
                    HorizontalAlignment="Left"/>
@@ -1291,6 +1294,7 @@
     <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
     <Grid x:Name="TemperatureSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
           IsHitTestVisible="False">
+        <TextBlock Text="{Binding Value, ElementName=TemperatureSlider, StringFormat=0.00}" FontSize="9" FontWeight="Light" HorizontalAlignment="Center" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
         <TextBlock Text="{loc:Tr Key='Kühler'}" FontSize="9" FontWeight="Light"
                    Foreground="{DynamicResource PcasaMutedTextBrush}"
                    HorizontalAlignment="Left"/>
@@ -1318,6 +1322,7 @@
     <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
     <Grid x:Name="TintSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
           IsHitTestVisible="False">
+        <TextBlock Text="{Binding Value, ElementName=TintSlider, StringFormat=0.00}" FontSize="9" FontWeight="Light" HorizontalAlignment="Center" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
         <TextBlock Text="{loc:Tr Key='Grün'}" FontSize="9" FontWeight="Light"
                    Foreground="{DynamicResource PcasaMutedTextBrush}"
                    HorizontalAlignment="Left"/>
@@ -1345,6 +1350,7 @@
     <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
     <Grid x:Name="SaturationSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
           IsHitTestVisible="False">
+        <TextBlock Text="{Binding Value, ElementName=SaturationSlider, StringFormat=0.00}" FontSize="9" FontWeight="Light" HorizontalAlignment="Center" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
         <TextBlock Text="{loc:Tr Key='Weniger'}" FontSize="9" FontWeight="Light"
                    Foreground="{DynamicResource PcasaMutedTextBrush}"
                    HorizontalAlignment="Left"/>
@@ -1374,6 +1380,7 @@
     <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
     <Grid x:Name="DenoiseLumaSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
           IsHitTestVisible="False">
+        <TextBlock Text="{Binding Value, ElementName=DenoiseLumaSlider, StringFormat=0.00}" FontSize="9" FontWeight="Light" HorizontalAlignment="Center" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
         <TextBlock Text="{loc:Tr Key='Weniger'}" FontSize="9" FontWeight="Light"
                    Foreground="{DynamicResource PcasaMutedTextBrush}"
                    HorizontalAlignment="Left"/>
@@ -1401,6 +1408,7 @@
     <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
     <Grid x:Name="DenoiseChromaSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
           IsHitTestVisible="False">
+        <TextBlock Text="{Binding Value, ElementName=DenoiseChromaSlider, StringFormat=0.00}" FontSize="9" FontWeight="Light" HorizontalAlignment="Center" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
         <TextBlock Text="{loc:Tr Key='Weniger'}" FontSize="9" FontWeight="Light"
                    Foreground="{DynamicResource PcasaMutedTextBrush}"
                    HorizontalAlignment="Left"/>
@@ -1428,6 +1436,7 @@
     <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
     <Grid x:Name="SharpenSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
           IsHitTestVisible="False">
+        <TextBlock Text="{Binding Value, ElementName=SharpenSlider, StringFormat=0.00}" FontSize="9" FontWeight="Light" HorizontalAlignment="Center" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
         <TextBlock Text="{loc:Tr Key='Weniger'}" FontSize="9" FontWeight="Light"
                    Foreground="{DynamicResource PcasaMutedTextBrush}"
                    HorizontalAlignment="Left"/>
@@ -1461,6 +1470,7 @@
                                                 ToolTip="{loc:Tr Key='Schärfradius'}"/>
                                             <Grid x:Name="SharpenRadiusSliderAxis" Grid.Row="1"
                                                   IsHitTestVisible="False">
+        <TextBlock Text="{Binding Value, ElementName=SharpenRadiusSlider, StringFormat=0.00}" FontSize="9" FontWeight="Light" HorizontalAlignment="Center" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                                                 <TextBlock Text="{loc:Tr Key='Klein'}"
                                                            HorizontalAlignment="Left"
                                                            Foreground="{DynamicResource PcasaMutedTextBrush}"
@@ -1487,6 +1497,7 @@
                                                 ToolTip="{loc:Tr Key='Detailerhalt'}"/>
                                             <Grid x:Name="SharpenDetailSliderAxis" Grid.Row="1"
                                                   IsHitTestVisible="False">
+        <TextBlock Text="{Binding Value, ElementName=SharpenDetailSlider, StringFormat=0.00}" FontSize="9" FontWeight="Light" HorizontalAlignment="Center" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                                                 <TextBlock Text="{loc:Tr Key='Weniger'}"
                                                            HorizontalAlignment="Left"
                                                            Foreground="{DynamicResource PcasaMutedTextBrush}"
@@ -1550,8 +1561,8 @@
                                 <TextBlock Text="{loc:Tr Key='Winkel'}" FontSize="11"
                                            Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,5,0,11">
-                                    <TextBlock x:Name="StraightenAngleValue" Width="65"
-                                               Text="0,00°" TextAlignment="Left"
+                                    <TextBlock x:Name="StraightenAngleValue" Width="65" Visibility="Collapsed"
+                                               Text="0,00°" FontSize="9" FontWeight="Light" TextAlignment="Left"
                                                VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <CheckBox x:Name="StraightenWideRangeCheckBox"
@@ -1865,6 +1876,11 @@
                                 TickFrequency=".05" IsSnapToTickEnabled="False"
                                 IsMoveToPointEnabled="True"
                                 ToolTip="{loc:Tr Key='Fein: Pfeiltasten 0,05°. Erweiterter Bereich mit ±45°.'}"/>
+                        <TextBlock Text="{Binding Text, ElementName=StraightenAngleValue}"
+                                   Visibility="{Binding Visibility, ElementName=StraightenAngleSlider}"
+                                   FontSize="9" FontWeight="Light" Panel.ZIndex="10"
+                                   HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                   Margin="0,0,0,4" IsHitTestVisible="False"/>
                         <!-- Original/edited comparison of ONE image. The split
                              clips identical, registered views rather than
                              stretching two halves into different proportions. -->

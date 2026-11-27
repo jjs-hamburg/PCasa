@@ -16,8 +16,12 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
     public CatalogInventoryCheckResult Check(MonitoredFolder root,
         IReadOnlyCollection<string> exclusions,
         IReadOnlyCollection<string> inclusions,
-        CancellationToken token, Action<int, string>? progress = null)
+        CancellationToken token, Action<int, string>? progress = null,
+        string? selectedDirectory = null)
     {
+        var scanRoot = Path.GetFullPath(selectedDirectory ?? root.LocalPath);
+        if (!FolderExclusionRules.IsAtOrBelow(scanRoot, root.LocalPath))
+            throw new ArgumentException("Inventory outside monitored root.");
         var known = new Dictionary<string, FileStamp>(StringComparer.OrdinalIgnoreCase);
         using (var db = database.OpenConnection())
         using (var cmd = db.CreateCommand())
@@ -31,6 +35,7 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
             while (reader.Read())
             {
                 token.ThrowIfCancellationRequested();
+                if (!FolderExclusionRules.IsAtOrBelow(reader.GetString(0), scanRoot)) continue;
                 known[reader.GetString(0)] = new FileStamp(
                     reader.GetInt64(1), reader.GetInt64(2),
                     reader.IsDBNull(3) ? null : reader.GetInt64(3));
@@ -38,9 +43,10 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
         }
 
         var changes = new List<BackgroundFolderChange>();
+        var added = new List<BackgroundFolderChange>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var directories = new Stack<string>();
-        directories.Push(root.LocalPath);
+        directories.Push(scanRoot);
         var options = new EnumerationOptions
         {
             RecurseSubdirectories = false,
@@ -72,7 +78,7 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
                     file.CreationTimeUtc.Ticks != created;
                 if (!found || old!.Size != file.Length ||
                     old.Modified != file.LastWriteTimeUtc.Ticks || creationChanged)
-                    changes.Add(new BackgroundFolderChange(root.Id, file.FullName,
+                    (found ? changes : added).Add(new BackgroundFolderChange(root.Id, file.FullName,
                         BackgroundFolderChangeKind.ScanFile, false,
                         ForceExifRefresh: creationChanged));
                 if (count % 128 == 0) progress?.Invoke(count, path);
@@ -86,12 +92,12 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
         foreach (var path in known.Keys)
         {
             token.ThrowIfCancellationRequested();
-            if (!FolderExclusionRules.IsAtOrBelow(path, root.LocalPath) ||
+            if (!FolderExclusionRules.IsAtOrBelow(path, scanRoot) ||
                 FolderExclusionRules.IsExcluded(path, exclusions, inclusions)) continue;
             var candidate = path;
             var parent = Path.GetDirectoryName(candidate);
             while (parent is not null &&
-                   FolderExclusionRules.IsAtOrBelow(parent, root.LocalPath) &&
+                   FolderExclusionRules.IsAtOrBelow(parent, scanRoot) &&
                    !visited.Contains(FolderExclusionRules.Normalize(parent)))
             {
                 candidate = parent;
@@ -100,13 +106,14 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
             if (parent is not null && visited.Contains(FolderExclusionRules.Normalize(parent)))
                 missing.Add(candidate);
         }
-        if (!Directory.Exists(root.LocalPath))
-            throw new DirectoryNotFoundException(root.LocalPath);
+        if (!Directory.Exists(scanRoot))
+            throw new DirectoryNotFoundException(scanRoot);
         token.ThrowIfCancellationRequested();
         foreach (var path in missing)
             changes.Add(new BackgroundFolderChange(root.Id, path,
                 BackgroundFolderChangeKind.RemovePath, false));
-        progress?.Invoke(count, root.LocalPath);
-        return new CatalogInventoryCheckResult(count, changes);
+        progress?.Invoke(count, scanRoot);
+        added.AddRange(changes);
+        return new CatalogInventoryCheckResult(count, added);
     }
 }

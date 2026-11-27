@@ -279,6 +279,7 @@ public partial class MainWindow
             _viewerPendingOriginalPixels = 0;
             SetViewerBitmap(decoded);
             SetViewerQualityMessage(null);
+            if (_cropToolsReady) UpdateEditControls();
             return;
         }
 
@@ -440,6 +441,7 @@ public partial class MainWindow
                 if (_photoEditSession?.ImageId != imageId)
                     SetViewerBitmap(bitmap);
                 SetViewerQualityMessage(null);
+                if (_cropToolsReady) UpdateEditControls();
             }
         }
         catch (OperationCanceledException)
@@ -1378,6 +1380,10 @@ public partial class MainWindow
     {
         if (!_viewerOpen || e.Handled)
             return;
+        // Text controls own all caret movement, editing and shortcuts.
+        if (Keyboard.FocusedElement is DependencyObject focused &&
+            (FindAncestor<System.Windows.Controls.Primitives.TextBoxBase>(focused) is not null ||
+             FindAncestor<ComboBox>(focused) is not null)) return;
 
         // A single save command for every photo editing tool, regardless of
         // keyboard focus in the viewer or in its separate fullscreen window.

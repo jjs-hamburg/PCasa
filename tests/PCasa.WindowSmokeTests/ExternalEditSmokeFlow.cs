@@ -113,6 +113,63 @@ internal static class ExternalEditSmokeFlow
                 File.Exists(cancel.BackupPath))
                 throw new Exception("Cancel failed to preserve original or clear the workspace.");
 
+            // Two external programs, internal steps before, between and after,
+            // one immutable original and one permanent archive entry.
+            var chainPhoto = Path.Combine(root, "chain.jpg");
+            WriteJpeg(chainPhoto, 80, 64);
+            var chainOriginal = File.ReadAllBytes(chainPhoto);
+            var chain = ExternalEditTransaction.Begin(chainPhoto,
+                initialSteps: [new PhotoEditStep("brightness", Amount: .3)]);
+            if (ExternalEditTransaction.DetectResult(chain) is not null ||
+                File.ReadAllBytes(chain.BackupPath).SequenceEqual(chainOriginal) ||
+                !File.ReadAllBytes(chainPhoto).SequenceEqual(chainOriginal))
+                throw new Exception("Accepted internal edit was not handed off safely.");
+            var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+            var capture = typeof(ExternalEditTransaction).GetMethod("CaptureHistoryResult", flags)!;
+            var nextInput = typeof(ExternalEditTransaction).GetMethod("PrepareNextInput", flags)!;
+            var materialize = typeof(JpegCropWriter).GetMethod("MaterializeWorkingImage", flags)!;
+            string Capture(ExternalEditSnapshot snapshot)
+            {
+                var info = new FileInfo(snapshot.BackupPath);
+                return (string)capture.Invoke(null, [snapshot, info.FullName, info.Length,
+                    info.LastWriteTimeUtc, CancellationToken.None])!;
+            }
+            var cursor = new PhotoEditSession(123, EditableImageFormats.DecodeForEdit(chainPhoto));
+            cursor.Apply(new PhotoEditStep("brightness", Amount: .3));
+            WriteJpeg(chain.BackupPath, 120, 64);
+            var firstResult = Capture(chain);
+            cursor.Apply(new PhotoEditStep("external", ExternalPath: firstResult, ExternalName: "First"));
+            cursor.Apply(new PhotoEditStep("contrast", Amount: .15));
+            var nextRoot = Path.Combine(root, "SecondEditorExchange");
+            var chainNext = (ExternalEditSnapshot)nextInput.Invoke(null, [chain,
+                cursor.AppliedSteps.ToArray(), nextRoot, CancellationToken.None])!;
+            if (chainNext.Id != chain.Id || !File.Exists(firstResult) ||
+                ExternalEditTransaction.DetectResult(chainNext) is not null ||
+                !File.ReadAllBytes(chainNext.BeforePath).SequenceEqual(chainOriginal))
+                throw new Exception("Successive external input lost the original or previous result.");
+            WriteJpeg(chainNext.BackupPath, 200, 64);
+            var secondResult = Capture(chainNext);
+            cursor.Apply(new PhotoEditStep("external", ExternalPath: secondResult, ExternalName: "Second"));
+            cursor.Apply(new PhotoEditStep("saturation", Amount: .1));
+            cursor.Undo(); cursor.Undo();
+            if (cursor.LatestExternalPath != firstResult || cursor.Render().PixelWidth != 64)
+                throw new Exception("Undo did not restore first external checkpoint.");
+            cursor.Redo(); cursor.Redo();
+            if (cursor.LatestExternalPath != secondResult || cursor.Render().PixelWidth != 64)
+                throw new Exception("Redo did not restore second external checkpoint.");
+            var final = (string)materialize.Invoke(null, [chainNext.BeforePath,
+                Path.Combine(chainNext.DirectoryPath, ".pcasa-internal"), "result",
+                cursor.AppliedSteps.ToArray(), CancellationToken.None])!;
+            if (!File.ReadAllBytes(chainPhoto).SequenceEqual(chainOriginal) ||
+                new UndoHistoryService(undoOptions).GetVersions(chainPhoto).Count != 0)
+                throw new Exception("Temporary history wrote to the original or permanent archive.");
+            ExternalEditTransaction.Commit(chainNext, final, ExternalEditDecision.Save, undoOptions: undoOptions);
+            if (new UndoHistoryService(undoOptions).GetVersions(chainPhoto).Count != 1 ||
+                File.Exists(firstResult) || File.Exists(secondResult) ||
+                File.ReadAllBytes(chainPhoto).SequenceEqual(chainOriginal))
+                throw new Exception("Combined Save did not retain exactly one original and delete temporary history.");
+            Console.WriteLine("PASS: Internal and multiple external edit steps share Undo/Redo and one permanent original.");
+
             // A named export as used by Topaz is equally valid.
             var copied = ExternalEditTransaction.Begin(photo);
             var export = Path.Combine(copied.DirectoryPath, "photo-topaz.jpg");

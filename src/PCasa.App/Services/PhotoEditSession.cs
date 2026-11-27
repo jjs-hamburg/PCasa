@@ -14,7 +14,8 @@ public sealed record PhotoEditStep(
     string Kind, double X = 0, double Y = 0,
     double Width = 1, double Height = 1, double Degrees = 0,
     double Amount = 0, double Radius = 1, double Detail = .5,
-    string Mask = "all", PhotoMaskStroke[]? MaskStrokes = null);
+    string Mask = "all", PhotoMaskStroke[]? MaskStrokes = null,
+    string? ExternalPath = null, string? ExternalName = null);
 
 public sealed class PhotoEditSession
 {
@@ -61,13 +62,20 @@ public sealed class PhotoEditSession
                 s.Kind == step.Kind && s.Mask == step.Mask))
                 return;
         if (_cursor < _steps.Count)
+        {
+            foreach (var discarded in _steps.Skip(_cursor))
+                if (discarded.Kind == "external" && discarded.ExternalPath is { } path)
+                    ExternalEditTransaction.TryRemoveHistoryFile(path);
             _steps.RemoveRange(_cursor, _steps.Count - _cursor);
+        }
         _steps.Add(step);
         _cursor++;
     }
     public void Undo() { if (CanUndo) _cursor--; }
     public void Redo() { if (CanRedo) _cursor++; }
-    public BitmapSource Render() => Render(_original, AppliedSteps);
+    public string? LatestExternalPath => AppliedSteps.LastOrDefault(s => s.Kind == "external")?.ExternalPath;
+    public BitmapSource Render() => Render(_original, AppliedSteps,
+        previewSize: Math.Max(2400, Math.Max(_original.PixelWidth, _original.PixelHeight)));
 
     /// <summary>
     /// For the swipe comparator, show ONLY the original area that maps to
@@ -86,13 +94,25 @@ public sealed class PhotoEditSession
     }
 
     public static BitmapSource Render(BitmapSource original,
-        IEnumerable<PhotoEditStep> steps, CancellationToken token = default)
+        IEnumerable<PhotoEditStep> steps, CancellationToken token = default,
+        int? previewSize = null)
     {
         BitmapSource bitmap = original;
         foreach (var step in steps)
         {
             token.ThrowIfCancellationRequested();
-            if (step.Kind == "crop")
+            if (step.Kind == "external")
+            {
+                var path = step.ExternalPath ?? throw new InvalidDataException("External history file missing.");
+                if (previewSize is int size)
+                {
+                    var dimensions = EditableImageFormats.Dimensions(path);
+                    bitmap = PhotoViewerImageLoader.Load(new PhotoViewerImageInfo(0, path,
+                        Path.GetFileName(path), dimensions.Width, dimensions.Height), size, token);
+                }
+                else bitmap = EditableImageFormats.DecodeForEdit(path);
+            }
+            else if (step.Kind == "crop")
             {
                 if (!double.IsFinite(step.X) || !double.IsFinite(step.Y) ||
                     !double.IsFinite(step.Width) || !double.IsFinite(step.Height) ||

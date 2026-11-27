@@ -158,6 +158,35 @@ public static class JpegCropWriter
         }
     }
 
+    // Materialize an accepted edit cursor without touching the gallery file
+    // or the permanent Undo archive. The latest external checkpoint already
+    // includes all preceding operations; replay only its subsequent steps.
+    internal static string MaterializeWorkingImage(string original,
+        string directory, string stem, IReadOnlyList<PhotoEditStep> steps,
+        CancellationToken token)
+    {
+        var lastExternal = -1;
+        for (var i = 0; i < steps.Count; i++)
+            if (steps[i].Kind == "external") lastExternal = i;
+        var source = lastExternal < 0 ? original : steps[lastExternal].ExternalPath
+            ?? throw new InvalidDataException("External history file missing.");
+        var tail = steps.Skip(lastExternal + 1).ToArray();
+        Directory.CreateDirectory(directory);
+        var target = Path.Combine(directory, stem + Path.GetExtension(source).ToLowerInvariant());
+        if (File.Exists(target)) throw new IOException("Working result already exists.");
+        try
+        {
+            ExternalEditTransaction.CopyAtomic(source, target, false, token);
+            if (tail.Length > 0) SaveCore(target, null, tail, token, captureUndo: false);
+            return target;
+        }
+        catch
+        {
+            try { if (File.Exists(target)) File.Delete(target); } catch (IOException) { }
+            throw;
+        }
+    }
+
     private static void SaveCore(string originalPath, string? copyPath,
         IReadOnlyList<PhotoEditStep> operations, CancellationToken token,
         bool captureUndo = true, Action<string>? beforePublish = null)
