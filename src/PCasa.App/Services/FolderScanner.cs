@@ -433,8 +433,7 @@ public sealed class FolderScanner
             preferredDirectories = (_folderRepository.GetImportFrontier(folder.Id, generation, scanRoot)
                 ?? _folderRepository.GetImportFrontier(folder.Id, generation, folder.LocalPath)
                 ?? _folderRepository.GetDirectoryFirstPass(folder.Id, generation, scanRoot).Cursors.Keys.ToArray())
-                .Where(path => FolderExclusionRules.IsAtOrBelow(path, scanRoot) &&
-                    Directory.Exists(path)).ToArray();
+                .Where(path => FolderExclusionRules.IsAtOrBelow(path, scanRoot)).ToArray();
         }
         var enumerator = resume?.Enumerator ??
             (catalogImport
@@ -714,6 +713,8 @@ public sealed class FolderScanner
 
                         currentThumbnailPath = thumbnail.Path;
                         updated++;
+                        if (catalogIndexed is int confirmed && (existing is null || existing.ImportError is not null))
+                            catalogIndexed = confirmed + 1;
                         // The gallery observes catalog commits, not scanner
                         // progress, tree state or scan completion. Publication
                         // occurs only after the SQLite image+cache index commit.
@@ -881,7 +882,7 @@ public sealed class FolderScanner
 
                 // Show each newly discovered folder and regularly refresh
                 // progress; presentation cannot own the scanner cursor.
-                ReportProgress(localPath, force: discoveredFolderId is not null || readingNew == true,
+                ReportProgress(localPath, force: discoveredFolderId is not null,
                     discoveredFolderId, discoveredFolderPath, currentThumbnailPath);
             }
         }
@@ -979,7 +980,7 @@ public sealed class FolderScanner
             }
 
             progressClock.Restart();
-            if (progress is not null && (catalogCountClock.ElapsedMilliseconds >= 1000 ||
+            if (catalogImport && progress is not null && (catalogCountClock.ElapsedMilliseconds >= 1000 ||
                 (force && currentFile is null && verifiedDirectoryPath is null)))
             {
                 catalogIndexed = _catalog.CountIndexedImages(folder.Id, scanRoot, recursive);
@@ -1099,6 +1100,8 @@ public sealed class FolderScanner
         if (preferredDirectories is not null)
             foreach (var directory in preferredDirectories.Reverse())
                 pending.Push(directory);
+        var preferred = new HashSet<string>(preferredDirectories ?? [],
+            StringComparer.OrdinalIgnoreCase);
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var options = new EnumerationOptions
         {
@@ -1114,6 +1117,14 @@ public sealed class FolderScanner
         {
             token.ThrowIfCancellationRequested();
             var directory = pending.Pop();
+            // The saved preference might have disappeared since first import.
+            // It is not a proof of deletion or inaccessibility; the ordinary
+            // traversal below will still verify the selected root and children.
+            if (preferred.Remove(directory) &&
+                !string.Equals(FolderExclusionRules.Normalize(directory),
+                    FolderExclusionRules.Normalize(scanRoot), StringComparison.OrdinalIgnoreCase) &&
+                !Directory.Exists(directory))
+                continue;
             if (!visited.Add(FolderExclusionRules.Normalize(directory))) continue;
             yield return string.Empty;
             var directoryExcluded = FolderExclusionRules.IsExcluded(

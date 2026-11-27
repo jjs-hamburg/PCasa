@@ -1575,7 +1575,6 @@ public partial class MainWindow
                         activityWindow.UpdateScan(value,
                             showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation(),
                             scanOwner: scanOwner);
-                        ShowScannedPhotoFolder(value);
                         // Do not overwrite the shared Tag/scan presenter's
                         // authoritative status-bar projection.
                         if (_visibleManualOperations.Count == 0 &&

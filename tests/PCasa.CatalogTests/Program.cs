@@ -4429,18 +4429,27 @@ internal static class Program
         var newPath = Path.Combine(a, "new.jpg");
         WriteJpeg(newPath);
         File.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddDays(-1));
-        var sawNew = false;
-        var sawChanged = false;
+        var committed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var finished = false;
+        void OnIndexed(string path, long id)
+        {
+            if (!finished && catalog.GetImageId(path) is not null)
+                committed.Add(Path.GetFileName(path));
+        }
         var progress = new InlineProgress<ScanProgress>(p =>
         {
-            if (p.CurrentFile is null || !p.PreviewCommitted) return;
-            sawNew |= p.Added > 0;
-            sawChanged |= p.Changed > 0;
+            if (p.CurrentFile is null && p.VerifiedDirectoryPath is null) finished = true;
         });
-        var child = scanner.ScanDirectory(root, a, true, progress,
-            catalogOwnedProgress: true, prioritizeImportFrontier: true);
+        ScanResult child;
+        CatalogChanges.ImageIndexed += OnIndexed;
+        try
+        {
+            child = scanner.ScanDirectory(root, a, true, progress,
+                catalogOwnedProgress: true, prioritizeImportFrontier: true);
+        }
+        finally { CatalogChanges.ImageIndexed -= OnIndexed; }
         if (child.ImageFilesSeen != 2 || child.Updated != 2 || child.Failed != 0 ||
-            !sawNew || !sawChanged || catalog.CountAll() != 3)
+            !committed.SetEquals(new[] { "old.jpg", "new.jpg" }) || catalog.CountAll() != 3)
             throw new Exception("Child refresh did not stream both new and changed files: " + child);
         File.Delete(old);
         File.SetLastWriteTimeUtc(other, DateTime.UtcNow.AddDays(-2));

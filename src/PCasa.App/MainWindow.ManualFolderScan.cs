@@ -166,7 +166,6 @@ public partial class MainWindow
                 TrackFolderActivity(directory, "Working", recursive: true);
                 RefreshFolderStatusVisuals();
             }
-            ShowScannedPhotoFolder(scan);
             StatusText.Text =
                 $"Ordner aktualisieren: {scan.ImageFilesSeen:N0} geprüft · " +
                 $"{scan.Added:N0} neu · {scan.Changed:N0} geändert · " +
