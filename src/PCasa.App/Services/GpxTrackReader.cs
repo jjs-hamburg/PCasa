@@ -15,7 +15,10 @@ public sealed class GpxOptions
     public string DirectoryPath { get; set; } =
         Path.Combine(PcasaDataPaths.SharedDataRoot, "GPX");
     public double CameraOffsetSeconds { get; set; }
-    public string CameraTimeZoneId { get; set; } = TimeZoneInfo.Local.Id;
+    public static string DefaultCameraTimeZoneId =>
+        TimeZoneInfo.TryFindSystemTimeZoneById("Europe/Berlin", out var berlin)
+            ? berlin.Id : "W. Europe Standard Time";
+    public string CameraTimeZoneId { get; set; } = DefaultCameraTimeZoneId;
     public int MaximumGapSeconds { get; set; } = 120;
 
     public static GpxOptions Load()
