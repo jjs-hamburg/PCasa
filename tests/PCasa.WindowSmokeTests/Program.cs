@@ -121,6 +121,17 @@ internal static class Program
                     "_startupGalleryPresented", startupFlags)!.GetValue(window) is not true)
                 throw new Exception("First gallery frame was not presented.");
             Alpha58WindowSmoke.Run(window);
+            if (PicasaGalleryScrollBar.TryScrollTarget(0, 1000, -96, out _) ||
+                PicasaGalleryScrollBar.TryScrollTarget(1000, 1000, 96, out _) ||
+                PicasaGalleryScrollBar.TryScrollTarget(0, 0, 96, out _) ||
+                !PicasaGalleryScrollBar.TryScrollTarget(0, 1000, 96, out var fromTop) ||
+                fromTop != 96 ||
+                !PicasaGalleryScrollBar.TryScrollTarget(1000, 1000, -96, out var fromBottom) ||
+                fromBottom != 904 ||
+                !PicasaGalleryScrollBar.TryScrollTarget(950, 1000, 96, out var clamped) ||
+                clamped != 1000)
+                throw new Exception("Gallery edge scroll did not suppress only outward movement.");
+            Console.WriteLine("PASS: Gallery edge suppresses outward scroll and accepts immediate reversal.");
             // Use the real WPF popup and actual Click handlers. Decade
             // navigation must not masquerade as selectable year buttons.
             {
