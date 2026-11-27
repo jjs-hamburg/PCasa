@@ -71,7 +71,7 @@ public partial class MainWindow
         bool isPanorama = true)
     {
         if (_panoramaLaunchPending || _panoramaSession is not null ||
-            _externalEditReview is not null || _externalEditLaunchPending)
+            _externalEditReview is not null || _externalEditLaunchPending || HasPendingExternalWrites())
         {
             ShowFileActionError(new InvalidOperationException(
                 "Bitte zuerst die laufende externe Bearbeitung abschließen."));
