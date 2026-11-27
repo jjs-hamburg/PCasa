@@ -731,13 +731,9 @@ public partial class MainWindow
         // second save request against the untouched original.
         if (decision != ExternalEditDecision.Cancel &&
             CanEditPendingExternalResult(review.ImageId) &&
-            (_cropActive || _straightenActive ||
-             _brightnessActive || _advancedToneActive))
+            GetPendingLiveEditStep() is not null)
         {
-            if (_cropActive && GetPendingLiveEditStep() is null)
-                EndCrop();
-            else
-                ApplyEditTool();
+            ApplyEditTool();
         }
         PhotoEditStep[] internalSteps = decision == ExternalEditDecision.Cancel ||
             _photoEditSession?.ImageId != review.ImageId
