@@ -829,6 +829,13 @@ internal static class Program
                 controlsMethod.Invoke(window, null);
                 if (!tabs.IsEnabled || toolButtons.Any(btn => !btn.IsEnabled))
                     throw new Exception("Refined JPEG editor did not become available.");
+                var decisionRow = (StackPanel)window.FindName("ViewerToolDecisionRow")!;
+                var apply = (Button)window.FindName("CropApplyButton")!;
+                var cancelDraft = (Button)window.FindName("ViewerToolCancelButton")!;
+                if (decisionRow.Visibility != Visibility.Visible ||
+                    apply.Parent != decisionRow || cancelDraft.Parent != decisionRow ||
+                    ((Border)window.FindName("ViewerOnImageToolsBar")!).Visibility != Visibility.Collapsed)
+                    throw new Exception("Ordinary tonal tool decisions depend on the crop-only container.");
             }
             finally
             {
@@ -4173,8 +4180,25 @@ internal static class Program
                 var oldEditSessionFixture = editStateFixture.GetValue(window);
                 var oldViewerInfo = viewerInfoField.GetValue(window);
                 var oldViewerPixels = viewerImage.Source;
+                var originalData = new byte[120 * 80 * 4];
+                for (var i = 0; i < originalData.Length; i += 4)
+                {
+                    originalData[i] = originalData[i + 1] = originalData[i + 2] = (byte)(32 + (i / 4) % 192);
+                    originalData[i + 3] = 255;
+                }
                 var originalPixels = BitmapSource.Create(120, 80, 96, 96,
-                    PixelFormats.Bgra32, null, new byte[120 * 80 * 4], 120 * 4);
+                    PixelFormats.Bgra32, null, originalData, 120 * 4);
+                bool SameComparisonPixels(ImageSource? left, ImageSource? right)
+                {
+                    if (left is not BitmapSource l || right is not BitmapSource r ||
+                        l.PixelWidth != r.PixelWidth || l.PixelHeight != r.PixelHeight) return false;
+                    var stride = l.PixelWidth * 4;
+                    var lp = new byte[stride * l.PixelHeight];
+                    var rp = new byte[lp.Length];
+                    new FormatConvertedBitmap(l, PixelFormats.Bgra32, null, 0).CopyPixels(lp, stride, 0);
+                    new FormatConvertedBitmap(r, PixelFormats.Bgra32, null, 0).CopyPixels(rp, stride, 0);
+                    return lp.SequenceEqual(rp);
+                }
                 var editedPixels = BitmapSource.Create(121, 81, 96, 96,
                     PixelFormats.Bgra32, null, new byte[121 * 81 * 4], 121 * 4);
                 var showComparison = viewerType.GetMethod(
@@ -4378,6 +4402,11 @@ internal static class Program
 
                     edit.Apply(new PhotoEditStep("contrast", Amount: 0.25));
                     editStateFixture.SetValue(window, edit);
+                    var expectedEdited = edit.Render();
+                    if (SameComparisonPixels(expectedEdited, actualBefore))
+                        throw new Exception("Comparison fixture did not change any pixels.");
+                    // Deliberately inject a stale, differently sized viewer bitmap.
+                    // Comparison must prefer the authoritative edit history.
                     viewerImage.Source = editedPixels;
                     updateComparison.Invoke(window, null);
                     if (!compareSide.IsEnabled || !compareSplit.IsEnabled ||
@@ -4398,7 +4427,7 @@ internal static class Program
                         swipe.Visibility != Visibility.Visible ||
                         swipe.ActualWidth < 50 ||
                         !ReferenceEquals(beforeImage.Source, actualBefore) ||
-                        !ReferenceEquals(afterImage.Source, editedPixels))
+                        !SameComparisonPixels(afterImage.Source, expectedEdited))
                         throw new Exception(
                             "Split mode silently switched to side-by-side or loaded incorrect pixels.");
                     var thumb = (System.Windows.Controls.Primitives.Thumb)
@@ -4551,7 +4580,7 @@ internal static class Program
                         swipe.Visibility != Visibility.Visible ||
                         Math.Abs((double)zoomField.GetValue(window)! - 175d) > .01 ||
                         Math.Abs((double)splitFractionField.GetValue(window)! - .32d) > .001 ||
-                        !ReferenceEquals(afterImage.Source, viewerImage.Source))
+                        !SameComparisonPixels(afterImage.Source, viewerImage.Source))
                         throw new Exception(
                             "Undo changed zoom/split mode or retained stale After pixels.");
                     moveHistory.Invoke(window, [-1]);
@@ -4567,8 +4596,8 @@ internal static class Program
                     Flush(window);
                     if (Convert.ToString(editModeField.GetValue(window)) != "Single" ||
                         compareSplit.Visibility != Visibility.Visible ||
-                        !ReferenceEquals(viewerImage.Source, afterImage.Source) &&
-                        afterImage.Source is not null)
+                        afterImage.Source is not null ||
+                        !SameComparisonPixels(viewerImage.Source, edit.Render()))
                         throw new Exception(
                             "Redo must show comparison controls without reviving an old mode.");
                     Console.WriteLine(

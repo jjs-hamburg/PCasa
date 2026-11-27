@@ -516,7 +516,7 @@ public sealed class CatalogScanSession : IDisposable
                 width,
                 height,
                 thumbnail_path,
-                indexed_utc, import_error, import_attempt_utc
+                indexed_utc, import_error, import_attempt_utc, content_sha256
             )
             VALUES (
                 $folderId,
@@ -531,7 +531,7 @@ public sealed class CatalogScanSession : IDisposable
                 $width,
                 $height,
                 $thumbnailPath,
-                $indexedUtc, $importError, $indexedUtc
+                $indexedUtc, $importError, $indexedUtc, $contentSha256
             )
             ON CONFLICT(canonical_path) DO UPDATE SET
                 folder_id = excluded.folder_id,
@@ -547,7 +547,8 @@ public sealed class CatalogScanSession : IDisposable
                 thumbnail_path = excluded.thumbnail_path,
                 indexed_utc = excluded.indexed_utc,
                 import_error = excluded.import_error,
-                import_attempt_utc = excluded.import_attempt_utc;
+                import_attempt_utc = excluded.import_attempt_utc,
+                content_sha256 = excluded.content_sha256;
             """;
 
         _upsert.Parameters.Add("$folderId", SqliteType.Integer);
@@ -564,6 +565,7 @@ public sealed class CatalogScanSession : IDisposable
         _upsert.Parameters.Add("$thumbnailPath", SqliteType.Text);
         _upsert.Parameters.Add("$indexedUtc", SqliteType.Text);
         _upsert.Parameters.Add("$importError", SqliteType.Text);
+        _upsert.Parameters.Add("$contentSha256", SqliteType.Blob);
     }
 
     public CatalogImageState? GetState(string canonicalPath)
@@ -784,7 +786,7 @@ public sealed class CatalogScanSession : IDisposable
         RegisterWrite();
     }
 
-    public void Upsert(CatalogImageData image)
+    public void Upsert(CatalogImageData image, byte[]? fingerprint = null)
     {
         ThrowIfDisposed();
         EnsureTransaction();
@@ -806,6 +808,7 @@ public sealed class CatalogScanSession : IDisposable
         _upsert.Parameters["$indexedUtc"].Value = DateTime.UtcNow.ToString("O");
         _upsert.Parameters["$importError"].Value =
             (object?)image.ImportError ?? DBNull.Value;
+        _upsert.Parameters["$contentSha256"].Value = (object?)fingerprint ?? DBNull.Value;
         _upsert.ExecuteNonQuery();
         RegisterWrite();
     }

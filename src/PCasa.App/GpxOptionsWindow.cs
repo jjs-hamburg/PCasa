@@ -13,7 +13,7 @@ internal sealed class GpxOptionsWindow : Window
     private readonly TextBox _directory = new() { MinWidth = 310 };
     private readonly TextBox _offset = new() { Width = 100 };
     private readonly TextBox _gap = new() { Width = 100 };
-    private readonly ComboBox _timeZone = new() { MinWidth = 310 };
+    private readonly ComboBox _timeZone = new() { MinWidth = 310, IsEditable = false, MaxDropDownHeight = 420 };
     public GpxOptions? Result { get; private set; }
 
     internal GpxOptionsWindow(Window owner, GpxOptions settings)
@@ -59,8 +59,12 @@ internal sealed class GpxOptionsWindow : Window
             Text = english ? "Camera time zone" : "Zeitzone der Kamera" });
         _timeZone.DisplayMemberPath = "DisplayName";
         _timeZone.SelectedValuePath = "Id";
-        _timeZone.ItemsSource = TimeZoneInfo.GetSystemTimeZones();
+        var zones = TimeZoneInfo.GetSystemTimeZones()
+            .OrderBy(zone => zone.BaseUtcOffset).ThenBy(zone => zone.DisplayName).ToArray();
+        _timeZone.ItemsSource = zones;
         _timeZone.SelectedValue = settings.CameraTimeZoneId;
+        if (_timeZone.SelectedIndex < 0)
+            _timeZone.SelectedValue = GpxOptions.DefaultCameraTimeZoneId;
         _timeZone.Margin = new Thickness(0, 5, 0, 12);
         root.Children.Add(_timeZone);
 
@@ -94,7 +98,7 @@ internal sealed class GpxOptionsWindow : Window
             {
                 DirectoryPath = _directory.Text.Trim(),
                 CameraOffsetSeconds = seconds,
-                CameraTimeZoneId = (string?)_timeZone.SelectedValue ?? TimeZoneInfo.Local.Id,
+                CameraTimeZoneId = (string?)_timeZone.SelectedValue ?? GpxOptions.DefaultCameraTimeZoneId,
                 MaximumGapSeconds = gap
             };
             if (!next.IsValid())

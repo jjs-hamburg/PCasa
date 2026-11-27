@@ -17,7 +17,8 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
         IReadOnlyCollection<string> exclusions,
         IReadOnlyCollection<string> inclusions,
         CancellationToken token, Action<int, string>? progress = null,
-        string? selectedDirectory = null)
+        string? selectedDirectory = null,
+        Action<BackgroundFolderChange>? importNewImmediately = null)
     {
         var scanRoot = Path.GetFullPath(selectedDirectory ?? root.LocalPath);
         if (!FolderExclusionRules.IsAtOrBelow(scanRoot, root.LocalPath))
@@ -78,9 +79,15 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
                     file.CreationTimeUtc.Ticks != created;
                 if (!found || old!.Size != file.Length ||
                     old.Modified != file.LastWriteTimeUtc.Ticks || creationChanged)
-                    (found ? changes : added).Add(new BackgroundFolderChange(root.Id, file.FullName,
+                {
+                    var change = new BackgroundFolderChange(root.Id, file.FullName,
                         BackgroundFolderChangeKind.ScanFile, false,
-                        ForceExifRefresh: creationChanged));
+                        ForceExifRefresh: creationChanged);
+                    if (found) changes.Add(change);
+                    else if (importNewImmediately is not null)
+                        importNewImmediately(change);
+                    else added.Add(change);
+                }
                 if (count % 128 == 0) progress?.Invoke(count, path);
             }
         }

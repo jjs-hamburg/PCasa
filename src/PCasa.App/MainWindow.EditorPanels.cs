@@ -23,7 +23,11 @@ public partial class MainWindow
         if (!_editorPanelsReady || !ReferenceEquals(e.Source, EditorToolTabs))
             return;
         if (EditorToolTabs.SelectedItem is TabItem { Tag: string name })
+        {
+            if (GetPendingLiveEditStep() is not null)
+                DiscardLiveEditTool();
             SwitchEditorPanel(name);
+        }
     }
 
     private void SwitchEditorPanel(string panel)

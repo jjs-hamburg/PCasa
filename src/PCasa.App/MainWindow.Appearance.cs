@@ -49,6 +49,10 @@ public partial class MainWindow
         // Immutable photo identity survives thumbnail-size and folder reflow.
         public long? LastVisibleImageId { get; set; }
         public double LastVisibleImageRelativeY { get; set; }
+        public long? BookmarkFolderId { get; set; }
+        public double BookmarkRelativeTop { get; set; }
+        public long? BookmarkImageId { get; set; }
+        public double BookmarkImageRelativeY { get; set; }
         public long? LastFocusedImageId { get; set; }
         public bool LastFocusedImageWasSoleSelection { get; set; }
         public string? SelectedTreePath { get; set; }
@@ -118,6 +122,7 @@ public partial class MainWindow
         // Language selection lives in this existing appearance state. It is
         // safe for older profiles that have no Language key (defaults to de).
         UiLanguage.Current.Select(_appearance.Language);
+        RestoreRememberedGalleryBookmark();
         SyncLanguageMenu();
         // The shipped Leinwand textures were retired. Existing installations
         // must not keep a dangling reference to a now-deleted built-in file.

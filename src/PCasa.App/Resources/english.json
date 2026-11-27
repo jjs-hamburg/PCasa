@@ -1052,5 +1052,8 @@
   "Gespeicherte EXIF-Datumsfelder stimmen nicht mit der Eingabe überein.": "Saved EXIF date fields do not match the input.",
   "Baumstruktur": "Folder tree",
   "Flache Ordneransicht": "Flat folder view",
-  "Eingeklappte Ordner in flacher Ansicht ausblenden": "Hide collapsed folders in flat view"
+  "Eingeklappte Ordner in flacher Ansicht ausblenden": "Hide collapsed folders in flat view",
+  "Upgrade": "Upgrade",
+  "Setup speichern unter": "Save setup as",
+  "Verfeinerung …": "Refining …"
 }

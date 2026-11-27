@@ -177,6 +177,7 @@ public partial class MainWindow
         public string? ResultPath { get; set; }
         public DateTime ResultWriteUtc { get; set; }
         public long ResultSize { get; set; }
+        public string? ResultFingerprint { get; set; }
         public bool Ready { get; set; }
         public bool Busy { get; set; }
         // True ONLY after the actual external-result pixels are displayed.
@@ -243,12 +244,24 @@ public partial class MainWindow
     // process or to an already-running instance.
     private bool _externalReviewActivationHooked;
     private bool _externalReviewRefreshing;
+    private DispatcherTimer? _externalResultRetryTimer;
     private ExternalVideoReviewWindow? _externalVideoReviewDialog;
 
     private void EnsureExternalReviewActivationHook()
     {
         if (_externalReviewActivationHooked) return;
         _externalReviewActivationHooked = true;
+        _externalResultRetryTimer = new DispatcherTimer(DispatcherPriority.Background)
+        { Interval = TimeSpan.FromSeconds(2) };
+        _externalResultRetryTimer.Tick += async (_, _) =>
+        {
+            if (IsActive && _externalEditReview is { Ready: true, Busy: false, IsVideo: false } review &&
+                !_externalEditLaunchPending && !_externalReviewRefreshing &&
+                GetPendingLiveEditStep() is null)
+                await PresentExternalResultAsync(review);
+        };
+        _externalResultRetryTimer.Start();
+        Closed += (_, _) => _externalResultRetryTimer.Stop();
         Activated += async (_, _) =>
         {
             if (_externalEditReview is { Ready: true, Busy: false } review)
@@ -530,7 +543,7 @@ public partial class MainWindow
         if (persisted.Finalizing is { } pendingDecision)
         {
             _externalReviewRefreshing = false;
-            await CompleteExternalReviewAsync(pendingDecision);
+            await CompleteExternalReviewAsync(pendingDecision, recheck: false);
             return;
         }
         try
@@ -547,14 +560,19 @@ public partial class MainWindow
                 // The editor may still have its output open. Cancel remains
                 // available and the next activation will recheck.
                 PCasaDiagnostics.Write("ExternalEdit.Output", ex);
-                result = review.ResultPath;
+                // A transient read error never means that the old result is current.
+                review.PreviewReady = false;
+                UpdateEditControls();
+                return;
             }
             if (!ReferenceEquals(_externalEditReview, review)) return;
             var metadata = result is not null ? await Task.Run(() =>
             {
                 var f = new FileInfo(result);
-                return (Length: f.Length, Time: f.LastWriteTimeUtc);
-            }) : (Length: 0L, Time: DateTime.MinValue);
+                using var input = File.Open(result, FileMode.Open, FileAccess.Read, FileShare.Read);
+                var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(input));
+                return (Length: f.Length, Time: f.LastWriteTimeUtc, Hash: (string?)hash);
+            }) : (Length: 0L, Time: DateTime.MinValue, Hash: (string?)null);
             // An active tool owns its live preview. Delay newly arriving exports
             // until that tool has been accepted or canceled.
             if (review.Combined && GetPendingLiveEditStep() is not null) return;
@@ -562,7 +580,7 @@ public partial class MainWindow
             var changed = !string.Equals(result, review.ResultPath,
                     StringComparison.OrdinalIgnoreCase) ||
                 (result is not null && (metadata.Length != review.ResultSize ||
-                    metadata.Time != review.ResultWriteUtc));
+                    metadata.Time != review.ResultWriteUtc || metadata.Hash != review.ResultFingerprint));
             if (changed)
             {
                 review.PreviewReady = false;
@@ -582,6 +600,7 @@ public partial class MainWindow
             review.ResultPath = result;
             review.ResultSize = metadata.Length;
             review.ResultWriteUtc = metadata.Time;
+            review.ResultFingerprint = metadata.Hash;
             review.Ready = true;
             var previewFailed = false;
 
@@ -628,6 +647,9 @@ public partial class MainWindow
                                 metadata.Length, metadata.Time)) : result;
                         var bitmap = await Task.Run(() =>
                         {
+                            using (var input = File.Open(historyPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                                if (Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(input)) != metadata.Hash)
+                                    throw new IOException("External result changed during capture.");
                             var (width, height) = EditableImageFormats.Dimensions(historyPath);
                             return PhotoViewerImageLoader.Load(
                                 new PhotoViewerImageInfo(review.ImageId, historyPath,
@@ -650,6 +672,7 @@ public partial class MainWindow
                             _viewerSequence is null || _viewerCurrentIndex < 0 ||
                             _viewerSequence.At(_viewerCurrentIndex).ImageId != review.ImageId) return;
                         _viewerDecodeCancellation?.Cancel();
+                        _viewerZoomCancellation?.Cancel();
                         ++_viewerImageRequest;
                         _viewerPendingOriginalImageId = null;
                         _viewerPendingOriginalPixels = 0;
@@ -678,8 +701,7 @@ public partial class MainWindow
                         // Cancel remains available until finalization begins.
                         PCasaDiagnostics.Write("ExternalEdit.Preview", ex);
                         previewFailed = true;
-                        if (_photoEditSession?.HasChanges != true)
-                            review.Combined = false; // Preserve legacy Save when preview cannot decode.
+                        review.PreviewReady = false; // Retry; never change the session architecture.
                     }
                 }
             }
@@ -687,7 +709,7 @@ public partial class MainWindow
                 _viewerImageInfo?.Id == review.ImageId)
                 review.PreviewReady = true;
             StatusText.Text = previewFailed
-                ? UiLanguage.T("Vorschau nicht verfügbar; externes Ergebnis kann gespeichert werden.") +
+                ? UiLanguage.T("Verfeinerung …") +
                     " · " + Path.GetFileName(result)
                 : result is null
                 ? UiLanguage.T("Externe Bearbeitung: warte auf Ergebnis oder Abbrechen · ") +
@@ -720,24 +742,26 @@ public partial class MainWindow
     }
 
     private async Task<bool> CompleteExternalReviewAsync(
-        ExternalEditDecision decision, bool returnToGalleryAfterCancel = false)
+        ExternalEditDecision decision, bool returnToGalleryAfterCancel = false, bool recheck = true)
     {
         var review = _externalEditReview;
         if (review is null || !review.Ready || review.Busy || HasPendingExternalWrites()) return false;
-        if (review.Combined && decision != ExternalEditDecision.Cancel &&
-            (!review.PreviewReady || review.AwaitingReturn || _externalReviewRefreshing)) return false;
+        if (review.Combined && decision != ExternalEditDecision.Cancel)
+        {
+            if (_externalReviewRefreshing) return false;
+            if (recheck && GetPendingLiveEditStep() is null)
+                await PresentExternalResultAsync(review);
+            if (!ReferenceEquals(_externalEditReview, review) ||
+                !review.PreviewReady || review.AwaitingReturn || _externalReviewRefreshing) return false;
+        }
         // A crop/rotation/tonal adjustment to Topaz's displayed result
         // belongs to the SAME external Save/Copy/Cancel decision, not to a
         // second save request against the untouched original.
         if (decision != ExternalEditDecision.Cancel &&
             CanEditPendingExternalResult(review.ImageId) &&
-            (_cropActive || _straightenActive ||
-             _brightnessActive || _advancedToneActive))
+            GetPendingLiveEditStep() is not null)
         {
-            if (_cropActive && GetPendingLiveEditStep() is null)
-                EndCrop();
-            else
-                ApplyEditTool();
+            ApplyEditTool();
         }
         PhotoEditStep[] internalSteps = decision == ExternalEditDecision.Cancel ||
             _photoEditSession?.ImageId != review.ImageId

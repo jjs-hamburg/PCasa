@@ -154,7 +154,7 @@ public sealed class FolderScanner
         IProgress<ScanProgress>? progress = null,
         CancellationToken cancellationToken = default,
         bool publishCatalogChange = true,
-        bool forceExifRefresh = false)
+        bool forceExifRefresh = false, bool forceContentRefresh = false)
     {
         if (!IsSupportedImagePath(localFile) || !File.Exists(localFile))
             return new ScanResult(0, 0, 0, 0);
@@ -162,7 +162,7 @@ public sealed class FolderScanner
             folder, Path.GetDirectoryName(localFile)!, false,
             progress, cancellationToken, localFile,
             publishCatalogChange: publishCatalogChange,
-            forceExifRefresh: forceExifRefresh);
+            forceExifRefresh: forceExifRefresh, forceContentRefresh: forceContentRefresh);
     }
 
     private ScanResult ScanDirectoryLocked(
@@ -179,7 +179,7 @@ public sealed class FolderScanner
         bool forceExifRefresh = false,
         bool preferFirstPass = false,
         bool catalogOwnedProgress = false,
-        bool retryFailedFiles = false)
+        bool retryFailedFiles = false, bool forceContentRefresh = false)
     {
         var scanRoot = CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(localDirectory));
         EnsureInsideMonitoredFolder(folder, scanRoot);
@@ -546,13 +546,13 @@ public sealed class FolderScanner
                     }
 
                     var existing = scanSession.GetState(canonicalPath);
-                    var unchangedError = !retryFailedFiles && !forceExifRefresh &&
+                    var unchangedError = !retryFailedFiles && !forceExifRefresh && !forceContentRefresh &&
                         existing?.ImportError is not null &&
                         existing.FileSize == fileLength &&
                         existing.ModifiedUtcTicks == modifiedUtcTicks &&
                         (folder.IsNetwork || existing.CreatedUtcTicks == createdUtcTicks);
                     firstFolderFile = firstFileInThisScanFolder;
-                    var currentIndex = existing is not null &&
+                    var currentIndex = !forceContentRefresh && existing is not null &&
                         existing.ImportError is null &&
                         existing.FileSize == fileLength &&
                         existing.ModifiedUtcTicks == modifiedUtcTicks &&
@@ -627,10 +627,19 @@ public sealed class FolderScanner
                         decodeIdentity = new CatalogImageData(folder.Id, photoFolderId,
                             localPath, canonicalPath, file.Name, extension.ToLowerInvariant(),
                             fileLength, modifiedUtcTicks, 256, 256, "", createdUtcTicks);
+                        // Fingerprint only actual imports/rebuilds, never unchanged inventory.
+                        // Hold a read share until the pixels and metadata are committed.
+                        using var sourceBytes = VideoFormats.IsVideo(localPath) ? null :
+                            new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                                128 * 1024, FileOptions.SequentialScan);
+                        byte[]? fingerprint = sourceBytes is null ? null :
+                            System.Security.Cryptography.SHA256.HashDataAsync(sourceBytes, cancellationToken)
+                                .AsTask().GetAwaiter().GetResult();
                         var renderPath = _thumbnailCache.ResolveSource(localPath, cancellationToken);
                         var thumbnail = _thumbnailCache.CreateOrUpdate(
                             renderPath,
-                            canonicalPath,
+                            fingerprint is null ? canonicalPath :
+                                canonicalPath + "|sha256:" + Convert.ToHexString(fingerprint),
                             fileLength,
                             modifiedUtcTicks,
                             originalSourcePath: localPath,
@@ -674,7 +683,7 @@ public sealed class FolderScanner
                                 folder.Id, photoFolderId, localPath, canonicalPath,
                                 file.Name, extension.ToLowerInvariant(), fileLength,
                                 modifiedUtcTicks, thumbnail.Width, thumbnail.Height,
-                                thumbnail.Path, createdUtcTicks));
+                                thumbnail.Path, createdUtcTicks), fingerprint);
                             scanSession.SaveExif(canonicalPath, modifiedUtcTicks, fileLength, exif);
                             if (keywords is not null)
                                 scanSession.SaveTags(canonicalPath, modifiedUtcTicks, keywords);

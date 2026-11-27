@@ -175,6 +175,7 @@ internal static class Program
         Run("Missing thumbnail tier is rebuilt", MissingThumbnailCanRebuild, failures);
         Run("Repeated browse index keeps decoded thumbnail pages", IdenticalIndexRetainsPage, failures);
         Run("Manual thumbnail rebuild updates one image without evicting its neighbors", TargetedThumbnailRebuildRetainsNeighbor, failures);
+        Run("New discoveries import before inventory completion; same-stamp replacement rebuilds content", ImmediateInventoryAndFingerprint, failures);
         Run("Per-folder gallery sorting preserves tree order for all six sort fields", PerFolderSortAllFields, failures);
         Run("Gallery sorting reads EXIF capture date, file dates, size and original dimensions from one index", GallerySortUsesCatalogMetadata, failures);
         Run("External Topaz result supports an in-workspace crop before explicit Save without touching original",
@@ -4408,6 +4409,66 @@ internal static class Program
         cache.SetIndex(Array.Empty<BrowseThumbnailIndexEntry>());
         if (cache.Count != 0 || cache.TryGet(0, out _))
             throw new Exception("Changed browse index did not invalidate obsolete pages.");
+    }
+
+    private static void ImmediateInventoryAndFingerprint()
+    {
+        using var sandbox = new Sandbox();
+        // Uncompressed TIFF guarantees equal file sizes and has a native libvips decoder.
+        var path = Path.Combine(sandbox.Images, "same-stamp.tif");
+        void WriteTiff(byte value)
+        {
+            var pixels = Enumerable.Repeat(value, 32 * 32 * 3).ToArray();
+            var bitmap = BitmapSource.Create(32, 32, 96, 96, PixelFormats.Bgr24, null, pixels, 32 * 3);
+            var encoder = new TiffBitmapEncoder { Compression = TiffCompressOption.None };
+            encoder.Frames.Add(BitmapFrame.Create(bitmap));
+            using var stream = File.Create(path);
+            encoder.Save(stream);
+        }
+        WriteTiff(40);
+        var (db, root, scanner) = sandbox.Prepare();
+        var called = false;
+        var finished = false;
+        var result = new CatalogInventoryCheck(db).Check(root, [], [], CancellationToken.None,
+            (count, p) => finished = true,
+            importNewImmediately: change =>
+            {
+                if (finished || change.Path != path)
+                    throw new Exception("Discovery was postponed until inventory completion.");
+                var imported = scanner.ScanFile(root, change.Path);
+                if (imported.Updated != 1 || imported.Failed != 0)
+                    throw new Exception($"Immediate discovery failed: {imported}.");
+                called = true;
+            });
+        if (!called || !finished || result.Changes.Count != 0)
+            throw new Exception("Streaming discovery did not consume the new file exactly once.");
+        var tier = new BrowseThumbnailProfileRepository(db).Get().Tiers[0];
+        var cache = new BrowseCacheRepository(db);
+        var old = cache.GetIndex(tier).Single();
+        var before = new PhotoViewerImageRepository(db).Get(old.ImageId)!;
+        var expectedHash = SHA256.HashData(File.ReadAllBytes(path));
+        if (before.ContentFingerprint is null ||
+            !before.ContentFingerprint.SequenceEqual(expectedHash))
+            throw new Exception($"Initial import fingerprint: expected {Convert.ToHexString(expectedHash)}, " +
+                $"actual {(before.ContentFingerprint is null ? "NULL" : Convert.ToHexString(before.ContentFingerprint))}, " +
+                $"catalog path {before.LocalPath}.");
+        var stamp = File.GetLastWriteTimeUtc(path);
+        var length = new FileInfo(path).Length;
+        WriteTiff(200);
+        File.SetLastWriteTimeUtc(path, stamp);
+        if (new FileInfo(path).Length != length)
+            throw new Exception("Invalid same-stamp fixture.");
+        var verified = PhotoViewerImageLoader.LoadVerified(before, 32, CancellationToken.None);
+        if (before.ContentFingerprint.SequenceEqual(verified.Hash))
+            throw new Exception("Viewer accepted unchanged stamp as unchanged pixels.");
+        var rebuilt = scanner.ScanFile(root, path, forceContentRefresh: true);
+        if (rebuilt.Updated != 1 || rebuilt.Failed != 0)
+            throw new Exception($"Changed bytes did not force a full thumbnail rebuild: {rebuilt}.");
+        var after = new PhotoViewerImageRepository(db).Get(old.ImageId)!;
+        var replacement = cache.GetIndexEntry(tier, old.ImageId)!;
+        if (after.ContentFingerprint is null || !after.ContentFingerprint.SequenceEqual(verified.Hash) ||
+            (replacement.PackFile == old.PackFile && replacement.ByteOffset == old.ByteOffset))
+            throw new Exception("Fingerprint or packed thumbnail was not replaced.");
     }
 
     private static void TargetedThumbnailRebuildRetainsNeighbor()

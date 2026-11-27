@@ -9,6 +9,7 @@ using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using System.Windows.Media.Imaging;
 using PCasa.App.Controls;
+using PCasa.App.Data;
 using PCasa.App.Models;
 using PCasa.App.Services;
 
@@ -178,6 +179,9 @@ public partial class MainWindow
         // ongoing original load must NOT cancel and restart that same read.
         // Finish it first; only then request any genuinely larger resolution.
         var wanted = _viewerSequence.At(_viewerCurrentIndex).ImageId;
+        if (_externalEditReview is { Combined: true, PreviewReady: true, ResultPath: not null } external &&
+            external.ImageId == wanted && _photoEditSession?.ImageId == wanted)
+            return; // Accepted external history, not the original, owns these pixels.
         if (keepCurrentAsPlaceholder &&
             _viewerPendingOriginalImageId == wanted &&
             _viewerDecodeCancellation is { IsCancellationRequested: false })
@@ -272,7 +276,7 @@ public partial class MainWindow
         var size = GetViewerRequiredPixelSize();
         _viewerPendingOriginalPixels = size;
 
-        if (TryGetViewerOriginal(entry.ImageId, size, out var decoded))
+        if (keepCurrentAsPlaceholder && TryGetViewerOriginal(entry.ImageId, size, out var decoded))
         {
             _viewerHasOriginal = true;
             _viewerPendingOriginalImageId = null;
@@ -429,12 +433,42 @@ public partial class MainWindow
                     () => new PhotoViewerImageRepository(_database).Get(imageId), token);
             if (info is null)
                 throw new FileNotFoundException("Bild ist nicht mehr im Katalog.");
-            var bitmap = await _foregroundReadService.ReadViewerAsync(
+            var verified = await _foregroundReadService.ReadViewerAsync(
                 info.LocalPath,
-                readToken => PhotoViewerImageLoader.Load(info, requiredSize, readToken),
+                readToken => PhotoViewerImageLoader.LoadVerified(info, requiredSize, readToken),
                 token);
+            var bitmap = verified.Bitmap;
+            if (info.ContentFingerprint is null ||
+                !info.ContentFingerprint.AsSpan().SequenceEqual(verified.Hash))
+            {
+                var refreshed = await _foregroundReadService.ReadViewerAsync(info.LocalPath, readToken =>
+                {
+                    var folder = ResolveMonitoredFolder(info.LocalPath);
+                    if (folder is null) return (Info: info, Camera: (string?)null);
+                    var scan = _folderScanner.ScanFile(folder, info.LocalPath,
+                        cancellationToken: readToken, publishCatalogChange: false, forceContentRefresh: true);
+                    if (scan.CatalogChanged)
+                    {
+                        PublishCommittedGalleryImage(_activeBrowseTier, imageId, null);
+                        CatalogChanges.PublishImageCommitted();
+                    }
+                    if (scan.Failed > 0)
+                        return (Info: info, Camera: (string?)null);
+                    return (Info: new PhotoViewerImageRepository(_database).Get(imageId) ?? info,
+                        Camera: ReadCachedViewerCameraDetails(imageId));
+                }, token);
+                if (IsCurrentViewerRequest(version, token))
+                {
+                    _viewerImageInfo = refreshed.Info;
+                    _viewerCachedCameraDetails = refreshed.Camera;
+                    _viewerOriginalCache.Remove(imageId);
+                    _viewerOriginalLru.Remove(imageId);
+                    _browsePageCache?.InvalidateImage(imageId);
+                }
+            }
 
-            if (IsCurrentViewerRequest(version, token))
+            if (IsCurrentViewerRequest(version, token) &&
+                _externalEditReview is not { PreviewReady: true, ResultPath: not null })
             {
                 _viewerHasOriginal = true;
                 CacheViewerOriginal(imageId, requiredSize, bitmap);
@@ -1397,6 +1431,7 @@ public partial class MainWindow
                 (_cropActive || _straightenActive ||
                  (_brightnessActive && Math.Abs(_brightnessAmount) > .00001) ||
                  (_advancedToneActive && Math.Abs(_advancedToneAmount) > .00001) ||
+                 _pendingAutomaticEdit is not null ||
                  _photoEditSession?.HasChanges == true))
                 SaveEdits(asCopy:
                     (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
@@ -1412,7 +1447,7 @@ public partial class MainWindow
             if (_externalEditReview is not null || _externalBatchReview is not null ||
                 _cropSavePending || _photoEditSession?.HasChanges == true ||
                 _cropActive || _straightenActive || _brightnessActive ||
-                _advancedToneActive)
+                _advancedToneActive || _pendingAutomaticEdit is not null)
             {
                 PcasaDialog.Show(this, UiLanguage.T(
                     "Bitte die laufende Bildbearbeitung zuerst speichern oder abbrechen."),

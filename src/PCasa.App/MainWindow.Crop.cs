@@ -264,33 +264,8 @@ public partial class MainWindow
             }
             UpdateEditControls();
         };
-        CropApplyButton.Click += (_, _) => ApplyEditTool();
-        ViewerToolCancelButton.Click += (_, _) =>
-        {
-            // Cancel only the live crop/straighten mask. Previously applied
-            // unsaved operations remain available for Save/Undo.
-            if (_cropActive)
-            {
-                EndCrop();
-                if (_photoEditSession is not null)
-                {
-                    SetViewerBitmap(_photoEditSession.Render());
-                    ApplyViewerImageLayout();
-                }
-            }
-            else if (_straightenActive)
-                LeaveStraighten();
-            else if (_brightnessActive)
-                LeaveBrightness();
-            else if (_advancedToneActive)
-                LeaveAdvancedTone();
-            if (_photoEditSession is not null)
-            {
-                SetViewerBitmap(_photoEditSession.Render());
-                ApplyViewerImageLayout();
-            }
-            UpdateEditControls();
-        };
+        CropApplyButton.Click += (_, _) => DecideLiveEditTool(apply: true);
+        ViewerToolCancelButton.Click += (_, _) => DecideLiveEditTool(apply: false);
         CropSaveButton.Click += (_, _) => SaveEdits();
         CropSaveCopyButton.Click += (_, _) => SaveEdits(asCopy: true);
         CropCancelButton.Click += (_, _) => CancelEditSession();
@@ -311,9 +286,7 @@ public partial class MainWindow
             return;
         }
         if (!EnsureEditSession()) return;
-        if (_straightenActive) LeaveStraighten();
-        if (_brightnessActive) ApplyEditTool();
-        if (_advancedToneActive) ApplyEditTool();
+        if (!_cropActive) DiscardLiveEditTool();
         if (_photoEditSession is null) return;
         // Work on the currently accepted, unsaved image, not an old source.
         if (_photoEditSession.HasChanges)
@@ -420,7 +393,7 @@ public partial class MainWindow
         var pendingAdvanced = _advancedToneActive &&
             Math.Abs(_advancedToneAmount) > .00001;
         if (hasAccepted || editedMask || pendingAngle || pendingBrightness ||
-            pendingAdvanced)
+            pendingAdvanced || _pendingAutomaticEdit is not null)
         {
             var response = PcasaDialog.Show(this,
                 UiLanguage.T("Ungespeicherte Bildbearbeitungen verwerfen?"),
