@@ -746,8 +746,37 @@ internal static class CropFlow
                     corners[offset + 2] != 255 || corners[offset + 3] != 255)
                     throw new Exception("Straightening left a dark corner.");
             }
+            static string PublicationHash(string file)
+            {
+                using var stream = File.OpenRead(file);
+                return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream));
+            }
+            var originalHash = PublicationHash(path);
+            string? candidateHash = null;
             Task.Run(() => JpegCropWriter.Save(path, session.AppliedSteps,
-                CancellationToken.None)).GetAwaiter().GetResult();
+                CancellationToken.None, candidate =>
+                {
+                    if (PublicationHash(path) != originalHash)
+                        throw new Exception("Image changed before candidate was journalable.");
+                    candidateHash = PublicationHash(candidate);
+                })).GetAwaiter().GetResult();
+            if (candidateHash is null || PublicationHash(path) != candidateHash)
+                throw new Exception("Published image does not match the pre-publication fingerprint.");
+            // Simulate process death after atomic replacement but before the
+            // scheduler cursor was committed. The durable replay guard must
+            // not call its publisher at all (null delegates make that fail).
+            var windowType = typeof(PCasa.App.MainWindow);
+            var fingerprintType = windowType.GetNestedType("WriteFingerprint",
+                System.Reflection.BindingFlags.NonPublic)!;
+            var replay = windowType.GetMethod("PublishDurableImage",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+            var fingerprint = Activator.CreateInstance(fingerprintType,
+                new object?[] { originalHash, candidateHash })!;
+            replay.Invoke(null, new object?[] { path, path, fingerprint, null, null,
+                CancellationToken.None });
+            if (PublicationHash(path) != candidateHash)
+                throw new Exception("A recovered image edit modified its committed result.");
+            Console.WriteLine("PASS: Replayed relative image edit recognizes the already published candidate.");
             using (var saved = File.OpenRead(path))
             {
                 var result = BitmapDecoder.Create(saved, BitmapCreateOptions.None,
