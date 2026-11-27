@@ -9,6 +9,7 @@ using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using System.Windows.Media.Imaging;
 using PCasa.App.Controls;
+using PCasa.App.Data;
 using PCasa.App.Models;
 using PCasa.App.Services;
 
