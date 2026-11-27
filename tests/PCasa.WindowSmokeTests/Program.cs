@@ -802,8 +802,14 @@ internal static class Program
                 System.Reflection.BindingFlags.NonPublic)!;
             var oldSequence = seqField.GetValue(window);
             var oldIndex = indexField.GetValue(window);
+            var refinedField = typeof(PCasa.App.MainWindow).GetField("_viewerHasOriginal",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var oldRefined = refinedField.GetValue(window);
             try
             {
+                // A fully decoded RAW must still reject all internal editing.
+                refinedField.SetValue(window, true);
                 var rawIndex = new[] { thumbEntries[2] with { FileName = "photo.arw" } };
                 seqField.SetValue(window, PhotoSequence.Create(rawIndex,
                     new HashSet<long>(), 12L, PhotoSequenceScope.Gallery));
@@ -815,14 +821,20 @@ internal static class Program
                 var jpegIndex = new[] { thumbEntries[2] };
                 seqField.SetValue(window, PhotoSequence.Create(jpegIndex,
                     new HashSet<long>(), 12L, PhotoSequenceScope.Gallery));
+                refinedField.SetValue(window, false);
+                controlsMethod.Invoke(window, null);
+                if (tabs.IsEnabled || toolButtons.Any(btn => btn.IsEnabled))
+                    throw new Exception("JPEG thumbnail unlocked editing before refined decode.");
+                refinedField.SetValue(window, true);
                 controlsMethod.Invoke(window, null);
                 if (!tabs.IsEnabled || toolButtons.Any(btn => !btn.IsEnabled))
-                    throw new Exception("JPEG editor did not become available.");
+                    throw new Exception("Refined JPEG editor did not become available.");
             }
             finally
             {
                 seqField.SetValue(window, oldSequence);
                 indexField.SetValue(window, oldIndex);
+                refinedField.SetValue(window, oldRefined);
                 controlsMethod.Invoke(window, null);
             }
 
