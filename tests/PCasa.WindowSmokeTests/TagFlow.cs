@@ -283,8 +283,18 @@ internal static class TagFlow
                 "_startupGalleryPublished",
                 System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)!;
-            Until(window, () => galleryPublished.GetValue(window) is true,
-                "Gallery startup did not publish its viewport.");
+            var pendingAnchorField = typeof(PCasa.App.MainWindow).GetField(
+                "_pendingGalleryAnchor",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var restoringAnchorField = typeof(PCasa.App.MainWindow).GetField(
+                "_restoringGalleryLayoutAnchor",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            Until(window, () => galleryPublished.GetValue(window) is true &&
+                pendingAnchorField.GetValue(window) is null &&
+                restoringAnchorField.GetValue(window) is false,
+                "Gallery startup and queued thumbnail reflow did not settle.");
             scroller.ScrollToVerticalOffset(0);
             Until(window, () => scroller.VerticalOffset <= 0.01,
                 "Gallery did not reach its initial top position.");
@@ -310,9 +320,21 @@ internal static class TagFlow
                 window.UpdateLayout();
                 if (scroller.VerticalOffset > 0.01)
                     throw new Exception("Outward input moved the gallery at its top.");
+                // Deliberately queue an obsolete top anchor before the
+                // real user click. The scrollbar must invalidate it
+                // synchronously, before WPF processes ScrollToVerticalOffset.
+                var topAnchor = surface.CaptureImageAnchor(0)
+                    ?? throw new Exception("Gallery has no top image anchor.");
+                pendingAnchorField.SetValue(window, topAnchor);
+                restoringAnchorField.SetValue(window, true);
+                var lineTarget = surface.GetNextImageRowCaptionOffset(
+                    scroller.VerticalOffset, scroller.ViewportHeight);
                 ClickArrow(2);
+                if (pendingAnchorField.GetValue(window) is not null ||
+                    restoringAnchorField.GetValue(window) is true)
+                    throw new Exception("Real scrollbar input did not supersede the obsolete layout anchor.");
                 Until(window, () => scroller.VerticalOffset > 0,
-                    $"Picasa line-down arrow did not scroll original gallery; extent={scroller.ScrollableHeight}, viewport={scroller.ViewportHeight}.");
+                    $"Picasa line-down arrow did not scroll original gallery; target={lineTarget}, extent={scroller.ScrollableHeight}, viewport={scroller.ViewportHeight}.");
                 picasaBar.StopMotion();
 
                 scroller.ScrollToEnd();
