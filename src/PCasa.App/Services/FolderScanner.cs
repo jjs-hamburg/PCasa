@@ -1082,7 +1082,7 @@ public sealed class FolderScanner
         }
     }
 
-    private static IEnumerable<string> EnumerateIncludedFiles(
+    internal static IEnumerable<string> EnumerateIncludedFiles(
         string scanRoot,
         bool recursive,
         IReadOnlyCollection<string> exclusions,
@@ -1093,7 +1093,8 @@ public sealed class FolderScanner
         IReadOnlySet<string>? alreadyIndexedPaths = null,
         bool catalogImport = false,
         Action<string>? onDirectoryComplete = null,
-        IReadOnlyList<string>? preferredDirectories = null)
+        IReadOnlyList<string>? preferredDirectories = null,
+        Action<FileInfo>? onFileInfo = null)
     {
         var pending = new Stack<string>();
         pending.Push(scanRoot);
@@ -1189,10 +1190,10 @@ public sealed class FolderScanner
                 }
                 else
                 {
-                    IEnumerator<string> fileIterator;
+                    IEnumerator<FileInfo> fileIterator;
                     try
                     {
-                        fileIterator = Directory.EnumerateFiles(directory, "*", options)
+                        fileIterator = new DirectoryInfo(directory).EnumerateFiles("*", options)
                             .GetEnumerator();
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -1204,7 +1205,7 @@ public sealed class FolderScanner
                         while (true)
                         {
                             token.ThrowIfCancellationRequested();
-                            string file;
+                            FileInfo file;
                             try
                             {
                                 if (!fileIterator.MoveNext()) break;
@@ -1214,7 +1215,8 @@ public sealed class FolderScanner
                             {
                                 throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
                             }
-                            yield return file;
+                            onFileInfo?.Invoke(file);
+                            yield return file.FullName;
                         }
                     }
                 }
