@@ -15,7 +15,7 @@ public partial class MainWindow
 {
     private sealed record EditWriteRecipe(
         long ImageId, long FolderId, string Path, PhotoEditStep[] Steps,
-        string? CopyPath = null);
+        string? CopyPath = null, WriteFingerprint? Fingerprint = null);
 
     private PhotoEditSession? _photoEditSession;
     // The durable P0 recipe owns the pixels after enqueue. UI navigation may
@@ -469,7 +469,7 @@ public partial class MainWindow
     // must never compete in File.Replace while either receipt is unresolved.
     private Task<bool> HasUnfinishedImageEditAsync(long imageId)
         => Task.Run(() => new DurablePackageJournal(_database).Pending()
-            .Where(item => item.Type == "image-edit-v1")
+            .Where(item => item.Type is "image-edit-v1" or "image-edit-v2")
             .Any(item => JsonSerializer.Deserialize<EditWriteRecipe>(
                 item.Payload)?.ImageId == imageId));
 
@@ -525,10 +525,8 @@ public partial class MainWindow
                     JpegCropWriter.GetAvailableCopyPath(request.Path));
                 request = request with { CopyPath = copyPath };
             }
-            var task = StartDirectImageWrite(key,
-                UiLanguage.T("Bildbearbeitung speichern"), request.Path,
-                BuildEditPackage(key, JsonSerializer.Serialize(request)),
-                request.FolderId, reindexOriginal: request.CopyPath is null);
+            var task = _scheduler.EnqueueDurableRecipeAsync(key, "image-edit-v2",
+                JsonSerializer.Serialize(request), SchedulerPriority.ManualAction);
             _pendingEditImageIds.Add(info.Id);
             _cropSavePending = false; // Navigation must not wait for a NAS write.
             UpdateEditControls();
@@ -559,21 +557,23 @@ public partial class MainWindow
         {
             _scheduler.ReportProgress(key, UiLanguage.T("Bildbearbeitung speichern"),
                 0, request.CopyPath is null ? 1 : 2, request.Path);
-            if (request.CopyPath is { Length: > 0 } destination)
-                JpegCropWriter.SaveAsCopy(request.Path, destination,
-                    request.Steps, token);
-            else
-            {
-                JpegCropWriter.Save(request.Path, request.Steps, token);
-                // Invalidating the gallery projection is NOT part of the
-                // original-file commit. A transient SQLite/cache fault after
-                // File.Replace must not misreport a successful save as failed.
-                try { new BrowseCacheRepository(_database).InvalidateImage(request.ImageId); }
-                catch (Exception ex)
+            PublishDurableImage(request.Path, request.CopyPath ?? request.Path,
+                request.Fingerprint,
+                fingerprint =>
                 {
-                    PCasaDiagnostics.Write("Image.Edit.CacheInvalidation", ex);
-                }
-            }
+                    request = request with { Fingerprint = fingerprint };
+                    PersistWriteRecipe(key, request);
+                },
+                beforePublish =>
+                {
+                    if (request.CopyPath is { Length: > 0 } destination)
+                        JpegCropWriter.SaveAsCopy(request.Path, destination,
+                            request.Steps, token, beforePublish);
+                    else
+                        JpegCropWriter.Save(request.Path, request.Steps, token, beforePublish);
+                }, token);
+            if (request.CopyPath is null)
+                ReindexDurableImage(request.ImageId, request.FolderId, request.Path);
             _scheduler.ReportProgress(key, request.CopyPath is null
                     ? UiLanguage.T("Bildbearbeitung speichern")
                     : UiLanguage.T("Kopie katalogisieren"),
