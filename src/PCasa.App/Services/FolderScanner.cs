@@ -65,6 +65,8 @@ public sealed class FolderScanner
         internal Action<string>? DirectoryCompletionHandler;
         internal int ImageFilesSeen, Updated, Unchanged, Added, Changed,
             CacheRepaired, MetadataUpdated, Failed;
+        internal readonly HashSet<string> VerifiedDirectories = new(StringComparer.OrdinalIgnoreCase);
+        internal int Removed;
         internal Exception? FirstFailure;
         internal string? FirstFailurePath;
 
@@ -80,6 +82,8 @@ public sealed class FolderScanner
             PhotoFolderIds.Clear();
             ObservedPaths.Clear();
             FailedDirectories.Clear();
+            VerifiedDirectories.Clear();
+            Removed = 0;
             CompletedInitialDirectories = null;
             InitialFileCursors = null;
             RestartedPartialDirectories = null;
@@ -138,14 +142,15 @@ public sealed class FolderScanner
         string? durableScanKey = null,
         bool preferFirstPass = false,
         bool catalogOwnedProgress = false,
-        bool retryFailedFiles = false)
+        bool retryFailedFiles = false,
+        bool prioritizeImportFrontier = false)
     {
         return ScanDirectoryLocked(
             folder, localDirectory, recursive, progress, cancellationToken,
             resume: resume, durableInitialImport: durableInitialImport,
             durableScanKey: durableScanKey, preferFirstPass: preferFirstPass,
             catalogOwnedProgress: catalogOwnedProgress,
-            retryFailedFiles: retryFailedFiles);
+            retryFailedFiles: retryFailedFiles, prioritizeImportFrontier: prioritizeImportFrontier);
     }
 
     public ScanResult ScanFile(
@@ -179,7 +184,8 @@ public sealed class FolderScanner
         bool forceExifRefresh = false,
         bool preferFirstPass = false,
         bool catalogOwnedProgress = false,
-        bool retryFailedFiles = false, bool forceContentRefresh = false)
+        bool retryFailedFiles = false, bool forceContentRefresh = false,
+        bool prioritizeImportFrontier = false)
     {
         var scanRoot = CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(localDirectory));
         EnsureInsideMonitoredFolder(folder, scanRoot);
@@ -222,13 +228,15 @@ public sealed class FolderScanner
         if (resume is not null) resume.SourceGeneration = generation;
         // Same scanner and traversal for every inventory. The durable key
         // belongs to one scan request; completed requests erase their receipt.
+        var durableRefresh = catalogOwnedProgress && !preferFirstPass && specificFile is null && durableScanKey is not null;
         var regularCheckpoint = durableScanKey is not null
             ? _folderRepository.BeginOrResumeRegularScan(
                 durableScanKey, folder.Id, scanRoot, folder.CanonicalPath,
                 beginManualEpoch: false,
-                loadLegacyProgress: !catalogOwnedProgress)
+                loadLegacyProgress: !catalogOwnedProgress || durableRefresh,
+                verifiedDirectoryReceipts: durableRefresh)
             : null;
-        if (!catalogOwnedProgress && regularCheckpoint is not null &&
+        if ((!catalogOwnedProgress || durableRefresh) && regularCheckpoint is not null &&
             resume is not null && resume.Enumerator is null &&
             resume.ImageFilesSeen == 0)
             resume.ImageFilesSeen = regularCheckpoint.Checked;
@@ -237,7 +245,7 @@ public sealed class FolderScanner
         if (resume is not null) resume.ScanEpoch = scanEpoch;
 
         var imageFilesSeen = resume?.ImageFilesSeen ??
-            (catalogOwnedProgress ? 0 : regularCheckpoint?.Checked ?? 0);
+            (catalogOwnedProgress && !durableRefresh ? 0 : regularCheckpoint?.Checked ?? 0);
         var updated = resume?.Updated ?? 0;
         var unchanged = resume?.Unchanged ?? 0;
         var added = resume?.Added ?? 0;
@@ -263,7 +271,7 @@ public sealed class FolderScanner
         // independent of a job's checked counter. P4 reconciliation never
         // uses the import shortcut.
         var catalogImport = catalogOwnedProgress && preferFirstPass && specificFile is null;
-        var persistentScan = catalogImport || (!catalogOwnedProgress &&
+        var persistentScan = catalogImport || durableRefresh || (!catalogOwnedProgress &&
             (durableInitialImport || durableScanKey is not null));
         // Only legacy scopes need a root-wide directory snapshot.
         var savedFrontier = catalogImport && resume?.Enumerator is null
@@ -348,7 +356,7 @@ public sealed class FolderScanner
         }
         // A partial directory seen-set after restart must never prune images
         // that were committed and skipped before this process started.
-        var restartedPartialDirectories = persistentScan
+        var restartedPartialDirectories = persistentScan && !durableRefresh
             ? resume?.RestartedPartialDirectories ??
                 new HashSet<string>(fileCursors!.Keys, StringComparer.OrdinalIgnoreCase)
             : null;
@@ -356,10 +364,17 @@ public sealed class FolderScanner
             resume.RestartedPartialDirectories = restartedPartialDirectories;
         var failedDirectories = resume?.FailedDirectories ??
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var removedByCompletedDirectories = 0;
+        var removedByCompletedDirectories = resume?.Removed ?? 0;
+        var verifiedDirectories = resume?.VerifiedDirectories ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var checkedAtLastDirectory = regularCheckpoint?.Checked ?? 0;
         void DirectoryCompleted(string directory)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (durableRefresh)
+            {
+                verifiedDirectories.Add(FolderExclusionRules.Normalize(directory));
+                if (completedDirectories!.Contains(directory)) return;
+            }
             if (!Directory.Exists(folder.LocalPath) || !Directory.Exists(directory))
                 throw new DirectoryNotFoundException(
                     $"Verzeichnis vor Checkpoint nicht erreichbar: {directory}");
@@ -399,6 +414,8 @@ public sealed class FolderScanner
                 throw new OperationCanceledException(
                     "First-pass directory checkpoint superseded.");
             completedDirectories!.Add(directory);
+            checkedAtLastDirectory = imageFilesSeen;
+            if (resume is not null) resume.Removed = removedByCompletedDirectories;
             // A completed directory is now durable; do not keep a large
             // duplicate inventory in memory across the rest of the NAS scan.
             observedPaths!.RemoveWhere(path => string.Equals(
@@ -421,6 +438,20 @@ public sealed class FolderScanner
             folder.CanonicalPath, folder.Id, generation, cancellationToken);
         // ExifTool is reused throughout this scan, not restarted per file.
         using var exifReader = _exifReaderFactory();
+        // A first-import frontier is a preferred starting scope, never a
+        // filter on an explicit refresh. Revisit the rest of the selected
+        // tree after the outstanding directories, without visiting any twice.
+        string[]? preferredDirectories = null;
+        if (prioritizeImportFrontier && !catalogImport && specificFile is null &&
+            resume?.Enumerator is null && _folderRepository.HasIncompleteImport(folder.Id))
+        {
+            preferredDirectories = (_folderRepository.GetImportFrontier(folder.Id, generation, scanRoot)
+                ?? _folderRepository.GetImportFrontier(folder.Id, generation, folder.LocalPath)
+                ?? _folderRepository.GetDirectoryFirstPass(folder.Id, generation, scanRoot).Cursors.Keys.ToArray())
+                .Where(path => FolderExclusionRules.IsAtOrBelow(path, scanRoot)).ToArray();
+        }
+        if (durableRefresh && resume?.Enumerator is null && regularCheckpoint!.Cursors.Count > 0)
+            preferredDirectories = regularCheckpoint.Cursors.Keys.Concat(preferredDirectories ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var enumerator = resume?.Enumerator ??
             (catalogImport
                 ? EnumerateFirstImportFiles(folder, generation, scanRoot, recursive,
@@ -431,14 +462,15 @@ public sealed class FolderScanner
                 ? EnumerateIncludedFiles(
                     scanRoot, recursive, exclusions, inclusions, CancellationToken.None,
                     completedDirectories,
-                    fileCursors,
+                    durableRefresh ? null : fileCursors,
                     indexedFirstPassPaths,
                     catalogImport,
                     persistentScan
                         ? resume is null
                             ? DirectoryCompleted
                             : directory => resume.DirectoryCompletionHandler?.Invoke(directory)
-                        : null)
+                        : null,
+                    preferredDirectories, reportCompletedDirectories: durableRefresh)
                 : new[] { specificFile }).GetEnumerator();
         if (resume is not null) resume.Enumerator = enumerator;
         var enumerationComplete = resume?.EnumerationComplete ?? false;
@@ -466,10 +498,14 @@ public sealed class FolderScanner
                             break;
                         }
                     }
-                    catch (OperationCanceledException) when (catalogImport && resume is not null)
+                    catch (OperationCanceledException) when ((catalogImport || durableRefresh) && resume is not null)
                     {
-                        enumerator.Dispose();
-                        resume.Enumerator = null;
+                        if (durableRefresh) resume.Reset();
+                        else
+                        {
+                            enumerator.Dispose();
+                            resume.Enumerator = null;
+                        }
                         throw;
                     }
                     localPath = enumerator.Current;
@@ -698,6 +734,8 @@ public sealed class FolderScanner
 
                         currentThumbnailPath = thumbnail.Path;
                         updated++;
+                        if (catalogIndexed is int confirmed && (existing is null || existing.ImportError is not null))
+                            catalogIndexed = confirmed + 1;
                         // The gallery observes catalog commits, not scanner
                         // progress, tree state or scan completion. Publication
                         // occurs only after the SQLite image+cache index commit.
@@ -824,7 +862,21 @@ public sealed class FolderScanner
                 // committed or had its failure recorded, so a single bad
                 // image cannot rewind the next launch by thousands of files.
                 // Database errors still abort before reaching this point.
-                if (persistentScan)
+                if (durableRefresh)
+                {
+                    // Directory receipts prove completeness; an unsorted
+                    // filename is only the preferred restart directory.
+                    var directory = Path.GetDirectoryName(localPath) ?? scanRoot;
+                    if (!fileCursors!.ContainsKey(directory))
+                    {
+                        if (!_folderRepository.SaveRegularScanFile(durableScanKey!,
+                            directory, Path.GetFileName(localPath), checkedAtLastDirectory,
+                            generation, scanEpoch))
+                            throw new OperationCanceledException("Scan receipt superseded.");
+                        fileCursors[directory] = Path.GetFileName(localPath);
+                    }
+                }
+                else if (persistentScan)
                 {
                     var directory = Path.GetDirectoryName(localPath) ?? scanRoot;
                     var fileName = Path.GetFileName(localPath);
@@ -925,6 +977,56 @@ public sealed class FolderScanner
                 expectedGeneration: generation, expectedScanEpoch: scanEpoch);
         }
 
+        if (durableRefresh && recursive)
+        {
+            // Each enumerated directory has already reconciled its files.
+            // Confirm only missing subtrees, never prune a skipped directory.
+            var missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var db = _catalog.Database.OpenConnection())
+            using (var cmd = db.CreateCommand())
+            {
+                cmd.CommandText = "SELECT local_path FROM photo_folders WHERE monitored_folder_id=$id;";
+                cmd.Parameters.AddWithValue("$id", folder.Id);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var candidate = FolderExclusionRules.Normalize(reader.GetString(0));
+                    if (!FolderExclusionRules.IsAtOrBelow(candidate, scanRoot) ||
+                        verifiedDirectories.Contains(candidate) ||
+                        FolderExclusionRules.IsExcluded(candidate, exclusions, inclusions))
+                        continue;
+                    var parent = Path.GetDirectoryName(candidate);
+                    while (parent is not null && FolderExclusionRules.IsAtOrBelow(parent, scanRoot) &&
+                        !verifiedDirectories.Contains(FolderExclusionRules.Normalize(parent)))
+                    {
+                        candidate = parent;
+                        parent = Path.GetDirectoryName(candidate);
+                    }
+                    if (parent is not null && verifiedDirectories.Contains(FolderExclusionRules.Normalize(parent)))
+                        missing.Add(candidate);
+                }
+            }
+            var cleanup = new CatalogRemovalService(_catalog.Database);
+            foreach (var path in missing)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var parent = Path.GetDirectoryName(path);
+                if (parent is null || !Directory.Exists(parent)) continue;
+                bool absent = false;
+                try { _ = File.GetAttributes(path); }
+                catch (FileNotFoundException) { absent = true; }
+                catch (DirectoryNotFoundException) { absent = Directory.Exists(parent); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                if (absent)
+                    removed += cleanup.RemoveMissing(folder.Id, path,
+                        new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                        cancellationToken: cancellationToken, sourceCanonicalPath: folder.CanonicalPath,
+                        expectedGeneration: generation, expectedScanEpoch: scanEpoch);
+            }
+        }
+
         // A completely unreadable set of picture files is not a reason
         // to replay the inventory. Each bad file was logged and skipped;
         // missing-source and directory-enumeration failures still throw.
@@ -963,7 +1065,7 @@ public sealed class FolderScanner
             }
 
             progressClock.Restart();
-            if (progress is not null && (catalogCountClock.ElapsedMilliseconds >= 1000 ||
+            if (catalogImport && progress is not null && (catalogCountClock.ElapsedMilliseconds >= 1000 ||
                 (force && currentFile is null && verifiedDirectoryPath is null)))
             {
                 catalogIndexed = _catalog.CountIndexedImages(folder.Id, scanRoot, recursive);
@@ -1065,7 +1167,7 @@ public sealed class FolderScanner
         }
     }
 
-    private static IEnumerable<string> EnumerateIncludedFiles(
+    internal static IEnumerable<string> EnumerateIncludedFiles(
         string scanRoot,
         bool recursive,
         IReadOnlyCollection<string> exclusions,
@@ -1075,10 +1177,19 @@ public sealed class FolderScanner
         IReadOnlyDictionary<string, string>? fileCursors = null,
         IReadOnlySet<string>? alreadyIndexedPaths = null,
         bool catalogImport = false,
-        Action<string>? onDirectoryComplete = null)
+        Action<string>? onDirectoryComplete = null,
+        IReadOnlyList<string>? preferredDirectories = null,
+        Action<FileInfo>? onFileInfo = null,
+        bool reportCompletedDirectories = false)
     {
         var pending = new Stack<string>();
         pending.Push(scanRoot);
+        if (preferredDirectories is not null)
+            foreach (var directory in preferredDirectories.Reverse())
+                pending.Push(directory);
+        var preferred = new HashSet<string>(preferredDirectories ?? [],
+            StringComparer.OrdinalIgnoreCase);
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var options = new EnumerationOptions
         {
             RecurseSubdirectories = false,
@@ -1093,6 +1204,15 @@ public sealed class FolderScanner
         {
             token.ThrowIfCancellationRequested();
             var directory = pending.Pop();
+            // The saved preference might have disappeared since first import.
+            // It is not a proof of deletion or inaccessibility; the ordinary
+            // traversal below will still verify the selected root and children.
+            if (preferred.Remove(directory) &&
+                !string.Equals(FolderExclusionRules.Normalize(directory),
+                    FolderExclusionRules.Normalize(scanRoot), StringComparison.OrdinalIgnoreCase) &&
+                !Directory.Exists(directory))
+                continue;
+            if (!visited.Add(FolderExclusionRules.Normalize(directory))) continue;
             yield return string.Empty;
             var directoryExcluded = FolderExclusionRules.IsExcluded(
                 directory, exclusions, inclusions);
@@ -1156,10 +1276,10 @@ public sealed class FolderScanner
                 }
                 else
                 {
-                    IEnumerator<string> fileIterator;
+                    IEnumerator<FileInfo> fileIterator;
                     try
                     {
-                        fileIterator = Directory.EnumerateFiles(directory, "*", options)
+                        fileIterator = new DirectoryInfo(directory).EnumerateFiles("*", options)
                             .GetEnumerator();
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -1171,7 +1291,7 @@ public sealed class FolderScanner
                         while (true)
                         {
                             token.ThrowIfCancellationRequested();
-                            string file;
+                            FileInfo file;
                             try
                             {
                                 if (!fileIterator.MoveNext()) break;
@@ -1181,7 +1301,8 @@ public sealed class FolderScanner
                             {
                                 throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
                             }
-                            yield return file;
+                            onFileInfo?.Invoke(file);
+                            yield return file.FullName;
                         }
                     }
                 }
@@ -1189,7 +1310,7 @@ public sealed class FolderScanner
 
             if (!recursive)
             {
-                if (!previouslyCompleted) onDirectoryComplete?.Invoke(directory);
+                if (!previouslyCompleted || reportCompletedDirectories) onDirectoryComplete?.Invoke(directory);
                 continue;
             }
             string[] children;
@@ -1204,7 +1325,7 @@ public sealed class FolderScanner
 
             // Checkpoint only after BOTH the files and child directory list
             // have been enumerated successfully; inaccessible NAS paths abort.
-            if (!previouslyCompleted) onDirectoryComplete?.Invoke(directory);
+            if (!previouslyCompleted || reportCompletedDirectories) onDirectoryComplete?.Invoke(directory);
             foreach (var child in children.Reverse())
             {
                 if (!FolderExclusionRules.IsExcluded(child, exclusions, inclusions) ||

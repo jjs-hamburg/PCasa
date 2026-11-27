@@ -88,6 +88,9 @@ public partial class MainWindow
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
+            // Do not lose a committed folder notification on a busy database
+            // or a transient foreground read failure.
+            foreach (var id in ids) _pendingFolderCountIds.Add(id);
             PCasaDiagnostics.Write("Gallery.LiveFolderCounts", ex);
         }
         finally

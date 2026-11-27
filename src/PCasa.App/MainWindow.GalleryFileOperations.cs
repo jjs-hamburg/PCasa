@@ -722,7 +722,8 @@ public partial class MainWindow
 
         var key = "gallery:file-transfer:" + Guid.NewGuid().ToString("N");
         var payload = System.Text.Json.JsonSerializer.Serialize(
-            new DurableGalleryTransferRecipe(requested, target, move, neverReplace));
+            new DurableGalleryTransferRecipe(requested, target, move, neverReplace,
+                NativeShell: !neverReplace));
         _outstandingGalleryMutations++;
         _outstandingFileTransfers++;
         _backgroundDebounceTimer?.Stop();

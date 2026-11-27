@@ -1236,13 +1236,14 @@ public partial class MainWindow
             var position = i + 1;
             var display = new Progress<ScanProgress>(scan =>
             {
-                ShowScannedPhotoFolder(scan);
                 if (_visibleManualActiveKey == key)
                     StatusText.Text = $"Einlesen {position}/{roots.Length}: " +
                         $"{root.Path} · {scan.ImageFilesSeen:N0} geprüft";
             });
+            // One scheduler package, distinct checkpoint identity per root.
             var step = new CompleteFolderScanStep(this, root.Path,
-                new ScanJobProgress(_scheduler, key, display), root.Id);
+                new ScanJobProgress(_scheduler, key, display, firstImport: false), root.Id,
+                durableScanKey: $"{key}:root:{root.Id}");
             callerScans?.Add(step);
             package.AddStep(async token =>
             {

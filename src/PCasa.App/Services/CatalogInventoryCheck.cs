@@ -46,50 +46,36 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
         var changes = new List<BackgroundFolderChange>();
         var added = new List<BackgroundFolderChange>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var directories = new Stack<string>();
-        directories.Push(scanRoot);
-        var options = new EnumerationOptions
-        {
-            RecurseSubdirectories = false,
-            IgnoreInaccessible = false,
-            AttributesToSkip = FileAttributes.System | FileAttributes.ReparsePoint
-        };
         var count = 0;
-        while (directories.TryPop(out var path))
+        FileInfo? entry = null;
+        // Detection and indexing share exactly the same included-directory
+        // traversal. P4 consumes only directory-entry metadata and queues
+        // changes; it never opens an image, repairs a cache or decodes EXIF.
+        foreach (var path in FolderScanner.EnumerateIncludedFiles(scanRoot,
+            recursive: true, exclusions, inclusions, token,
+            onDirectoryComplete: directory => visited.Add(FolderExclusionRules.Normalize(directory)),
+            onFileInfo: file => entry = file))
         {
             token.ThrowIfCancellationRequested();
-            var excluded = FolderExclusionRules.IsExcluded(path, exclusions, inclusions);
-            if (excluded && !FolderExclusionRules.MayContainIncludedDescendant(path, inclusions))
-                continue;
-            var directory = new DirectoryInfo(path);
-            foreach (var child in directory.EnumerateDirectories("*", options))
-                directories.Push(child.FullName);
-            visited.Add(FolderExclusionRules.Normalize(path));
-            if (excluded) continue;
-            foreach (var file in directory.EnumerateFiles("*", options))
+            if (path.Length == 0 || !CatalogMediaFormats.IsSupported(path)) continue;
+            var file = entry ?? throw new InvalidOperationException("Missing directory entry.");
+            count++;
+            var found = known.Remove(path, out var old);
+            var creationChanged = found && !root.IsNetwork &&
+                old!.Created is long created && created > 0 &&
+                file.CreationTimeUtc.Ticks != created;
+            if (!found || old!.Size != file.Length ||
+                old.Modified != file.LastWriteTimeUtc.Ticks || creationChanged)
             {
-                token.ThrowIfCancellationRequested();
-                if (!CatalogMediaFormats.IsSupported(file.FullName)) continue;
-                count++;
-                var found = known.Remove(file.FullName, out var old);
-                // Local creation stamps can detect same-size replacements.
-                // Do not infer content changes from unreliable SMB birth times.
-                var creationChanged = found && !root.IsNetwork &&
-                    old!.Created is long created && created > 0 &&
-                    file.CreationTimeUtc.Ticks != created;
-                if (!found || old!.Size != file.Length ||
-                    old.Modified != file.LastWriteTimeUtc.Ticks || creationChanged)
-                {
-                    var change = new BackgroundFolderChange(root.Id, file.FullName,
-                        BackgroundFolderChangeKind.ScanFile, false,
-                        ForceExifRefresh: creationChanged);
-                    if (found) changes.Add(change);
-                    else if (importNewImmediately is not null)
-                        importNewImmediately(change);
-                    else added.Add(change);
-                }
-                if (count % 128 == 0) progress?.Invoke(count, path);
+                var change = new BackgroundFolderChange(root.Id, path,
+                    BackgroundFolderChangeKind.ScanFile, false,
+                    ForceExifRefresh: creationChanged);
+                if (found) changes.Add(change);
+                else if (importNewImmediately is not null)
+                    importNewImmediately(change);
+                else added.Add(change);
             }
+            if (count % 128 == 0) progress?.Invoke(count, file.DirectoryName ?? scanRoot);
         }
 
         // An inaccessible or interrupted traversal never reaches this point.

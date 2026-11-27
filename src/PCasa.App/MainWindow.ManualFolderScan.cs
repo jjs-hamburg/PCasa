@@ -166,7 +166,6 @@ public partial class MainWindow
                 TrackFolderActivity(directory, "Working", recursive: true);
                 RefreshFolderStatusVisuals();
             }
-            ShowScannedPhotoFolder(scan);
             StatusText.Text =
                 $"Ordner aktualisieren: {scan.ImageFilesSeen:N0} geprüft · " +
                 $"{scan.Added:N0} neu · {scan.Changed:N0} geändert · " +
@@ -315,7 +314,7 @@ public partial class MainWindow
         var recipe = System.Text.Json.JsonSerializer.Deserialize<ManualScanRecipe>(payload)
             ?? throw new InvalidDataException("Ungültiger manueller Scan-Auftrag.");
         var step = new CompleteFolderScanStep(this, recipe.Directory,
-            new ScanJobProgress(_scheduler, key, null), recipe.MonitoredRootId,
+            new ScanJobProgress(_scheduler, key, null, recipe.RequirePendingInitialImport), recipe.MonitoredRootId,
             recipe.RequirePendingInitialImport,
             recipe.AcknowledgeTargetedPending, key);
         var package = new SchedulerTaskPackage(key);
@@ -345,7 +344,7 @@ public partial class MainWindow
         long? queueOrder = null)
     {
         var key = operationKey ?? $"catalog:complete-scan:{Guid.NewGuid():N}:{directory}";
-        var schedulerProgress = new ScanJobProgress(_scheduler, key, progress);
+        var schedulerProgress = new ScanJobProgress(_scheduler, key, progress, requirePendingInitialImport);
         using var step = new CompleteFolderScanStep(this, directory,
             schedulerProgress, expectedMonitoredFolderId, requirePendingInitialImport,
             acknowledgeTargetedPending, key);
@@ -388,7 +387,6 @@ public partial class MainWindow
     {
         private readonly FolderScanner.ScanResumeState _resume = new();
         private bool _manualGenerationStarted;
-        private bool? _firstImport;
         private long? _manualScanEpoch;
         private long? _initialSourceGeneration;
         private string? _sourceCanonicalPath;
@@ -425,12 +423,6 @@ public partial class MainWindow
                  owner._folderRepository.GetIncludedPaths(folder.Id)))
                 throw new InvalidOperationException(
                     "Dieser Ordner ist im Ordnermanager ausgeschlossen.");
-            // A deleted task does not change the incomplete import state.
-            _firstImport ??= requirePendingInitialImport ||
-                (owner._folderRepository.HasIncompleteImport(folder.Id) &&
-                 owner._folderRepository.GetImportFrontier(folder.Id,
-                    currentSource.Value.Generation, Path.GetFullPath(directory)
-                        .Replace('/', '\\')) is not { Length: 0 });
             token.ThrowIfCancellationRequested();
             if (!owner._scheduler.SourceAvailability.CanAccess(directory, token))
                 throw new DurablePackageRetryException(
@@ -459,7 +451,7 @@ public partial class MainWindow
                             durableScanKey, folder.Id,
                             Path.GetFullPath(directory).Replace('/', '\\'),
                             folder.CanonicalPath, beginManualEpoch: true,
-                            loadLegacyProgress: false);
+                            loadLegacyProgress: false, verifiedDirectoryReceipts: true);
                     _manualScanEpoch = checkpoint.Epoch;
                     // The receipt preserves identity and the source fence,
                     // not the amount of imported catalog data.
@@ -482,14 +474,16 @@ public partial class MainWindow
             {
                 // Both first import and manual reread reconcile the current
                 // filesystem against the catalog, not an old filename cursor.
-                Result = _firstImport != true && !acknowledgeTargetedPending
-                    ? RefreshDifferences(folder, currentSource.Value.Generation, token)
-                    : owner._folderScanner.ScanDirectory(
+                // The job chooses only the traversal scope and start position.
+                // Manual updates always reconcile the entire selected scope.
+                Result = owner._folderScanner.ScanDirectory(
                     folder, directory, recursive: true, progress, token, _resume,
                     durableInitialImport: requirePendingInitialImport,
                     durableScanKey: requirePendingInitialImport ? null : durableScanKey,
-                    preferFirstPass: _firstImport == true, catalogOwnedProgress: true,
-                    retryFailedFiles: false);
+                    preferFirstPass: requirePendingInitialImport,
+                    catalogOwnedProgress: true,
+                    retryFailedFiles: false,
+                    prioritizeImportFrontier: !requirePendingInitialImport);
                 owner._scheduler.SourceAvailability.ConfirmAvailable(directory);
             }
             catch (IOException)
@@ -512,84 +506,20 @@ public partial class MainWindow
             return Task.CompletedTask;
         }
 
-        // One manual P0 identity, no child jobs. A restart/yield recomputes
-        // the difference from the committed catalog, never replays unchanged pixels.
-        private ScanResult RefreshDifferences(MonitoredFolder folder, long generation,
-            CancellationToken token)
-        {
-            int updated = 0, removed = 0, failed = 0, metadata = 0, scanned = 0;
-            void Import(BackgroundFolderChange change)
-            {
-                token.ThrowIfCancellationRequested();
-                if (!owner._folderRepository.IsCurrentSourceGeneration(folder.CanonicalPath, generation, true))
-                    throw new OperationCanceledException("Inventory source changed.");
-                var result = owner._folderScanner.ScanFile(folder, change.Path, progress, token,
-                    publishCatalogChange: false, forceExifRefresh: change.ForceExifRefresh);
-                if (result.CatalogChanged)
-                {
-                    // Manual refresh is explicit P0 work, not a deferred background
-                    // projection. Publish each committed image during the traversal.
-                    var canonical = FolderScanner.ResolveCanonicalFullPath(folder, change.Path);
-                    if (owner._imageCatalog.GetImageId(canonical) is long id)
-                        owner.PublishCommittedGalleryImage(owner._activeBrowseTier, id, null);
-                    CatalogChanges.PublishImageCommitted();
-                }
-                scanned += result.ImageFilesSeen;
-                updated += result.Updated;
-                failed += result.Failed;
-                metadata += result.MetadataUpdated;
-            }
-            var inventory = new CatalogInventoryCheck(owner._database).Check(folder,
-                owner._folderRepository.GetExcludedPaths(folder.Id),
-                owner._folderRepository.GetIncludedPaths(folder.Id), token,
-                selectedDirectory: directory, importNewImmediately: Import);
-            foreach (var change in inventory.Changes)
-            {
-                token.ThrowIfCancellationRequested();
-                if (!owner._folderRepository.IsCurrentSourceGeneration(folder.CanonicalPath, generation, true))
-                    throw new OperationCanceledException("Inventory source changed.");
-                if (change.Kind == BackgroundFolderChangeKind.ScanFile)
-                {
-                    Import(change);
-                }
-                else if (change.Kind == BackgroundFolderChangeKind.RemovePath)
-                {
-                    var parent = Path.GetDirectoryName(change.Path);
-                    if (parent is null || !Directory.Exists(parent) ||
-                        !owner._scheduler.SourceAvailability.CanAccess(directory, token))
-                        throw new IOException("Inventory parent unavailable: " + parent);
-                    // File.Exists also returns false for permission/I/O errors.
-                    // Only an explicit missing-path result permits removal.
-                    try { _ = File.GetAttributes(change.Path); continue; }
-                    catch (FileNotFoundException) { }
-                    catch (DirectoryNotFoundException) { }
-                    if (!Directory.Exists(parent))
-                        throw new IOException("Inventory parent disappeared: " + parent);
-                    removed += owner._catalogRemovalService.RemovePath(folder.Id, change.Path,
-                        cancellationToken: token, sourceCanonicalPath: folder.CanonicalPath,
-                        expectedGeneration: generation, deferCleanup: true);
-                }
-            }
-            token.ThrowIfCancellationRequested();
-            if (durableScanKey is not null && _manualScanEpoch is long epoch)
-                owner._folderRepository.FinishRegularScan(durableScanKey, generation, epoch);
-            return new ScanResult(inventory.CheckedFiles, updated,
-                Math.Max(0, inventory.CheckedFiles - scanned), failed, removed, metadata);
-        }
-
         public void Dispose() => _resume.Dispose();
     }
 
     // A synchronous progress relay: scheduler state is committed on the
     // worker before posting any optional UI presentation callback.
     private sealed class ScanJobProgress(
-        PCasaScheduler scheduler, string key, IProgress<ScanProgress>? display)
+        PCasaScheduler scheduler, string key, IProgress<ScanProgress>? display, bool firstImport)
         : IProgress<ScanProgress>
     {
         public void Report(ScanProgress value)
         {
-            scheduler.ReportProgress(key, value.ReadingNew == true || value.CatalogIndexed.HasValue ? "Bilder einlesen" : "Bestand überprüfen",
-                value.CatalogIndexed ?? value.ImageFilesSeen, 0, value.CurrentFile);
+            scheduler.ReportProgress(key, firstImport ? "Bilder einlesen" : "Ordner aktualisieren",
+                firstImport ? value.CatalogIndexed ?? value.ImageFilesSeen : value.ImageFilesSeen,
+                0, value.CurrentFile);
             display?.Report(value);
         }
     }

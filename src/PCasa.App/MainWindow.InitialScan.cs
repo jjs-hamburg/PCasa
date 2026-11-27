@@ -236,7 +236,6 @@ public partial class MainWindow
                     showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation(),
                     scanOwner: scanOwner,
                     phaseOverride: "Bilder einlesen");
-                ShowScannedPhotoFolder(scan);
                 // While a queued Tag series shares this presenter, the
                 // dialog itself owns the status-bar text as well.
                 if (!shownWindow.IsManualPresentationActive)

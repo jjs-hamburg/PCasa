@@ -232,6 +232,15 @@ public partial class MainWindow
             moveGlobalTask: MoveGlobalTaskAsync,
             deleteDurableTask: async key =>
             {
+                const string sessionPrefix = "external:session:";
+                if (key.StartsWith(sessionPrefix, StringComparison.Ordinal))
+                    return Guid.TryParse(key[sessionPrefix.Length..], out var sessionId) &&
+                        await DiscardExternalSessionAsync(sessionId);
+                if (key.StartsWith("external:commit:", StringComparison.Ordinal))
+                {
+                    var recipe = ReadWriteRecipe<ExternalCommitRecipe>(key);
+                    return await DiscardExternalSessionAsync(recipe.Snapshot.Id);
+                }
                 var canceled = await Task.Run(() => _scheduler.DeleteDurableTaskAsync(key));
                 if (canceled && key.StartsWith("tags:", StringComparison.Ordinal))
                 {

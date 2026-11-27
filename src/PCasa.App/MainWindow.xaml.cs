@@ -292,7 +292,13 @@ public partial class MainWindow : Window
             }
         }
 
-        foreach (var folder in _photoFolders.Where(
+        var committedFolders = _photoFolders.ToDictionary(folder => folder.Id);
+        foreach (var (id, latest) in _liveFolderCountSummaries)
+        {
+            if (latest is null) committedFolders.Remove(id);
+            else committedFolders[id] = latest;
+        }
+        foreach (var folder in committedFolders.Values.Where(
                      folder => monitoredFolderIds.Contains(folder.MonitoredFolderId) &&
                          !IsPendingFolderRemovalHidden(folder.LocalPath)))
         {
@@ -562,6 +568,12 @@ public partial class MainWindow : Window
 
         _liveCatalogImageCount = imageCount;
         _liveFolderCountSerial++;
+        if (changes.Any(change => change.Value is not null &&
+            !_folderTreeItems.ContainsKey(change.Key)))
+        {
+            RefreshFolderTree(preserveGalleryAnchor: true);
+            return;
+        }
         UpdateFolderImageTotal();
         if (_appearance.FlatFolderView)
         {

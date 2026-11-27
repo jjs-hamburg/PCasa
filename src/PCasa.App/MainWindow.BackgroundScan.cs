@@ -1575,7 +1575,6 @@ public partial class MainWindow
                         activityWindow.UpdateScan(value,
                             showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation(),
                             scanOwner: scanOwner);
-                        ShowScannedPhotoFolder(value);
                         // Do not overwrite the shared Tag/scan presenter's
                         // authoritative status-bar projection.
                         if (_visibleManualOperations.Count == 0 &&
@@ -1592,9 +1591,9 @@ public partial class MainWindow
                         continue;
                     }
                     ScanResult? scanResult = null;
-                    bool unavailablePath = false;
                     CatalogInventoryCheckResult? inventoryResult = null;
                     IReadOnlyList<FolderRepository.AutomaticChangeJob>? acceptedReviewChanges = null;
+                    bool unavailablePath = false;
                     var reviewEpoch = _folderRepository.GetScanEpoch(folder.CanonicalPath);
                     // One confirmed count belongs to the original
                     // directory-inventory receipt, not to a newly allocated
@@ -1692,6 +1691,8 @@ public partial class MainWindow
                                     ? null : new ImageCatalogRepository(_database).CountIndexedImages(
                                         folder.Id, request.Kind == BackgroundFolderChangeKind.ScanFile
                                             ? Path.GetDirectoryName(scanPath)! : scanPath, request.Recursive)));
+                            // P4 detects only; accepted changes enter the existing
+                            // automatic queue. The detector shares the scanner's walker.
                             if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
                             {
                                 inventoryResult = new CatalogInventoryCheck(_database).Check(

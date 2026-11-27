@@ -207,10 +207,126 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- Selection controls must own both their visible selection and
+             popup chrome. Mixing the native WPF theme with PCasa foreground
+             resources produced illegible dropdowns (including GPX). -->
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}"/>
+            <Setter Property="Padding" Value="9,6"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="ChoiceItemFrame" Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter ContentSource="Content"
+                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="Center"
+                                TextElement.Foreground="{TemplateBinding Foreground}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="ChoiceItemFrame" Property="Background"
+                                        Value="{DynamicResource PcasaHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="ChoiceItemFrame" Property="Background"
+                                        Value="{DynamicResource PcasaSelectionBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.53"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style TargetType="ComboBox">
-            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
-            <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="MaxDropDownHeight" Value="420"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <Border x:Name="SelectionFrame" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="26"/>
+                                </Grid.ColumnDefinitions>
+                                <ContentPresenter x:Name="SelectedCaption"
+                                    Margin="{TemplateBinding Padding}" VerticalAlignment="Center"
+                                    Content="{TemplateBinding SelectionBoxItem}"
+                                    ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                    ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                    ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"
+                                    TextElement.Foreground="{TemplateBinding Foreground}"
+                                    IsHitTestVisible="False"/>
+                                <TextBox x:Name="PART_EditableTextBox" Visibility="Collapsed"
+                                    Margin="1" Background="{TemplateBinding Background}"
+                                    Foreground="{TemplateBinding Foreground}"
+                                    BorderThickness="0" Padding="{TemplateBinding Padding}"
+                                    IsReadOnly="{TemplateBinding IsReadOnly}"
+                                    VerticalContentAlignment="Center"/>
+                                <Path Grid.Column="1" Data="M 0,0 L 4,4 L 8,0"
+                                    Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    IsHitTestVisible="False"/>
+                                <ToggleButton x:Name="OpenChoice" Grid.ColumnSpan="2"
+                                    Focusable="False" ClickMode="Press"
+                                    IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+                                    <ToggleButton.Template>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <Border Background="Transparent"/>
+                                        </ControlTemplate>
+                                    </ToggleButton.Template>
+                                </ToggleButton>
+                            </Grid>
+                            <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True"
+                                Focusable="False" StaysOpen="False"
+                                IsOpen="{TemplateBinding IsDropDownOpen}"
+                                PlacementTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}">
+                                <Border x:Name="ChoicePopupFrame"
+                                    MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                    Background="{DynamicResource PcasaPanelAltBrush}"
+                                    BorderBrush="{DynamicResource PcasaDividerBrush}"
+                                    BorderThickness="1" Padding="2">
+                                    <ScrollViewer MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                        VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEditable" Value="True">
+                                <Setter TargetName="SelectedCaption" Property="Visibility" Value="Collapsed"/>
+                                <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="OpenChoice" Property="Grid.Column" Value="1"/>
+                                <Setter TargetName="OpenChoice" Property="Grid.ColumnSpan" Value="1"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="SelectionFrame" Property="BorderBrush"
+                                        Value="{DynamicResource PcasaAccentBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsDropDownOpen" Value="True">
+                                <Setter TargetName="SelectionFrame" Property="BorderBrush"
+                                        Value="{DynamicResource PcasaAccentBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.53"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <!-- Native radio/checkbox glyphs keep WPF semantics while their
              captions use the same palette as the host window. -->

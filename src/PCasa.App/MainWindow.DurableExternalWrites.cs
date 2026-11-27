@@ -14,6 +14,101 @@ public partial class MainWindow
         => new DurablePackageJournal(_database).Pending().Any(row =>
             row.Type is ExternalCommitType or ExternalBatchCommitType);
 
+    // The durable writer and its manifest are one user operation. Stop
+    // only matching accepted recipes; unrelated writes are not discarded.
+    private bool _discardingExternalSession;
+
+    private async Task<bool> DiscardExternalSessionAsync(Guid sessionId,
+        bool returnToGallery = false)
+    {
+        if (_discardingExternalSession || _externalEditLaunchPending) return false;
+        _discardingExternalSession = true;
+        try
+        {
+            var journal = new DurablePackageJournal(_database);
+            var owned = await Task.Run(() => journal.Pending()
+                .Where(row => row.Type == ExternalCommitType &&
+                    JsonSerializer.Deserialize<ExternalCommitRecipe>(row.Payload)?.Snapshot.Id == sessionId)
+                .ToArray());
+            var affectedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var row in owned)
+            {
+                // Pause awaits the complete worker lifetime including the
+                // journal continuation. A deferred retry cannot race cleanup.
+                if (row.State != "paused")
+                    await _scheduler.PauseDurableTaskAsync(row.Key);
+                var recipe = ReadWriteRecipe<ExternalCommitRecipe>(row.Key);
+                affectedPaths.Add(recipe.Snapshot.OriginalPath);
+                if (recipe.Target is string target) affectedPaths.Add(target);
+                await _scheduler.DeleteDurableTaskAsync(row.Key);
+            }
+            if (journal.Pending().Any(row => row.Type == ExternalCommitType &&
+                JsonSerializer.Deserialize<ExternalCommitRecipe>(row.Payload)?.Snapshot.Id == sessionId))
+                return false;
+            var discarded = await _scheduler.RunAsync(
+                "external:discard:" + Guid.NewGuid().ToString("N"),
+                SchedulerPriority.ManualAction, token =>
+                {
+                    var session = ExternalEditTransaction.FindPending();
+                    if (session is null) return true; // writer already completed
+                    if (session.Id != sessionId) return false;
+                    affectedPaths.Add(session.OriginalPath);
+                    if (session.FinalTarget is string target) affectedPaths.Add(target);
+                    ExternalEditTransaction.Commit(session, null, ExternalEditDecision.Cancel, token);
+                    return true;
+                }, workKind: SchedulerWorkKind.Catalog);
+            if (!discarded) return false;
+            if (_externalEditReview is { } review && review.Snapshot.Id == sessionId)
+            {
+                _externalEditReview = null;
+                _photoEditSession = null;
+                if (_cropActive) EndCrop();
+                if (_straightenActive) LeaveStraighten();
+                if (_brightnessActive) LeaveBrightness();
+                if (_advancedToneActive) LeaveAdvancedTone();
+                _photoEditSession = null;
+                _latestExternalComparison = null;
+                _externalComparisonUnavailableImageId = null;
+                ResetEditComparison();
+                _externalVideoReviewDialog?.Close();
+                _externalVideoReviewDialog = null;
+                _cropSavePending = false;
+                _viewerOriginalCache.Remove(review.ImageId);
+                if (returnToGallery && _viewerOpen) ClosePhotoViewer();
+                else if (_viewerOpen && _viewerImageInfo?.Id == review.ImageId)
+                    ShowViewerImage();
+            }
+            ResumeSchedulerAfterExternalEdit();
+            // Reconcile actual files, not intended outputs. This also covers
+            // a writer canceled after atomic publication but before indexing.
+            foreach (var path in affectedPaths)
+                await _scheduler.RunAsync("external:catalog:" + Guid.NewGuid().ToString("N"),
+                    SchedulerPriority.ManualAction, token =>
+                    {
+                        var root = FolderExclusionRules.FindOwner(path, _folderRepository.GetAll());
+                        if (root is not null && SourceFilePresence.Probe(path) == FilePresence.Present)
+                            _folderScanner.ScanFile(root, path, cancellationToken: token);
+                        return true;
+                    }, workKind: SchedulerWorkKind.Catalog);
+            await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("ExternalEdit.Discard", ex);
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
+                PcasaDialog.Show(this, ex.Message, UiLanguage.T("Externe Bearbeitung"),
+                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+            return false;
+        }
+        finally
+        {
+            _discardingExternalSession = false;
+            _scheduler.NotifyTaskViewChanged();
+            if (!Dispatcher.HasShutdownStarted) UpdateEditControls();
+        }
+    }
+
     private T ReadWriteRecipe<T>(string key) where T : class
     {
         using var db = _database.OpenConnection();

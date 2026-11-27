@@ -12,7 +12,8 @@ public partial class MainWindow
     private readonly DurableGalleryTransferJournal _durableGalleryTransfers;
 
     private sealed record DurableGalleryTransferRecipe(
-        string[] Sources, string Destination, bool Move, bool NeverReplace = false);
+        string[] Sources, string Destination, bool Move, bool NeverReplace = false,
+        bool NativeShell = false);
 
     // This factory is called both for new manual drops and, with exactly the
     // same fixed step layout, by the scheduler after an application restart.
@@ -221,7 +222,45 @@ public partial class MainWindow
 
                         try
                         {
-                            if (receipt.Move)
+                            if (recipe.NativeShell && !recipe.NeverReplace)
+                            {
+                                // The shell owns physical transfer and its native
+                                // progress/cancel UI. PCasa owns only the receipt
+                                // and the subsequent catalog mutation.
+                                var hwnd = Dispatcher.Invoke(() =>
+                                    new System.Windows.Interop.WindowInteropHelper(this).Handle);
+                                var shell = WindowsShellTransfer.Execute(receipt.Source,
+                                    receipt.Destination, receipt.Move, receipt.Replace, hwnd, token);
+
+                                // The shell may return an error/abort AFTER the
+                                // physical move. Reconcile the actual paths before
+                                // reporting failure or permitting a retry.
+                                var from = SourceFilePresence.Probe(receipt.Source);
+                                var to = SourceFilePresence.Probe(receipt.Destination);
+                                var materialized = to == FilePresence.Present &&
+                                    (receipt.Move ? from == FilePresence.ConfirmedMissing :
+                                     from == FilePresence.Present && (shell.Completed ||
+                                     FilesHaveEqualContent(receipt.Source, receipt.Destination,
+                                         CancellationToken.None)));
+                                if (!materialized)
+                                {
+                                    if (shell.Aborted && !token.IsCancellationRequested &&
+                                        from == FilePresence.Present)
+                                    {
+                                        // Explicit shell cancellation never replays
+                                        // the remaining transfer or deletes a source.
+                                        journal.SkipExecuting(key, ordinal, receipt.RelocationId);
+                                        throw new OperationCanceledException();
+                                    }
+                                    token.ThrowIfCancellationRequested();
+                                    throw new IOException("Dateiübertragung unterbrochen: " +
+                                        receipt.Source, shell.Error);
+                                }
+                                if (!shell.Completed)
+                                    PCasaDiagnostics.WriteMessage("Gallery.ShellTransfer",
+                                        "Physical result confirmed after shell failure: " + receipt.Destination);
+                            }
+                            else if (receipt.Move)
                                 _ = ServerSideFileMover.Move(
                                     receipt.Source, receipt.Destination,
                                     receipt.Replace,

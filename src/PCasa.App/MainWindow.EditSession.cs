@@ -274,7 +274,7 @@ public partial class MainWindow
             CropSaveButton.IsEnabled = CropSaveCopyButton.IsEnabled &&
                 !ExternalEditTransaction.RequiresNewFile(
                     external.Snapshot.OriginalPath, external.ResultPath!);
-            CropCancelButton.IsEnabled = ready;
+            CropCancelButton.IsEnabled = external.Ready && !_externalEditLaunchPending && !_discardingExternalSession;
             var canEditResult = CanEditPendingExternalResult(external.ImageId);
             CropApplyButton.IsEnabled = ready && canEditResult &&
                 (editingTool);

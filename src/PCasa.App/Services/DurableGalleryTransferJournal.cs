@@ -135,6 +135,34 @@ public sealed class DurableGalleryTransferJournal
                 "Datei-Checkpoint hat unerwarteten Zustand: " + key + "/" + ordinal);
     }
 
+    // Only after the shell has stopped and the source still exists.
+    // Atomically retire the unmaterialized move intent and its receipt;
+    // no filesystem deletion is performed here.
+    public void SkipExecuting(string key, int ordinal, string? relocationId)
+    {
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            UPDATE gallery_transfer_receipts SET phase='skipped'
+             WHERE package_key=$key AND ordinal=$ordinal AND phase='executing';
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.Parameters.AddWithValue("$ordinal", ordinal);
+        if (cmd.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException("Transfer receipt changed during cancellation.");
+        if (relocationId is not null)
+        {
+            using var intent = db.CreateCommand();
+            intent.Transaction = tx;
+            intent.CommandText = "DELETE FROM file_transfer_intents WHERE operation_id=$id;";
+            intent.Parameters.AddWithValue("$id", relocationId);
+            intent.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
+
     public HashSet<string> ReservedDestinations(string key)
     {
         using var db = _database.OpenConnection();
