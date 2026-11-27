@@ -1956,15 +1956,13 @@ public partial class MainWindow
         PicasaGalleryScrollBar.StopMotion();
         const double pixelsPerWheelNotch = 96.0;
         var movement = e.Delta / 120.0 * pixelsPerWheelNotch;
-        var previous = BrowseScrollViewer.VerticalOffset;
-        var target = Math.Clamp(
-            BrowseScrollViewer.VerticalOffset - movement,
-            0.0,
-            BrowseScrollViewer.ScrollableHeight);
-        BrowseScrollViewer.ScrollToVerticalOffset(target);
-        if (Math.Abs(previous - target) > 0.5)
-            RegisterGalleryUserScroll();
         e.Handled = true;
+        if (!PCasa.App.Controls.PicasaGalleryScrollBar.TryScrollTarget(
+                BrowseScrollViewer.VerticalOffset, BrowseScrollViewer.ScrollableHeight,
+                -movement, out var target))
+            return;
+        BrowseScrollViewer.ScrollToVerticalOffset(target);
+        RegisterGalleryUserScroll();
     }
 
     private void BrowseScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
