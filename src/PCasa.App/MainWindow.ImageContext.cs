@@ -44,7 +44,7 @@ public partial class MainWindow
             _displayedBrowseIndex);
         var selectedSet = thumbnailIds.ToHashSet();
         if (_displayedBrowseIndex.Any(image => selectedSet.Contains(image.ImageId) &&
-                CanManuallyEditExifDates(image.FileName)))
+                FilenameCaptureDateWriter.Supports(image.FileName)))
             AddContextAction(menu, "Aufnahmedatum aus Dateinamen übernehmen",
                 () => _ = EditCaptureDatesFromNamesAsync(thumbnailIds));
         var errorIds = _displayedBrowseIndex.Where(image =>

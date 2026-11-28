@@ -202,9 +202,19 @@ public sealed class ImageExifReader : IImportExifReader
         }
         else (latitude, longitude) = (null, null);
 
+        var capture = TextTag(obj, "DateTimeOriginal") ?? TextTag(obj, "CreateDate");
+        // The explicit MP4 capture date takes precedence over container
+        // timestamps. Read it exactly as stored; no timezone conversion.
+        if (string.Equals(TextTag(obj, "FileType"), "MP4", StringComparison.OrdinalIgnoreCase) ||
+            (obj.TryGetProperty("SourceFile", out var source) && source.ValueKind == JsonValueKind.String &&
+             string.Equals(Path.GetExtension(source.GetString()), ".mp4", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (obj.TryGetProperty("XMP-exif:DateTimeOriginal", out var explicitCapture) &&
+                !string.IsNullOrWhiteSpace(AsText(explicitCapture)))
+                capture = AsText(explicitCapture);
+        }
         return new ImageExifData(obj.GetRawText(), TextTag(obj, "Make"),
-            TextTag(obj, "Model"), TextTag(obj, "DateTimeOriginal") ??
-            TextTag(obj, "CreateDate"), latitude, longitude,
+            TextTag(obj, "Model"), capture, latitude, longitude,
             NumericTag(obj, "GPSAltitude"));
     }
 

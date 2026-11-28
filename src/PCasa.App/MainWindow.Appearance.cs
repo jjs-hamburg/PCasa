@@ -948,6 +948,8 @@ public partial class MainWindow
             catch (System.Text.Json.JsonException ex)
             { PCasaDiagnostics.Write("Sidebar.ExifDates", ex); }
         }
+        if (FilenameCaptureDateWriter.IsMp4(path))
+            dates = dates with { DateTimeOriginal = StringAt(8) };
         // The editable native EXIF field already displays its date. Show
         // the cached fallback only for XMP-only/RAW or incomplete metadata.
         var catalogCaptureLine = dates.DateTimeOriginal is null

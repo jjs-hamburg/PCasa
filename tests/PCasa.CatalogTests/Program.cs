@@ -7755,6 +7755,51 @@ internal static class Program
             throw new Exception("Explicit overwrite did not use the date and clock time in the filename.");
         if (Directory.Exists(undoDirectory) && Directory.EnumerateFileSystemEntries(undoDirectory).Any())
             throw new Exception("Metadata-only capture date created an Undo snapshot.");
+        if (!FilenameCaptureDateWriter.Supports("20260720_161031.mp4") ||
+            FilenameCaptureDateWriter.Supports("20260720_161031.mkv"))
+            throw new Exception("MP4 date-write admission is not format-specific.");
+        var video = Path.Combine(sandbox.Images, "20260720_161031.mp4");
+        // Real one-frame 16x16 MPEG-4 video generated for this test.
+        File.WriteAllBytes(video, Convert.FromBase64String(
+            "AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAA0Btb292AAAAbG12aGQAAAAAAAAAAAAAAAAAAAPoAAAD6AABAAABAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAACa3RyYWsAAABcdGtoZAAAAAMAAAAAAAAAAAAAAAEAAAAAAAAD6AAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAEAAAABAAAAAAACRlZHRzAAAAHGVsc3QAAAAAAAAAAQAAA+gAAAAAAAEAAAAAAeNtZGlhAAAAIG1kaGQAAAAAAAAAAAAAAAAAAEAAAABAAFXEAAAAAAAtaGRscgAAAAAAAAAAdmlkZQAAAAAAAAAAAAAAAFZpZGVvSGFuZGxlcgAAAAGObWluZgAAABR2bWhkAAAAAQAAAAAAAAAAAAAAJGRpbmYAAAAcZHJlZgAAAAAAAAABAAAADHVybCAAAAABAAABTnN0YmwAAADqc3RzZAAAAAAAAAABAAAA2m1wNHYAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAEAAQAEgAAABIAAAAAAAAAAETTGF2YzYxLjE5LjEwMSBtcGVnNAAAAAAAAAAAAAAAAAAY//8AAABgZXNkcwAAAAADgICATwABAASAgIBBIBEAAAAAAw1AAAAAoAWAgIAvAAABsAEAAAG1iRMAAAEAAAABIADEjYgADQCEAhRjAAABskxhdmM2MS4xOS4xMDEGgICAAQIAAAAQcGFzcAAAAAEAAAABAAAAFGJ0cnQAAAAAAAMNQAAAAKAAAAAYc3R0cwAAAAAAAAABAAAAAQAAQAAAAAAcc3RzYwAAAAAAAAABAAAAAQAAAAEAAAABAAAAFHN0c3oAAAAAAAAAFAAAAAEAAAAUc3RjbwAAAAAAAAABAAADbAAAAGF1ZHRhAAAAWW1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALGlsc3QAAAAkqXRvbwAAABxkYXRhAAAAAQAAAABMYXZmNjEuNy4xMDMAAAAIZnJlZQAAABxtZGF0AAABswAQBwAAAbYWBRhQbYLIHg8="));
+        byte[] MediaPayload(string file)
+        {
+            var data = File.ReadAllBytes(file);
+            for (var offset = 0; offset + 8 <= data.Length;)
+            {
+                var size = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(
+                    data.AsSpan(offset, 4));
+                if (size < 8 || size > data.Length - offset) break;
+                if (data.AsSpan(offset + 4, 4).SequenceEqual("mdat"u8))
+                    return data.AsSpan(offset + 8, size - 8).ToArray();
+                offset += size;
+            }
+            throw new Exception("MP4 media payload missing.");
+        }
+        RunExifTool("-overwrite_original", "-QuickTime:CreateDate=2026:07:20 14:10:33", video);
+        var media = MediaPayload(video);
+        var videoStamp = File.GetLastWriteTimeUtc(video);
+        scanner.Scan(root);
+        var videoBefore = Read(video);
+        var videoBytes = SHA256.HashData(File.ReadAllBytes(video));
+        worker.Apply(videoBefore.Id, "2026:07:20 16:10:31", true, CancellationToken.None);
+        if (!videoBytes.SequenceEqual(SHA256.HashData(File.ReadAllBytes(video))))
+            throw new Exception("Missing-only date edit modified MP4 with existing capture date.");
+        worker.Apply(videoBefore.Id, "2026:07:20 16:10:31", false, CancellationToken.None);
+        using var videoReader = new ImageExifReader();
+        var videoAfter = Read(video);
+        if (videoAfter.Date != "2026:07:20 16:10:31" ||
+            videoReader.Read(video).DateTimeOriginal != "2026:07:20 16:10:31" ||
+            videoAfter.Thumb != videoBefore.Thumb ||
+            videoAfter.Size != new FileInfo(video).Length ||
+            File.GetLastWriteTimeUtc(video) != videoStamp ||
+            !media.SequenceEqual(MediaPayload(video)) ||
+            RunExifTool("-s3", "-QuickTime:CreateDate", video).Trim() != "2026:07:20 14:10:33")
+            throw new Exception("MP4 capture date did not round trip exactly or changed media/other dates.");
+        var committedVideoBytes = SHA256.HashData(File.ReadAllBytes(video));
+        worker.Apply(videoBefore.Id, "2026:07:20 16:10:31", false, CancellationToken.None);
+        if (!committedVideoBytes.SequenceEqual(SHA256.HashData(File.ReadAllBytes(video))))
+            throw new Exception("MP4 date replay rewrote an already committed video.");
         if (PhotoDateFromFilename.Recognize("IMG-20240525-WA0001.jpg")?.Time is not null)
             throw new Exception("Date-only filename acquired an invented time.");
     }
