@@ -67,6 +67,54 @@ internal static class CropFlow
                 throw new Exception("Live crop was not reflected in original alignment.");
             Console.WriteLine("PASS: Alpha.47 crop-aware swipe comparison alignment.");
 
+            // Every draft type uses the same prospective recipe and commit.
+            // Verify an ordered mixed geometry/tone/detail sequence with
+            // exact pixels, undo/redo, and repeated automatic correction.
+            var mixed = new PhotoEditSession(7701, bitmap);
+            PhotoEditStep[] drafts =
+            [
+                new("crop", X: .15, Y: .1, Width: .55, Height: .7),
+                new("rotate", Degrees: 4.5),
+                new("brightness", Amount: .15),
+                new("contrast", Amount: .12),
+                new("highlights", Amount: .1),
+                new("shadows", Amount: .1),
+                new("temperature", Amount: .1),
+                new("tint", Amount: .1),
+                new("saturation", Amount: .2),
+                new("denoise-luma", Amount: .2),
+                new("denoise-chroma", Amount: .2),
+                new("sharpen", Amount: .2, Radius: 2, Detail: .7),
+                new("auto-fix"), new("auto-contrast"), new("auto-color"),
+                new("auto-sharpen")
+            ];
+            foreach (var draft in drafts)
+            {
+                var previous = mixed.Render();
+                var count = mixed.AppliedSteps.Count;
+                var preview = mixed.RenderDraft(draft);
+                if (mixed.AppliedSteps.Count != count || !PixelsEqual(previous, mixed.Render()))
+                    throw new Exception("Draft mutated accepted history: " + draft.Kind);
+                var committedDraft = mixed.CommitDraft(draft);
+                if (mixed.AppliedSteps.Count != count + 1 ||
+                    !PixelsEqual(preview, committedDraft) || !PixelsEqual(preview, mixed.Render()))
+                    throw new Exception("Apply changed draft pixels: " + draft.Kind);
+                mixed.Undo();
+                if (!PixelsEqual(previous, mixed.Render()))
+                    throw new Exception("Undo lost accepted state: " + draft.Kind);
+                mixed.Redo();
+                if (!PixelsEqual(preview, mixed.Render()))
+                    throw new Exception("Redo lost committed state: " + draft.Kind);
+            }
+            var beforeRepeat = mixed.Render();
+            var repeatedAuto = new PhotoEditStep("auto-color");
+            if (mixed.CanApply(repeatedAuto) ||
+                !PixelsEqual(beforeRepeat, mixed.RenderDraft(repeatedAuto)) ||
+                !PixelsEqual(beforeRepeat, mixed.CommitDraft(repeatedAuto)) ||
+                mixed.AppliedSteps.Count != drafts.Length)
+                throw new Exception("Automatic preview diverged from idempotent apply.");
+            Console.WriteLine("PASS: Alpha.77 mixed drafts, Apply, Undo/Redo and automatic idempotence.");
+
             // Alpha.28: editor previews must use full-resolution zoom
             // geometry even when filters replace a smaller preview buffer.
             var physical = ViewerImageGeometry.LogicalEditPixels(

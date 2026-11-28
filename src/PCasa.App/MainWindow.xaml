@@ -1079,8 +1079,8 @@
                     </DockPanel>
                     <!-- Four non-scrolling tool groups. Only the selected
                          panel exists in the layout: no vertical scrollbar. -->
-                    <Grid Grid.Row="1" Margin="7,4,7,4" ClipToBounds="True">
-                        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <Grid Grid.Row="1" Margin="7,4,7,4" ClipToBounds="True" VerticalAlignment="Top">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                         <StackPanel x:Name="ViewerToolsOverview">
                             <TabControl x:Name="EditorToolTabs" Height="42"
                                         Background="Transparent" BorderThickness="0"
@@ -1586,11 +1586,13 @@
                         <StackPanel x:Name="ViewerToolDecisionRow" Grid.Row="1" Orientation="Horizontal"
                                     HorizontalAlignment="Right" Margin="0,7,0,0">
                             <Button x:Name="ViewerToolCancelButton"
-                                    Content="{loc:Tr Key='Abbrechen'}"
-                                    Padding="14,4" Margin="0,0,8,0"/>
+                                    Style="{StaticResource PcasaActionButtonStyle}"
+                                    Width="{Binding ActualWidth, ElementName=CropSaveButton}"
+                                    Content="{loc:Tr Key='Abbrechen'}" Margin="0,0,3,0"/>
                             <Button x:Name="CropApplyButton"
-                                    Content="{loc:Tr Key='Übernehmen'}"
-                                    Padding="14,4"/>
+                                    Style="{StaticResource PcasaActionButtonStyle}"
+                                    Width="{Binding ActualWidth, ElementName=CropSaveButton}"
+                                    Content="{loc:Tr Key='Übernehmen'}"/>
                         </StackPanel>
                     </Grid>
                     <Border Grid.Row="3" Padding="9,7" BorderThickness="0,1,0,1"
@@ -1614,16 +1616,16 @@
                             <ColumnDefinition Width="0.9*"/>
                         </Grid.ColumnDefinitions>
                         <Button x:Name="CropCancelButton" Grid.Column="0"
-                                Content="{loc:Tr Key='Abbrechen'}" Height="27"
-                                Padding="3,1" FontSize="11" Margin="0,0,3,0"/>
+                                Content="{loc:Tr Key='Abbrechen'}"
+                                Style="{StaticResource PcasaActionButtonStyle}" Margin="0,0,3,0"/>
                         <Button x:Name="CropSaveCopyButton" Grid.Column="1"
                                 Content="{loc:Tr Key='Als Kopie speichern'}"
-                                Height="27" Padding="3,1" FontSize="11"
+                                Style="{StaticResource PcasaActionButtonStyle}"
                                 Margin="0,0,3,0"
                                 ToolTip="{loc:Tr Key='Bearbeitetes Foto im selben Ordner als Kopie speichern; Original unverändert'}"/>
                         <Button x:Name="CropSaveButton" Grid.Column="2"
-                                Content="{loc:Tr Key='Speichern'}" Height="27"
-                                Padding="3,1" FontSize="11"/>
+                                Content="{loc:Tr Key='Speichern'}"
+                                Style="{StaticResource PcasaActionButtonStyle}"/>
                     </Grid>
                 </Grid>
                 </Grid>

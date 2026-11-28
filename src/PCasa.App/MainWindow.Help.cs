@@ -243,7 +243,7 @@ public partial class MainWindow
                     var quoted = downloaded.Replace("'", "''", StringComparison.Ordinal);
                     var language = UiLanguage.Current.Code == "en" ? "en" : "de";
                     var command = $"Wait-Process -Id {Environment.ProcessId} -ErrorAction SilentlyContinue; " +
-                        $"Start-Process -FilePath '{quoted}' -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /PCASAUPGRADE /LANG={language}'";
+                        $"Start-Process -FilePath '{quoted}' -ArgumentList '/SILENT /SUPPRESSMSGBOXES /NORESTART /PCASAUPGRADE /LANG={language}'";
                     var start = new ProcessStartInfo("powershell.exe")
                     {
                         UseShellExecute = false,

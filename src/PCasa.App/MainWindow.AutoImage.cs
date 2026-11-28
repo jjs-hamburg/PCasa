@@ -108,9 +108,10 @@ public partial class MainWindow
         if (!EnsureEditSession() || _cropSavePending) return;
         DiscardLiveEditTool();
         if (_photoEditSession is null) return;
-        _pendingAutomaticEdit = new PhotoEditStep(kind);
-        SetViewerBitmap(PhotoEditSession.Render(_photoEditSession.Render(),
-            [_pendingAutomaticEdit]));
+        var draft = new PhotoEditStep(kind);
+        if (!_photoEditSession.CanApply(draft)) return;
+        _pendingAutomaticEdit = draft;
+        SetViewerBitmap(_photoEditSession.RenderDraft(draft));
         ApplyViewerImageLayout();
         UpdateEditControls();
     }

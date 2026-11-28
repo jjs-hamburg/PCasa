@@ -47,7 +47,10 @@ public partial class MainWindow
             return false;
         }
         if (_photoEditSession?.ImageId != info.Id)
+        {
+            _viewerZoomCancellation?.Cancel();
             _photoEditSession = new PhotoEditSession(info.Id, bitmap);
+        }
         return true;
     }
 
@@ -262,8 +265,7 @@ public partial class MainWindow
             (_viewerImageInfo is null || !_pendingEditImageIds.Contains(_viewerImageInfo.Id)) &&
             (editingTool || _photoEditSession?.HasChanges == true);
         CropSaveCopyButton.IsEnabled = CropSaveButton.IsEnabled;
-        CropCancelButton.IsEnabled = !_cropSavePending &&
-            (editingTool || _photoEditSession?.HasChanges == true);
+        CropCancelButton.IsEnabled = !_cropSavePending && _viewerOpen;
         if (_externalEditReview is { } external)
         {
             // The SAME three Crop footer buttons now own an external edit.
@@ -387,7 +389,9 @@ public partial class MainWindow
         if (_pendingAutomaticEdit is not null) return _pendingAutomaticEdit;
         if (_cropActive)
         {
-            var area = FitToImageAspect(_cropRect);
+            // _cropRect is already constrained by the editing gesture.
+            // Re-fitting at commit time against display pixels changes it.
+            var area = _cropRect;
             return area.Width > .01 && area.Height > .01
                 ? new PhotoEditStep("crop", area.X, area.Y, area.Width, area.Height)
                 : null;
@@ -413,7 +417,8 @@ public partial class MainWindow
     private PhotoEditStep? GetPendingLiveEditStep()
     {
         var step = GetActiveEditStep();
-        if (!_cropActive || step is null) return step;
+        if (step is null || _photoEditSession?.CanApply(step) == false) return null;
+        if (!_cropActive) return step;
         // Simply entering Crop does not make a before/after change.
         return _cropHistory.Count > 0 &&
                (_cropRect != _cropHistory[0].Bounds ||
@@ -423,7 +428,12 @@ public partial class MainWindow
     }
 
     private void DiscardLiveEditTool()
+        => FinishLiveEditTool(null);
+
+    private void FinishLiveEditTool(BitmapSource? committed)
     {
+        // Invalidate any asynchronous comparison started against the draft.
+        ++_editCompareRequest;
         _pendingAutomaticEdit = null;
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
@@ -431,7 +441,7 @@ public partial class MainWindow
         if (_advancedToneActive) LeaveAdvancedTone();
         if (_photoEditSession is not null)
         {
-            SetViewerBitmap(_photoEditSession.Render());
+            SetViewerBitmap(committed ?? _photoEditSession.Render());
             ApplyViewerImageLayout();
         }
         UpdateEditControls();
@@ -441,9 +451,18 @@ public partial class MainWindow
     {
         if (_photoEditSession is null) return false;
         var step = GetPendingLiveEditStep();
-        if (step is not null) _photoEditSession.Apply(step);
-        DiscardLiveEditTool();
-        return true;
+        try
+        {
+            var committed = _photoEditSession.CommitDraft(step);
+            FinishLiveEditTool(committed);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Image.ApplyEditTool", ex);
+            ShowFileActionError(ex);
+            return false;
+        }
     }
 
     // The tool decision is distinct from exiting the editor or saving a file.
@@ -451,8 +470,13 @@ public partial class MainWindow
     {
         var crop = _cropActive;
         var straighten = _straightenActive;
-        if (apply) ApplyEditTool();
-        else DiscardLiveEditTool();
+        if (apply)
+        {
+            // Publish the accepted result, not a second default crop frame.
+            ApplyEditTool();
+            return;
+        }
+        DiscardLiveEditTool();
         if (crop) BeginCrop();
         else if (straighten) BeginStraighten();
         // Slider panels are independent of draft state and remain selected.
