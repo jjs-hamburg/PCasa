@@ -522,6 +522,14 @@ public partial class MainWindow
                 token.ThrowIfCancellationRequested();
                 return _browseCacheRepository.CountMissing(profile);
             });
+        // Startup has already published the complete current catalog. A
+        // read-only check with no missing tiers has changed nothing; a second
+        // full SQL index, EXIF parse and sort would only contend with the UI.
+        if (maintenanceOnly && missing == 0)
+        {
+            LogStartupStage("cache-complete-no-index-reload");
+            return;
+        }
         BrowseCacheBuildResult? result = null;
 
         if (missing > 0)
@@ -725,7 +733,7 @@ public partial class MainWindow
     // the CURRENT tree and selected sort own publication. This check is
     // small (one item per folder, not one item per image), and gives the
     // same result for startup, later folder changes and manual resorting.
-    private static bool CanReuseStartupOrdering(
+    private static bool CanReuseReadOrdering(
         IReadOnlyDictionary<long, int>? beforeTree,
         IReadOnlyDictionary<long, int> publishedTree,
         GallerySortOptions beforeSort, GallerySortOptions publishedSort)
@@ -819,18 +827,16 @@ public partial class MainWindow
         var tier = profile.ChooseForDisplayWidth(ThumbnailSizeSlider.Value);
         IReadOnlyList<BrowseThumbnailIndexEntry>? nextIndex = null;
 
-        // Only the initial 500k-scale index benefits from this one-time
-        // off-UI sort. Capture WPF tree order on the dispatcher, then perform
-        // BOTH SQLite materialization and the same canonical gallery sort
-        // on the existing foreground catalog-read worker. Never create a
-        // second index or run a separate file-system scan.
-        IReadOnlyDictionary<long, int>? startupTreeOrder = null;
-        var startupSort = GallerySortOptions.Default;
-        long indexSqlMs = 0, initialSortMs = 0;
-        if (!_startupGalleryPublished && !fromScanner)
+        // Capture tree order on the dispatcher; SQLite materialization and
+        // the canonical sort run on the existing foreground read worker for
+        // every full reload, including scanner-driven refreshes.
+        IReadOnlyDictionary<long, int>? readTreeOrder = null;
+        var readSort = GallerySortOptions.Default;
+        long indexSqlMs = 0, indexSortMs = 0;
+        if (forceIndexReload || _activeBrowseTier != tier || _browseIndex.Count == 0)
         {
-            startupTreeOrder = CaptureGalleryFolderOrder();
-            startupSort = CurrentGallerySort;
+            readTreeOrder = CaptureGalleryFolderOrder();
+            readSort = CurrentGallerySort;
         }
 
         if (forceIndexReload || _activeBrowseTier != tier || _browseIndex.Count == 0)
@@ -847,17 +853,17 @@ public partial class MainWindow
                         var watch = System.Diagnostics.Stopwatch.StartNew();
                         // The canonical gallery comparer below owns all ordering.
                         // Avoid the redundant SQL sort of every catalog row.
-                        index = _browseCacheRepository.GetGalleryIndex(tier, orderByPath: false);
+                        index = _browseCacheRepository.GetGalleryIndex(tier, orderByPath: false,
+                            cancellationToken: token,
+                            isCurrent: () => _browseRefreshRequests.IsCurrent(refresh));
                         indexSqlMs = watch.ElapsedMilliseconds;
-                        // The initial sort previously ran synchronously on
-                        // WPF immediately before displaying the first image.
-                        // Keep it next to the one SQL read, on this worker.
-                        if (startupTreeOrder is not null)
+                        // Keep the canonical sort next to the SQL read.
+                        if (readTreeOrder is not null)
                         {
                             watch.Restart();
                             index = GalleryFolderOrdering.Order(index,
-                                startupTreeOrder, startupSort);
-                            initialSortMs = watch.ElapsedMilliseconds;
+                                readTreeOrder, readSort);
+                            indexSortMs = watch.ElapsedMilliseconds;
                         }
                         return Task.CompletedTask;
                     }, () => _browseRefreshRequests.IsCurrent(refresh));
@@ -873,7 +879,7 @@ public partial class MainWindow
             nextIndex = index;
             if (!_startupGalleryPublished)
                 LogStartupStage($"gallery-index-read: {index.Count:N0} photos; " +
-                    $"sqlite={indexSqlMs} ms; background-sort={initialSortMs} ms");
+                    $"sqlite={indexSqlMs} ms; background-sort={indexSortMs} ms");
         }
 
         if (_selectedImageIds.Count > 0)
@@ -935,8 +941,8 @@ public partial class MainWindow
             // and sort option have not changed while SQLite was being read.
             // New roots or user changes always fall back to the existing
             // unique canonical sort, preserving gallery jump semantics.
-            var sameOrder = CanReuseStartupOrdering(startupTreeOrder,
-                displayOrder, startupSort, CurrentGallerySort);
+            var sameOrder = CanReuseReadOrdering(readTreeOrder,
+                displayOrder, readSort, CurrentGallerySort);
             if (!sameOrder)
                 ordered = GalleryFolderOrdering.Order(ordered,
                     displayOrder, CurrentGallerySort);
@@ -946,7 +952,7 @@ public partial class MainWindow
                     .ToArray();
             if (_activeBrowseTier != tier ||
                 _browseIndex.Count != ordered.Count ||
-                !_browseIndex.SequenceEqual(ordered))
+                (!ReferenceEquals(_browseIndex, ordered) && !_browseIndex.SequenceEqual(ordered)))
             {
                 _browseIndex = ordered;
                 RebuildDragPublishedIndex();

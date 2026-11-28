@@ -97,8 +97,10 @@ public sealed class BrowseCacheRepository
     // The gallery shows ALL committed images. A missing packed tier uses the
     // existing local thumbnail until the ordinary cache builder completes.
     public IReadOnlyList<BrowseThumbnailIndexEntry> GetGalleryIndex(
-        int tier, bool orderByPath = true)
-        => ReadIndex(tier, imageId: null, includeMissing: true, orderByPath: orderByPath);
+        int tier, bool orderByPath = true,
+        CancellationToken cancellationToken = default, Func<bool>? isCurrent = null)
+        => ReadIndex(tier, imageId: null, includeMissing: true, orderByPath: orderByPath,
+            cancellationToken: cancellationToken, isCurrent: isCurrent);
 
     // A clicked folder that was indexed AFTER the last gallery publication
     // must not await another 500k-image materialization. Read only this
@@ -117,8 +119,16 @@ public sealed class BrowseCacheRepository
 
     private IReadOnlyList<BrowseThumbnailIndexEntry> ReadIndex(
         int tier, long? imageId, bool includeMissing,
-        long? photoFolderId = null, bool orderByPath = true)
+        long? photoFolderId = null, bool orderByPath = true,
+        CancellationToken cancellationToken = default, Func<bool>? isCurrent = null)
     {
+        void CheckCurrent()
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (isCurrent is not null && !isCurrent())
+                throw new OperationCanceledException(cancellationToken);
+        }
+        CheckCurrent();
         using var connection = _database.OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText =
@@ -188,6 +198,9 @@ public sealed class BrowseCacheRepository
         var result = new List<BrowseThumbnailIndexEntry>();
         while (reader.Read())
         {
+            // Stop obsolete full projections while reading, not only after
+            // allocating and sorting every remaining catalog row.
+            if ((result.Count & 255) == 0) CheckCurrent();
             var hasCaptureDate = !reader.IsDBNull(15);
             var captureTicks = hasCaptureDate
                 ? GalleryFolderOrdering.ParseCaptureDateTicks(reader.GetString(15)) : null;
@@ -215,6 +228,7 @@ public sealed class BrowseCacheRepository
                 HasInvalidCaptureDate: hasCaptureDate && captureTicks is null));
         }
 
+        CheckCurrent();
         return result;
     }
 

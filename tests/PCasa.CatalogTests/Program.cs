@@ -4612,6 +4612,25 @@ internal static class Program
         var unordered = cache.GetGalleryIndex(96, orderByPath: false).OrderBy(image => image.ImageId);
         if (ordered.Count() != 2 || !ordered.SequenceEqual(unordered))
             throw new Exception("Sequential gallery read changed the catalog projection.");
+        // A superseded request must never return even a partial index.
+        var checks = 0;
+        try
+        {
+            cache.GetGalleryIndex(96, orderByPath: false,
+                isCurrent: () => ++checks < 2);
+            throw new Exception("Superseded full gallery read was not canceled.");
+        }
+        catch (OperationCanceledException) { }
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        try
+        {
+            cache.GetGalleryIndex(96, cancellationToken: canceled.Token);
+            throw new Exception("Canceled gallery read entered SQLite.");
+        }
+        catch (OperationCanceledException) { }
+        if (!cache.GetGalleryIndex(96).OrderBy(image => image.ImageId).SequenceEqual(ordered))
+            throw new Exception("Canceled gallery read changed the durable catalog.");
     }
 
     private static void LargeUnchangedDirectoryDifference()
