@@ -600,6 +600,10 @@ public sealed class FolderScanner
 
                 sourceProcessingCount++;
                 if (resume is not null) resume.SourceProcessingCount = sourceProcessingCount;
+                var imageClock = detectDifferences ? Stopwatch.StartNew() : null;
+                long sourcePreparationMs = 0, hashMs = 0, thumbnailMs = 0,
+                    tierMs = 0, metadataMs = 0, commitMs = 0;
+                var imageStage = 0L;
                 try
                 {
                     // Metadata edits and original-image decoding share one
@@ -729,12 +733,16 @@ public sealed class FolderScanner
                             fileLength, modifiedUtcTicks, 256, 256, "", createdUtcTicks);
                         // Fingerprint only actual imports/rebuilds, never unchanged inventory.
                         // Hold a read share until the pixels and metadata are committed.
+                        sourcePreparationMs = imageClock?.ElapsedMilliseconds ?? 0;
+                        imageStage = sourcePreparationMs;
                         using var sourceBytes = VideoFormats.IsVideo(localPath) ? null :
                             new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read,
                                 128 * 1024, FileOptions.SequentialScan);
                         byte[]? fingerprint = sourceBytes is null ? null :
                             System.Security.Cryptography.SHA256.HashDataAsync(sourceBytes, cancellationToken)
                                 .AsTask().GetAwaiter().GetResult();
+                        hashMs = (imageClock?.ElapsedMilliseconds ?? 0) - imageStage;
+                        imageStage += hashMs;
                         var renderPath = _thumbnailCache.ResolveSource(localPath, cancellationToken);
                         var thumbnail = _thumbnailCache.CreateOrUpdate(
                             renderPath,
@@ -747,6 +755,8 @@ public sealed class FolderScanner
 
                         cancellationToken.ThrowIfCancellationRequested();
 
+                        thumbnailMs = (imageClock?.ElapsedMilliseconds ?? 0) - imageStage;
+                        imageStage += thumbnailMs;
                         // Decode/encode outside the cache lock. Keep the
                         // append and its catalog commit together so pack
                         // compaction cannot delete an unreferenced new pack.
@@ -768,11 +778,15 @@ public sealed class FolderScanner
                             : Array.Empty<ImportThumbnailTier>();
                         // Only source decode failures qualify as permanent
                         // import errors; do not mislabel database/write faults.
+                        tierMs = (imageClock?.ElapsedMilliseconds ?? 0) - imageStage;
+                        imageStage += tierMs;
                         decodeIdentity = null;
                         var keywords = _thumbnailCache.ReadKeywords(localPath);
                         var exif = exifReader.Read(localPath, cancellationToken);
                         cancellationToken.ThrowIfCancellationRequested();
 
+                        metadataMs = (imageClock?.ElapsedMilliseconds ?? 0) - imageStage;
+                        imageStage += metadataMs;
                         lock (CatalogRemovalService.CacheLock)
                         {
                             cancellationToken.ThrowIfCancellationRequested();
@@ -796,6 +810,7 @@ public sealed class FolderScanner
                             packStore.Dispose();
                         }
 
+                        commitMs = (imageClock?.ElapsedMilliseconds ?? 0) - imageStage;
                         currentThumbnailPath = thumbnail.Path;
                         updated++;
                         if (catalogIndexed is int confirmed && (existing is null || existing.ImportError is not null))
@@ -902,6 +917,12 @@ public sealed class FolderScanner
                     }
                 }
 
+                if (imageClock is not null)
+                    PCasaDiagnostics.WriteMessage("Scan.ImageTiming",
+                        $"File={localPath}; PreparationMs={sourcePreparationMs}; HashMs={hashMs}; " +
+                        $"ThumbnailMs={thumbnailMs}; TiersMs={tierMs}; MetadataMs={metadataMs}; " +
+                        $"CommitMs={commitMs}; TotalMs={imageClock.ElapsedMilliseconds}");
+
                 // Advance only after the image's processing has completed or
                 // its failure has been recorded. A scheduler yield while
                 // waiting for a file lock must not double-count this file.
@@ -1007,6 +1028,7 @@ public sealed class FolderScanner
             }
         }
 
+        var completionClock = Stopwatch.StartNew();
         ReportProgress(null, force: true);
         // Even the final UI progress callback can cancel a scan. A completed
         // enumeration is not permission to reconcile a cancelled operation.
@@ -1115,6 +1137,10 @@ public sealed class FolderScanner
             cancellationToken.ThrowIfCancellationRequested();
             _folderRepository.FinishRegularScan(durableScanKey, generation, scanEpoch);
         }
+        if (detectDifferences)
+            PCasaDiagnostics.WriteMessage("Scan.CompletionTiming",
+                $"Root={scanRoot}; FinalizeMs={completionClock.ElapsedMilliseconds}; " +
+                $"ScannerTotalMs={preparationClock.ElapsedMilliseconds}");
         PCasaDiagnostics.WriteMessage("Scan.DifferenceSummary",
             $"Root={scanRoot}; Checked={imageFilesSeen}; SourceProcessing={sourceProcessingCount}; " +
             $"Unchanged={unchanged}; Added={added}; Changed={changed}; Removed={removed}");

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -398,6 +399,7 @@ public partial class MainWindow
 
         public Task ExecuteAsync(CancellationToken token)
         {
+            var packageClock = Stopwatch.StartNew();
             token.ThrowIfCancellationRequested();
             var folder = owner.ResolveMonitoredFolder(directory)
                 ?? throw new InvalidOperationException(
@@ -476,6 +478,9 @@ public partial class MainWindow
                 // filesystem against the catalog, not an old filename cursor.
                 // The job chooses only the traversal scope and start position.
                 // Manual updates always reconcile the entire selected scope.
+                if (!requirePendingInitialImport)
+                    PCasaDiagnostics.WriteMessage("Scan.PackagePreparationTiming",
+                        $"Root={directory}; PreparationMs={packageClock.ElapsedMilliseconds}");
                 Result = owner._folderScanner.ScanDirectory(
                     folder, directory, recursive: true, progress, token, _resume,
                     durableInitialImport: requirePendingInitialImport,
@@ -503,6 +508,9 @@ public partial class MainWindow
                 owner._folderRepository.CompleteInitialScan(
                     folder.Id, expectedGeneration, scanEpoch);
             }
+            if (!requirePendingInitialImport)
+                PCasaDiagnostics.WriteMessage("Scan.PackageTiming",
+                    $"Root={directory}; TotalMs={packageClock.ElapsedMilliseconds}");
             return Task.CompletedTask;
         }
 

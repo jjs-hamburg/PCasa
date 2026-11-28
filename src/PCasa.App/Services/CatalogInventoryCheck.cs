@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using PCasa.App.Data;
 using PCasa.App.Models;
@@ -66,7 +67,39 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
         FileInfo? entry = null;
         string? activeDirectory = null;
         Dictionary<string, FileStamp>? known = null;
+        var measurement = Guid.NewGuid().ToString("N")[..8];
+        var listing = 0L;
+        var catalog = 0L;
+        var comparing = 0L;
+        var stamps = 0L;
+        var directoryCompletion = 0L;
+        var boundaryInsideListing = 0L;
+        var entries = 0;
+        var supported = 0;
+        var differences = 0;
+        var directories = 0;
+        var complete = false;
+        double Ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
+        Dictionary<string, FileStamp> LoadDirectory(string directory)
+        {
+            var started = Stopwatch.GetTimestamp();
+            try { return ReadDirectory(database, root.Id, directory, getToken()); }
+            finally { catalog += Stopwatch.GetTimestamp() - started; }
+        }
         void FinishDirectory(string directory)
+        {
+            var started = Stopwatch.GetTimestamp();
+            var catalogBefore = catalog;
+            try { FinishDirectoryCore(directory); }
+            finally
+            {
+                var elapsed = Stopwatch.GetTimestamp() - started;
+                boundaryInsideListing += elapsed;
+                directoryCompletion += elapsed - (catalog - catalogBefore);
+                directories++;
+            }
+        }
+        void FinishDirectoryCore(string directory)
         {
             getToken().ThrowIfCancellationRequested();
             var skipped = completedDirectories?.Contains(directory) == true ||
@@ -75,33 +108,91 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
                 ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                 : new HashSet<string>((string.Equals(activeDirectory, directory,
                     StringComparison.OrdinalIgnoreCase) ? known! :
-                    ReadDirectory(database, root.Id, directory, getToken())).Keys,
+                    LoadDirectory(directory)).Keys,
                     StringComparer.OrdinalIgnoreCase);
             activeDirectory = null;
             known = null;
             onDirectoryComplete(directory, remaining);
         }
-        foreach (var path in FolderScanner.EnumerateIncludedFiles(scanRoot, recursive,
+        using var iterator = FolderScanner.EnumerateIncludedFiles(scanRoot, recursive,
             exclusions, inclusions, CancellationToken.None,
             completedDirectories: completedDirectories, preferredDirectories: preferredDirectories,
             onDirectoryComplete: FinishDirectory, onFileInfo: file => entry = file,
-            reportCompletedDirectories: true))
+            reportCompletedDirectories: true).GetEnumerator();
+        try
         {
-            getToken().ThrowIfCancellationRequested();
-            if (path.Length == 0 || !CatalogMediaFormats.IsSupported(path)) continue;
-            var file = entry ?? throw new InvalidOperationException("Missing directory entry.");
-            var directory = file.DirectoryName ?? scanRoot;
-            if (!string.Equals(activeDirectory, directory, StringComparison.OrdinalIgnoreCase))
+            while (true)
             {
-                known = ReadDirectory(database, root.Id, directory, getToken());
-                activeDirectory = directory;
+                var listingStart = Stopwatch.GetTimestamp();
+                var boundaryBefore = boundaryInsideListing;
+                bool next;
+                try { next = iterator.MoveNext(); }
+                finally
+                {
+                    listing += Stopwatch.GetTimestamp() - listingStart -
+                        (boundaryInsideListing - boundaryBefore);
+                }
+                if (!next) { complete = true; break; }
+                var path = iterator.Current;
+                getToken().ThrowIfCancellationRequested();
+                if (path.Length == 0) continue;
+                entries++;
+                if (!CatalogMediaFormats.IsSupported(path)) continue;
+                supported++;
+                var compareStart = Stopwatch.GetTimestamp();
+                var catalogBefore = catalog;
+                var stampBefore = stamps;
+                Difference? difference = null;
+                try
+                {
+                    var file = entry ?? throw new InvalidOperationException("Missing directory entry.");
+                    var directory = file.DirectoryName ?? scanRoot;
+                    if (!string.Equals(activeDirectory, directory, StringComparison.OrdinalIgnoreCase))
+                    {
+                        known = LoadDirectory(directory);
+                        activeDirectory = directory;
+                    }
+                    if (!known!.Remove(path, out var old))
+                        difference = new Difference(path, true, false);
+                    else
+                    {
+                        var stampStart = Stopwatch.GetTimestamp();
+                        try
+                        {
+                            if (IsChanged(root, old, file))
+                                difference = new Difference(path, false, CreationChanged(root, old, file));
+                        }
+                        finally { stamps += Stopwatch.GetTimestamp() - stampStart; }
+                    }
+                    if (difference is null) onUnchanged(directory);
+                }
+                finally
+                {
+                    comparing += Stopwatch.GetTimestamp() - compareStart -
+                        (catalog - catalogBefore) - (stamps - stampBefore);
+                }
+                if (difference is not null)
+                {
+                    differences++;
+                    if (differences == 1)
+                        PCasaDiagnostics.WriteMessage("Scan.InventoryFirstDifference",
+                            $"Measurement={measurement}; Root={scanRoot}; Entries={entries}; " +
+                            $"ListingMs={Ms(listing):F1}; CatalogMs={Ms(catalog):F1}; " +
+                            $"CompareMs={Ms(comparing):F1}; StampMs={Ms(stamps):F1}; " +
+                            $"DirectoryCompletionMs={Ms(directoryCompletion):F1}");
+                    // Do not time the image processing while this iterator is suspended.
+                    yield return difference;
+                }
             }
-            if (!known!.Remove(path, out var old))
-                yield return new Difference(path, true, false);
-            else if (IsChanged(root, old, file))
-                yield return new Difference(path, false, CreationChanged(root, old, file));
-            else
-                onUnchanged(directory);
+        }
+        finally
+        {
+            PCasaDiagnostics.WriteMessage("Scan.InventoryTiming",
+                $"Measurement={measurement}; Root={scanRoot}; Complete={complete}; " +
+                $"Entries={entries}; Supported={supported}; Differences={differences}; Directories={directories}; " +
+                $"ListingMs={Ms(listing):F1}; CatalogMs={Ms(catalog):F1}; " +
+                $"CompareMs={Ms(comparing):F1}; StampMs={Ms(stamps):F1}; " +
+                $"DirectoryCompletionMs={Ms(directoryCompletion):F1}");
         }
     }
 
