@@ -154,6 +154,7 @@ public partial class App : Application
             // Only the interactive launch creates MainWindow. Setting a
             // valid URI here, rather than in App.xaml, keeps the isolated
             // maintenance process window-free until restore/reset finishes.
+            ScanSourceSnapshot.CleanAbandoned();
             StartupUri = new Uri("MainWindow.xaml", UriKind.Relative);
             base.OnStartup(e);
             return;

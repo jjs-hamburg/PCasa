@@ -179,6 +179,7 @@ internal static class Program
         Run("Unified refresh streams changed and new files at root and child scope", UnifiedDirectoryRefresh, failures);
         Run("Large unchanged directory never enters source processing", LargeUnchangedDirectoryDifference, failures);
         Run("Combined directory inventory streams files and child directories", CombinedDirectoryInventory, failures);
+        Run("Network image snapshot hashes once and retains original EXIF identity", ScanSourceSnapshotRegression, failures);
         Run("Streaming refresh persists completed directory receipts", DurableStreamingRefresh, failures);
         Run("Per-folder gallery sorting preserves tree order for all six sort fields", PerFolderSortAllFields, failures);
         Run("Gallery sorting reads EXIF capture date, file dates, size and original dimensions from one index", GallerySortUsesCatalogMetadata, failures);
@@ -4465,6 +4466,42 @@ internal static class Program
         if (result.ImageFilesSeen != 3 || result.Updated != 1 ||
             result.Removed != 1 || result.Failed != 0 || new ImageCatalogRepository(db).CountAll() != 3)
             throw new Exception("Recovered streaming refresh replayed a completed directory or lost a change: " + result);
+    }
+
+    private static void ScanSourceSnapshotRegression()
+    {
+        using var sandbox = new Sandbox();
+        var source = Path.Combine(sandbox.Images, "original.jpg");
+        WriteJpeg(source);
+        var expected = File.ReadAllBytes(source);
+        string snapshot;
+        using (var input = File.OpenRead(source))
+        using (var staged = ScanSourceSnapshot.Create(input, source, expected.Length, CancellationToken.None))
+        {
+            snapshot = staged.Path;
+            if (!File.ReadAllBytes(snapshot).SequenceEqual(expected) ||
+                !staged.Fingerprint.SequenceEqual(SHA256.HashData(expected)))
+                throw new Exception("Snapshot and original fingerprint differ.");
+            var json = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+            {
+                ["SourceFile"] = snapshot,
+                ["GPS:GPSLatitude"] = 12.5,
+                ["GPS:GPSLongitude"] = -23.5
+            });
+            var data = ImageExifReader.Parse(json);
+            var rebound = ImageExifReader.RebindSnapshotSource(data, snapshot, source);
+            if (!ImageExifReader.SourceFileMatches(rebound.Json, source, requireSource: true) ||
+                rebound.GpsLatitude != data.GpsLatitude || rebound.GpsLongitude != data.GpsLongitude)
+                throw new Exception("Snapshot EXIF changed metadata or retained a temporary identity.");
+            try
+            {
+                ImageExifReader.RebindSnapshotSource(data, source, source);
+                throw new Exception("Foreign EXIF source was accepted.");
+            }
+            catch (InvalidDataException) { }
+        }
+        if (File.Exists(snapshot) || !File.ReadAllBytes(source).SequenceEqual(expected))
+            throw new Exception("Snapshot was retained or original was modified.");
     }
 
     private static void CombinedDirectoryInventory()

@@ -97,6 +97,21 @@ public sealed class ImageExifReader : IImportExifReader
         }
     }
 
+    // Called only for an immutable byte-for-byte snapshot whose original
+    // read handle remains held. Verify the decoder's actual input before
+    // substituting the original identity in the durable EXIF record.
+    internal static ImageExifData RebindSnapshotSource(
+        ImageExifData data, string snapshotPath, string originalPath)
+    {
+        if (!SourceFileMatches(data.Json, snapshotPath, requireSource: true))
+            throw new InvalidDataException("ExifTool snapshot identity mismatch: " + snapshotPath);
+        var obj = System.Text.Json.Nodes.JsonNode.Parse(data.Json)
+            as System.Text.Json.Nodes.JsonObject
+            ?? throw new InvalidDataException("Unexpected snapshot EXIF record.");
+        obj["SourceFile"] = originalPath;
+        return data with { Json = obj.ToJsonString() };
+    }
+
     // Both the live reader and the catalog integrity check use the exact
     // SAME source-file identity rule. Legacy EXIF blobs lacking SourceFile are
     // tolerated only by the catalog check, never by a new read.

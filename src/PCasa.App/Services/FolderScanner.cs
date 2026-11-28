@@ -738,19 +738,28 @@ public sealed class FolderScanner
                         using var sourceBytes = VideoFormats.IsVideo(localPath) ? null :
                             new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read,
                                 128 * 1024, FileOptions.SequentialScan);
-                        byte[]? fingerprint = sourceBytes is null ? null :
+                        // Stage only network still images with a self-contained
+                        // JPEG payload. Keep RAW/PSD/video decoder semantics unchanged.
+                        // The source handle stays open with FileShare.Read through commit.
+                        using var staged = folder.IsNetwork && sourceBytes is not null &&
+                            (extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                             extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+                            ? ScanSourceSnapshot.Create(sourceBytes, localPath, fileLength, cancellationToken)
+                            : null;
+                        var mediaPath = staged?.Path ?? localPath;
+                        byte[]? fingerprint = staged?.Fingerprint ?? (sourceBytes is null ? null :
                             System.Security.Cryptography.SHA256.HashDataAsync(sourceBytes, cancellationToken)
-                                .AsTask().GetAwaiter().GetResult();
+                                .AsTask().GetAwaiter().GetResult());
                         hashMs = (imageClock?.ElapsedMilliseconds ?? 0) - imageStage;
                         imageStage += hashMs;
-                        var renderPath = _thumbnailCache.ResolveSource(localPath, cancellationToken);
+                        var renderPath = _thumbnailCache.ResolveSource(mediaPath, cancellationToken);
                         var thumbnail = _thumbnailCache.CreateOrUpdate(
                             renderPath,
                             fingerprint is null ? canonicalPath :
                                 canonicalPath + "|sha256:" + Convert.ToHexString(fingerprint),
                             fileLength,
                             modifiedUtcTicks,
-                            originalSourcePath: localPath,
+                            originalSourcePath: mediaPath,
                             cancellationToken: cancellationToken);
 
                         cancellationToken.ThrowIfCancellationRequested();
@@ -774,15 +783,17 @@ public sealed class FolderScanner
                         var preparedLarge = largeTiers.Length > 0
                             ? packStore.PrepareTiers(
                                 renderPath, new BrowseThumbnailProfile(largeTiers),
-                                cancellationToken, originalSourcePath: localPath)
+                                cancellationToken, originalSourcePath: mediaPath)
                             : Array.Empty<ImportThumbnailTier>();
                         // Only source decode failures qualify as permanent
                         // import errors; do not mislabel database/write faults.
                         tierMs = (imageClock?.ElapsedMilliseconds ?? 0) - imageStage;
                         imageStage += tierMs;
                         decodeIdentity = null;
-                        var keywords = _thumbnailCache.ReadKeywords(localPath);
-                        var exif = exifReader.Read(localPath, cancellationToken);
+                        var keywords = _thumbnailCache.ReadKeywords(mediaPath);
+                        var exif = exifReader.Read(mediaPath, cancellationToken);
+                        if (staged is not null)
+                            exif = ImageExifReader.RebindSnapshotSource(exif, mediaPath, localPath);
                         cancellationToken.ThrowIfCancellationRequested();
 
                         metadataMs = (imageClock?.ElapsedMilliseconds ?? 0) - imageStage;
