@@ -17,7 +17,7 @@ public partial class MainWindow
     {
         if (progress.DiscoveredPhotoFolderId is not long photoId ||
             progress.DiscoveredPhotoFolderPath is not string folderPath ||
-            !_browseInitialized || _folderTreeItems.ContainsKey(photoId) ||
+            !_browseInitialized || HasCatalogTreeFolder(photoId) ||
             IsPendingFolderRemovalHidden(folderPath))
             return;
 
@@ -49,6 +49,7 @@ public partial class MainWindow
                     StringComparison.OrdinalIgnoreCase))
                 continue;
 
+            MaterializeFolderChildren(item);
             var next = item.Items.OfType<TreeViewItem>().FirstOrDefault(child =>
                 child.Tag is FolderTreeTag tag &&
                 string.Equals(tag.FullPath, part.FullPath,

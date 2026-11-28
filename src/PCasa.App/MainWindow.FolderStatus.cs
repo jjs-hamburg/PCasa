@@ -14,10 +14,15 @@ public partial class MainWindow
     {
         var tag = new FolderTreeTag(path, photoFolderId);
         ApplyFolderStatus(tag);
+        var normalized = path.Replace('/', '\\').TrimEnd('\\');
+        tag.HasPendingTagWrites = _pendingTagDirect.Contains(normalized);
+        tag.HasPendingChildTagWrites = !tag.HasPendingTagWrites && _pendingTagAncestors.Contains(normalized);
         return tag;
     }
 
     private int _pendingTagDisplayVersion;
+    private IReadOnlySet<string> _pendingTagDirect = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlySet<string> _pendingTagAncestors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     private async Task RefreshPendingTagDotsAsync()
     {
@@ -77,6 +82,8 @@ public partial class MainWindow
                 parent = Path.GetDirectoryName(normalized);
             }
         }
+        _pendingTagDirect = direct;
+        _pendingTagAncestors = ancestors;
         foreach (var root in FoldersTree.Items.OfType<TreeViewItem>())
             SetPendingTagDot(root, direct, ancestors);
     }

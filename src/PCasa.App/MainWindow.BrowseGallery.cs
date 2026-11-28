@@ -157,7 +157,7 @@ public partial class MainWindow
                     selected = tree.Items.OfType<TreeViewItem>().FirstOrDefault(item =>
                         item.Tag is FolderTreeTag { PhotoFolderId: long id } && id == activeId);
                 else
-                    _folderTreeItems.TryGetValue(activeId, out selected);
+                    selected = GetCatalogTreeFolder(activeId);
             }
             tree.UpdateLayout();
             if (selected is not null && FindTreeScrollViewer(tree) is { } scroll)
@@ -1106,7 +1106,7 @@ public partial class MainWindow
         _lastCatalogImageCount = imageCount;
         foreach (var discovered in folders)
         {
-            if (_folderTreeItems.ContainsKey(discovered.Id)) continue;
+            if (HasCatalogTreeFolder(discovered.Id)) continue;
             ShowScannedPhotoFolder(new ScanProgress(0, 0, 0, 0, null,
                 DiscoveredPhotoFolderId: discovered.Id,
                 DiscoveredPhotoFolderPath: discovered.LocalPath));
@@ -1800,8 +1800,7 @@ public partial class MainWindow
                 // directory. Expand the ACTUAL target's ancestors, not just
                 // S:\\'s ancestors (there are none), before testing for a
                 // visible gallery section.
-                var visualTarget = _folderTreeItems.TryGetValue(
-                    photoFolderId, out var photoItem) ? photoItem : item;
+                var visualTarget = GetCatalogTreeFolder(photoFolderId) ?? item;
                 FolderTreeNavigation.ExpandAncestors(FoldersTree, visualTarget);
             }
             finally { _bulkFolderExpansion = false; }
@@ -1973,7 +1972,7 @@ public partial class MainWindow
                     StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             _dragPublishedFolders[folder.Id] = folder.LocalPath;
-            if (!_folderTreeItems.ContainsKey(folder.Id))
+            if (!HasCatalogTreeFolder(folder.Id))
                 ShowScannedPhotoFolder(new ScanProgress(0, 0, 0, 0, null,
                     DiscoveredPhotoFolderId: folder.Id,
                     DiscoveredPhotoFolderPath: folder.LocalPath));

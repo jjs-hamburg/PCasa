@@ -82,6 +82,7 @@ public partial class MainWindow
                 AllowDrop = true
             };
             ToolTipService.SetIsEnabled(item, false);
+            MaterializeFolderChildren(selected);
             selected.Items.Add(item);
             selected.IsExpanded = true;
         }

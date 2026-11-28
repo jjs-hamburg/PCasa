@@ -178,8 +178,12 @@ public partial class MainWindow
         RefreshGallerySearchAfterTreeVisibilityChange();
     }
 
-    private static void SetFolderExpansion(TreeViewItem item, bool expanded)
+    private void SetFolderExpansion(TreeViewItem item, bool expanded)
     {
+        if (expanded) MaterializeFolderChildren(item);
+        else if (_deferredFolderChildren.TryGetValue(item, out var deferred))
+            foreach (var node in EnumerateLogicalNodes(deferred))
+                _deferredExpansionPaths.Remove(node.FullPath);
         foreach (var child in item.Items.OfType<TreeViewItem>())
             SetFolderExpansion(child, expanded);
         item.IsExpanded = expanded;
