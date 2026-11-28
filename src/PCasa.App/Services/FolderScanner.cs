@@ -363,7 +363,7 @@ public sealed class FolderScanner
                 $"Root={scanRoot}; Job={durableScanKey ?? "initial"}; " +
                 $"Epoch={scanEpoch}; Checked={imageFilesSeen}; " +
                 $"CompletedDirectories={completedDirectories!.Count}; " +
-                $"FileCursors={fileCursors.Count}; " +
+                $"FileCursors={fileCursors!.Count}; " +
                 $"LastDirectory={last.Key ?? "-"}; LastFile={last.Value ?? "-"}");
         }
         // A partial directory seen-set after restart must never prune images
@@ -683,7 +683,7 @@ public sealed class FolderScanner
                         currentThumbnailPath = existing!.ThumbnailPath;
                         unchanged++;
                     }
-                    else if (currentIndex)
+                    else if (currentIndex && existing is not null)
                     {
                         if (existing.PhotoFolderId != photoFolderId ||
                             !string.Equals(existing.LocalPath, localPath, StringComparison.OrdinalIgnoreCase))
