@@ -273,7 +273,7 @@ public partial class MainWindow : Window
             .ToArray();
         var monitoredFolders = rootsWithExclusions
             .Select(root => root.Folder).ToArray();
-        var monitoredFolderIds = monitoredFolders.Select(folder => folder.Id).ToHashSet();
+        var ownersById = rootsWithExclusions.ToDictionary(root => root.Folder.Id);
         var roots = new Dictionary<string, FolderTreeNode>(StringComparer.OrdinalIgnoreCase);
         var nodesByPath = new Dictionary<string, FolderTreeNode>(StringComparer.OrdinalIgnoreCase);
         var defaultExpandedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -301,12 +301,11 @@ public partial class MainWindow : Window
             else committedFolders[id] = latest;
         }
         foreach (var folder in committedFolders.Values.Where(
-                     folder => monitoredFolderIds.Contains(folder.MonitoredFolderId) &&
+                     folder => ownersById.ContainsKey(folder.MonitoredFolderId) &&
                          !IsPendingFolderRemovalHidden(folder.LocalPath)))
         {
-            var owner = rootsWithExclusions.FirstOrDefault(root =>
-                root.Folder.Id == folder.MonitoredFolderId);
-            if (owner.Folder is null ||
+            var owner = ownersById[folder.MonitoredFolderId];
+            if (
                 FolderExclusionRules.IsExcluded(
                     folder.LocalPath, owner.ExcludedPaths, owner.IncludedPaths))
                 continue;

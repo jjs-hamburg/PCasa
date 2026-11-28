@@ -591,7 +591,8 @@
                                         BorderBrush="#777B7F"
                                         BorderThickness="0.5"
                                         SnapsToDevicePixels="True">
-                                    <Image Source="{Binding RelativeSource={RelativeSource AncestorType=TreeViewItem}, Path=Tag.ThumbnailSource}"
+                                    <loc:FolderTreeThumbnailImage Folder="{Binding RelativeSource={RelativeSource AncestorType=TreeViewItem}, Path=Tag}"
+                                           Source="{Binding RelativeSource={RelativeSource AncestorType=TreeViewItem}, Path=Tag.ThumbnailSource}"
                                            Stretch="UniformToFill"
                                            RenderOptions.BitmapScalingMode="LowQuality"
                                            SnapsToDevicePixels="True" />

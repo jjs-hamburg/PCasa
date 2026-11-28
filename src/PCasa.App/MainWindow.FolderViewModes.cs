@@ -137,15 +137,14 @@ public partial class MainWindow
             if (latest is null) catalog.Remove(id);
             else catalog[id] = latest;
         }
+        var ownersById = roots.ToDictionary(root => root.Folder.Id);
         var folders = catalog.Values
             .Where(folder => folder.ImageCount > 0 &&
                 monitoredIds.Contains(folder.MonitoredFolderId) &&
                 !IsPendingFolderRemovalHidden(folder.LocalPath))
             .Where(folder =>
             {
-                var owner = roots.FirstOrDefault(root =>
-                    root.Folder.Id == folder.MonitoredFolderId);
-                return owner.Folder is not null &&
+                return ownersById.TryGetValue(folder.MonitoredFolderId, out var owner) &&
                     !FolderExclusionRules.IsExcluded(folder.LocalPath,
                         owner.ExcludedPaths, owner.IncludedPaths);
             })

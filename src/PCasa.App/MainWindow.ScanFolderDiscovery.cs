@@ -62,10 +62,10 @@ public partial class MainWindow
                 next = new TreeViewItem
                 {
                     Header = part.DisplayName,
-                    ToolTip = part.FullPath,
                     Tag = CreateFolderTreeTag(part.FullPath,
                         atImageFolder ? photoId : null)
                 };
+                System.Windows.Controls.ToolTipService.SetIsEnabled(next, false);
                 // Sorting remains consistent with the full rebuild and the
                 // gallery's single authoritative folder order.
                 var position = 0;

@@ -75,6 +75,27 @@ internal static class Program
             app.InitializeComponent();
             window = new PCasa.App.MainWindow();
             window.Show();
+            // A catalog folder can exist for ordering/navigation without
+            // creating a local database thumbnail read for a hidden row.
+            {
+                var tagType = typeof(MainWindow).Assembly.GetType("PCasa.App.Models.FolderTreeTag")!;
+                var tag = Activator.CreateInstance(tagType, new object[] { @"C:\\test", (long?)long.MaxValue })!;
+                var requested = tagType.GetField("_thumbnailRequested", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!;
+                var preview = new FolderTreeThumbnailImage { Folder = tag, Visibility = Visibility.Collapsed };
+                var host = new Window { Content = preview, Width = 100, Height = 100, ShowInTaskbar = false };
+                try
+                {
+                    host.Show();
+                    Flush(host);
+                    if (requested.GetValue(tag) is true)
+                        throw new Exception("Hidden folder requested a thumbnail during tree construction.");
+                    preview.Visibility = Visibility.Visible;
+                    Until(host, () => requested.GetValue(tag) is true,
+                        "Visible folder did not request its thumbnail.");
+                }
+                finally { host.Close(); }
+            }
             // About has exactly one user-visible release identity: Version.
             var aboutDialogType = typeof(PCasa.App.MainWindow).Assembly
                 .GetType("PCasa.App.PcasaAboutWindow")!;
