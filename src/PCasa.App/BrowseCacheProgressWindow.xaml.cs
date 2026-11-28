@@ -393,7 +393,10 @@ public partial class BrowseCacheProgressWindow : Window
         // Snapshot counters are volatile after restart. The SAME durable
         // per-job scan receipt used by the taskmanager supplies the minimum
         // confirmed count until the scanner publishes its first callback.
-        var processed = Math.Max(progress.Processed, confirmedProcessed);
+        // Directory receipts count compared names, not processed images.
+        // For a refresh the live difference processor is authoritative.
+        var processed = title == "Ordner aktualisieren" || progress.Phase == "Ordner aktualisieren"
+            ? progress.Processed : Math.Max(progress.Processed, confirmedProcessed);
         Progress.IsIndeterminate = progress.Total == 0;
         if (progress.Total > 0)
         {
@@ -402,7 +405,7 @@ public partial class BrowseCacheProgressWindow : Window
             CountText.Text = $"{processed:N0} / {progress.Total:N0}";
         }
         else
-            CountText.Text = UiLanguage.Format(progress.Phase == "Bilder einlesen"
+            CountText.Text = UiLanguage.Format(progress.Phase is "Bilder einlesen" or "Ordner aktualisieren"
                 ? "{0:N0} eingelesen" : "{0:N0} geprüft", processed);
 
         // A yielded scan still has a last filename, but it is no longer
