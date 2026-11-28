@@ -1877,20 +1877,28 @@ internal static class Program
                     var data = buffer.ToArray();
                     File.WriteAllBytes(packPath, data.Concat(data).ToArray());
                     using var reused = new BrowseThumbnailPageCache();
+                    void WarmAndWait()
+                    {
+                        var warm = reused.WarmRangeAsync(0, 1);
+                        // The STA test installs a DispatcherSynchronizationContext.
+                        // Pump it while waiting, with the standard finite timeout.
+                        Until(window, () => warm.IsCompleted, "Thumbnail page warm timed out.");
+                        warm.GetAwaiter().GetResult();
+                    }
                     var firstEntry = new BrowseThumbnailIndexEntry(100, 1, 96,
                         packName, 0, data.Length, 1, 1);
                     var secondEntry = firstEntry with { ImageId = 200 };
                     reused.SetIndex(new[] { firstEntry, secondEntry });
-                    reused.WarmRangeAsync(0, 1).GetAwaiter().GetResult();
+                    WarmAndWait();
                     if (!reused.TryGet(0, out var initialBitmap) || initialBitmap is null)
                         throw new Exception("Packed bitmap test fixture did not load.");
                     reused.SetIndex(new[] { secondEntry, firstEntry });
-                    reused.WarmRangeAsync(0, 1).GetAwaiter().GetResult();
+                    WarmAndWait();
                     if (!reused.TryGet(1, out var retainedBitmap) ||
                         !ReferenceEquals(initialBitmap, retainedBitmap))
                         throw new Exception("Unchanged packed span was decoded again after reordering.");
                     reused.SetIndex(new[] { secondEntry, firstEntry with { ByteOffset = data.Length } });
-                    reused.WarmRangeAsync(0, 1).GetAwaiter().GetResult();
+                    WarmAndWait();
                     if (!reused.TryGet(1, out var renewedBitmap) || renewedBitmap is null ||
                         ReferenceEquals(initialBitmap, renewedBitmap))
                         throw new Exception("Changed packed span reused stale pixels.");
