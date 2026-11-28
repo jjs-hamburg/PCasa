@@ -419,13 +419,10 @@ public partial class MainWindow
         return queued?.Key ?? _visibleManualOrder.LastOrDefault();
     }
 
-    private int ConfirmedManualScanCount(string key, int displayed)
-        // Avoid a SQLite round-trip for every newly committed image. Only
-        // fresh, zero-valued restart snapshots need their stored cursor.
-        => displayed == 0 &&
-            key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal)
-            ? _folderRepository.GetConfirmedRegularScanCount(key)
-            : displayed;
+    // Regular scan receipts store the number of compared directory names,
+    // not the number of imported images. Never substitute them into the UI.
+    private static int ConfirmedManualScanCount(string key, int displayed)
+        => displayed;
 
     private void DisplayManualOperation(string key)
     {

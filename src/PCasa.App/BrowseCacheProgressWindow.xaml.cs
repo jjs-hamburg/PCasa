@@ -395,7 +395,8 @@ public partial class BrowseCacheProgressWindow : Window
         // confirmed count until the scanner publishes its first callback.
         // Directory receipts count compared names, not processed images.
         // For a refresh the live difference processor is authoritative.
-        var processed = title == "Ordner aktualisieren" || progress.Phase == "Ordner aktualisieren"
+        var processed = progress.Phase == "Ordner aktualisieren" ||
+            (progress.Phase is null && title == "Ordner aktualisieren")
             ? progress.Processed : Math.Max(progress.Processed, confirmedProcessed);
         Progress.IsIndeterminate = progress.Total == 0;
         if (progress.Total > 0)
