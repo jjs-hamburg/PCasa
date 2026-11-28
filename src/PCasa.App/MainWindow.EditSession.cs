@@ -23,6 +23,7 @@ public partial class MainWindow
     // continue; only a second write of the SAME image stays disabled.
     private readonly HashSet<long> _pendingEditImageIds = [];
     private bool _straightenActive;
+    private bool _straightenHasDraft;
     private double _straightenAngle;
     private int _straightenQuarterTurns;
     private BitmapSource? _straightenPreviewBase;
@@ -104,6 +105,7 @@ public partial class MainWindow
         _straightenPreviewBase = _photoEditSession!.Render();
         _straightenPreviewQuarterTurns = int.MinValue;
         _straightenActive = true;
+        _straightenHasDraft = false;
         _straightenAngle = 0;
         _straightenQuarterTurns = 0;
         StraightenAngleSlider.Value = 0;
@@ -130,6 +132,16 @@ public partial class MainWindow
         // No debounce. Slider motion changes only a GPU-side WPF transform,
         // not a multi-megapixel bitmap or the viewport geometry.
         RenderStraightenPreview();
+        // The draft is independent from the GPU preview. Refresh the shared
+        // decision buttons (and comparison eligibility) on the zero/nonzero
+        // transition, not on every slider tick. The current angle is still
+        // read directly by Apply/Save; no stale recipe or full bitmap per tick.
+        var hasDraft = GetPendingLiveEditStep() is not null;
+        if (_straightenHasDraft != hasDraft)
+        {
+            _straightenHasDraft = hasDraft;
+            UpdateEditControls();
+        }
     }
 
     private void ResetStraightenPreviewTransform()
@@ -194,6 +206,7 @@ public partial class MainWindow
         _straightenPreviewBase = null;
         _straightenPreviewQuarterTurns = int.MinValue;
         _straightenActive = false;
+        _straightenHasDraft = false;
         ViewerStraightenGrid.Visibility = Visibility.Collapsed;
         ViewerStraightenOptions.Visibility = Visibility.Collapsed;
         StraightenAngleSlider.Visibility = Visibility.Collapsed;

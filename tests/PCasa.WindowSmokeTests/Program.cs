@@ -4481,6 +4481,62 @@ internal static class Program
                         !originalBytes.SequenceEqual(beforeBytes))
                         throw new Exception(
                             "Edit session detached the wrong original pixels.");
+                    // Exercise actual slider and button events, not a direct
+                    // UpdateEditControls invocation after changing the draft.
+                    // Both Save variants must be enabled BEFORE Apply.
+                    {
+                        var beginStraighten = viewerType.GetMethod("BeginStraighten", reflectFlags)!;
+                        var leaveStraighten = viewerType.GetMethod("LeaveStraighten", reflectFlags)!;
+                        var straightenActive = viewerType.GetField("_straightenActive", reflectFlags)!;
+                        var angleSlider = (Slider)window.FindName("StraightenAngleSlider")!;
+                        var applyDraft = (Button)window.FindName("CropApplyButton")!;
+                        var cancelDraft = (Button)window.FindName("ViewerToolCancelButton")!;
+                        var saveDraft = (Button)window.FindName("CropSaveButton")!;
+                        var copyDraft = (Button)window.FindName("CropSaveCopyButton")!;
+                        var quarterTurn = (Button)window.FindName("StraightenRightButton")!;
+                        var rotationEdit = new PhotoEditSession(999, originalPixels);
+                        editStateFixture.SetValue(window, rotationEdit);
+                        viewerImage.Source = originalPixels;
+                        bool AllEnabled() => applyDraft.IsEnabled && cancelDraft.IsEnabled &&
+                            saveDraft.IsEnabled && copyDraft.IsEnabled;
+                        bool AllDisabled() => !applyDraft.IsEnabled && !cancelDraft.IsEnabled &&
+                            !saveDraft.IsEnabled && !copyDraft.IsEnabled;
+                        try
+                        {
+                            beginStraighten.Invoke(window, null);
+                            if (!AllDisabled())
+                                throw new Exception("Unchanged straighten draft enabled write actions.");
+                            angleSlider.Value = 4.5;
+                            if (!AllEnabled() || rotationEdit.HasChanges || !compareSplit.IsEnabled)
+                                throw new Exception("Straighten slider did not unlock live decisions.");
+                            angleSlider.Value = 0;
+                            if (!AllDisabled() || compareSplit.IsEnabled)
+                                throw new Exception("Zero straighten angle left stale draft decisions.");
+                            quarterTurn.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                            if (!AllEnabled())
+                                throw new Exception("Quarter-turn did not unlock live decisions.");
+                            cancelDraft.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                            if (straightenActive.GetValue(window) is not true ||
+                                angleSlider.Value != 0 || rotationEdit.HasChanges || !AllDisabled())
+                                throw new Exception("Cancel did not reset straighten while retaining its tool.");
+                            angleSlider.Value = -3.5;
+                            applyDraft.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                            if (rotationEdit.AppliedSteps.Count != 1 ||
+                                rotationEdit.AppliedSteps[0].Degrees != -3.5 ||
+                                applyDraft.IsEnabled || cancelDraft.IsEnabled ||
+                                !saveDraft.IsEnabled || !copyDraft.IsEnabled)
+                                throw new Exception("Straighten Apply did not commit exactly one rotation and unlock Save/Copy.");
+                        }
+                        finally
+                        {
+                            if (straightenActive.GetValue(window) is true)
+                                leaveStraighten.Invoke(window, null);
+                            editStateFixture.SetValue(window, null);
+                            viewerImage.Source = originalPixels;
+                            editControls.Invoke(window, null);
+                        }
+                        Console.WriteLine("PASS: Straighten slider and quarter turns update all decision buttons; Cancel stays in tool and Apply commits once.");
+                    }
                     // A real-time adjustment is already comparable before
                     // it is accepted into Undo history or saved to disk.
                     var advancedActive = viewerType.GetField(
