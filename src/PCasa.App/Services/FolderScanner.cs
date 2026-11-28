@@ -1363,6 +1363,7 @@ public sealed class FolderScanner
             }
             // No missing-file reconciliation or durable receipt until the
             // single enumeration and all emitted image processing succeeded.
+            token.ThrowIfCancellationRequested();
             if (!previouslyCompleted || reportCompletedDirectories)
                 onDirectoryComplete?.Invoke(directory);
             for (var i = children.Count - 1; i >= 0; i--)

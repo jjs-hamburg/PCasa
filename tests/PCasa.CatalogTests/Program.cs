@@ -83,6 +83,7 @@ internal static class Program
         Run("Legacy V1 recovery migrates without losing P0 or pending image tags", LegacyTagRecoveryMigrationPreservesIntents, failures);
         Run("Recovered P0 packages resume newest-first including manual NAS scans", RecoveredManualScanPrecedesOlderTags, failures);
         Run("Durable packages reject non-reconstructable dynamic steps", DurablePackageRejectsDynamicSteps, failures);
+        Run("Startup recovery does not duplicate a live accepted package", StartupRecoverySkipsLivePackage, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
         Run("Scheduler coalesces duplicate pending work", SchedulerCoalescesPendingWork, failures);
         Run("Scheduler cancels queued work on shutdown", SchedulerShutdownCancelsQueuedWork, failures);
@@ -491,6 +492,59 @@ internal static class Program
         catch (InvalidOperationException) { rejected = true; }
         if (!rejected || package.TotalSteps != 1)
             throw new Exception("Durable package accepted unjournaled dynamic steps.");
+    }
+
+    private static void StartupRecoverySkipsLivePackage()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var (database, _, _) = sandbox.Prepare();
+            var journal = new DurablePackageJournal(database);
+            const string oldKey = "test:startup-recovered";
+            const string liveKey = "test:startup-live";
+            const string type = "test-startup-v1";
+            journal.Put(oldKey, type, "{}", SchedulerPriority.Background,
+                SchedulerWorkKind.Catalog);
+            await using var scheduler = new PCasaScheduler();
+            scheduler.EnableDurablePackages(database);
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var duplicateFactoryCalls = 0;
+            scheduler.RegisterDurablePackageType(type, (key, _) =>
+            {
+                if (key == liveKey) Interlocked.Increment(ref duplicateFactoryCalls);
+                var restored = new SchedulerTaskPackage(key);
+                restored.AddStep(_ =>
+                {
+                    recovered.TrySetResult();
+                    return Task.CompletedTask;
+                });
+                return restored;
+            });
+            var live = new SchedulerTaskPackage(liveKey);
+            live.AddStep(async token =>
+            {
+                started.TrySetResult();
+                await release.Task.WaitAsync(token);
+            });
+            var completion = scheduler.EnqueueDurablePackageAsync(live, type,
+                "{}", SchedulerPriority.ManualAction);
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                if (scheduler.RecoverDurablePackages().Count != 0 || duplicateFactoryCalls != 0)
+                    throw new Exception("Startup recovery reconstructed a package accepted in this process.");
+            }
+            finally { release.TrySetResult(); }
+            await completion.WaitAsync(TimeSpan.FromSeconds(10));
+            await recovered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            if (scheduler.Snapshot().Count(x => x.Key == liveKey) != 1 ||
+                !journal.RecentCompleted().Any(x => x.Key == liveKey))
+                throw new Exception("Live package did not keep its single completed identity.");
+        }
+        Check().GetAwaiter().GetResult();
     }
 
     private static void DurableTransferRetryPreservesPriority()

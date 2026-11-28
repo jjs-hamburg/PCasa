@@ -88,6 +88,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private readonly Dictionary<string, Task> _durableActiveTasks =
         new(StringComparer.Ordinal);
     private bool _restoringDurablePackages;
+    private HashSet<string> _startupDurableKeys = new(StringComparer.Ordinal);
     // The controller owns deferred activation. A passive probe only reports
     // source readiness; it never starts, ranks, or resumes a package.
     private Task<(HashSet<string> Ready, HashSet<string> Reconnected)>? _deferredProbe;
@@ -341,6 +342,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
         _sessionAcceptanceDatabase = database;
         _durableJournal.NormalizeLegacyJobPriorities();
         _durableJournal.ReleaseStartupPauses();
+        // Capture identities before the first UI interaction. Recovery may
+        // run after the initial asynchronous gallery frame; jobs accepted
+        // meanwhile already have a live scheduler owner, not a restart recipe.
+        _startupDurableKeys = _durableJournal.Pending().Select(p => p.Key)
+            .ToHashSet(StringComparer.Ordinal);
         _taskOrderStore = new SchedulerTaskOrderStore(database);
         _taskOrderStore.NormalizeLegacyJobPriorities();
         foreach (var key in _taskOrderStore.ReleaseStartupPauses())
@@ -624,14 +630,21 @@ public sealed class PCasaScheduler : IAsyncDisposable
             throw new InvalidOperationException("Paketjournal nicht aktiviert.");
         var unresolved = new List<DurablePackageRecord>();
         _durableRestoreObserver = onRestored;
-        var pendingAtStartup = journal.Pending();
-        if (pendingAtStartup.Count > 0)
+        HashSet<string> startupKeys;
+        lock (_gate)
+        {
+            startupKeys = _startupDurableKeys;
+            _startupDurableKeys = new HashSet<string>(StringComparer.Ordinal);
+        }
+        var pendingAtStartup = journal.Pending()
+            .Where(p => startupKeys.Contains(p.Key)).ToArray();
+        if (pendingAtStartup.Length > 0)
         {
             var overview = string.Join("; ", pendingAtStartup
                 .GroupBy(p => (p.Type, p.State))
                 .Select(g => g.Key.Type + "/" + g.Key.State + "=" + g.Count()));
             PCasaDiagnostics.WriteMessage("Scheduler.Recovery",
-                $"Restoring {pendingAtStartup.Count} durable packages: {overview}");
+                $"Restoring {pendingAtStartup.Length} durable packages: {overview}");
         }
         // The manual executor must NOT start the oldest recovered package
         // while newer durable P0 packages are still being reconstructed.
@@ -643,6 +656,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 // A deferred package is durable, but not currently executable.
                 // The central retry coordinator owns its next activation.
                 if (record.State is "deferred" or "paused") continue;
+                lock (_gate)
+                    if (_durableActiveTasks.ContainsKey(record.Key) ||
+                        _pending.Any(item => item.Key == record.Key) ||
+                        _runningWork.Any(item => item.Key == record.Key)) continue;
+                // A previously persisted identity may have been explicitly
+                // replayed and completed while the first view was loading.
+                if (!journal.Pending().Any(p => p.Key == record.Key &&
+                    p.State is "queued" or "running")) continue;
                 if (!_packageFactories.TryGetValue(record.Type, out var factory))
                 {
                     journal.Defer(record.Key, record.CompletedSteps,
