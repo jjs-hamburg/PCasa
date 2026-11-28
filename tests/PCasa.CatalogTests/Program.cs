@@ -177,6 +177,7 @@ internal static class Program
         Run("Manual thumbnail rebuild updates one image without evicting its neighbors", TargetedThumbnailRebuildRetainsNeighbor, failures);
         Run("New discoveries import before inventory completion; same-stamp replacement rebuilds content", ImmediateInventoryAndFingerprint, failures);
         Run("Unified refresh streams changed and new files at root and child scope", UnifiedDirectoryRefresh, failures);
+        Run("Large unchanged directory never enters source processing", LargeUnchangedDirectoryDifference, failures);
         Run("Streaming refresh persists completed directory receipts", DurableStreamingRefresh, failures);
         Run("Per-folder gallery sorting preserves tree order for all six sort fields", PerFolderSortAllFields, failures);
         Run("Gallery sorting reads EXIF capture date, file dates, size and original dimensions from one index", GallerySortUsesCatalogMetadata, failures);
@@ -4461,6 +4462,52 @@ internal static class Program
         if (result.ImageFilesSeen != 3 || result.Updated != 1 ||
             result.Removed != 1 || result.Failed != 0 || new ImageCatalogRepository(db).CountAll() != 3)
             throw new Exception("Recovered streaming refresh replayed a completed directory or lost a change: " + result);
+    }
+
+    private static void LargeUnchangedDirectoryDifference()
+    {
+        using var sandbox = new Sandbox();
+        var (db, root, scanner) = sandbox.Prepare();
+        var first = Path.Combine(sandbox.Images, "photo-0000.jpg");
+        WriteJpeg(first);
+        scanner.Scan(root);
+        // Clone the existing catalog row and small file with matching stamps.
+        // No hundreds of thumbnail decodes just to construct this fixture.
+        using (var connection = db.OpenConnection())
+        using (var tx = connection.BeginTransaction())
+        {
+            for (var i = 1; i < 1000; i++)
+            {
+                var path = Path.Combine(sandbox.Images, $"photo-{i:D4}.jpg");
+                File.Copy(first, path);
+                File.SetLastWriteTimeUtc(path, File.GetLastWriteTimeUtc(first));
+                using var cmd = connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    INSERT INTO images(folder_id,photo_folder_id,local_path,canonical_path,
+                        file_name,extension,file_size,modified_utc_ticks,created_utc_ticks,
+                        width,height,thumbnail_path,indexed_utc)
+                    SELECT folder_id,photo_folder_id,$path,$canonical,$name,extension,
+                        file_size,$modified,$created,width,height,thumbnail_path,indexed_utc
+                    FROM images WHERE local_path=$first;
+                    """;
+                cmd.Parameters.AddWithValue("$path", path);
+                cmd.Parameters.AddWithValue("$canonical", CatalogPathPolicy.ResolveCanonicalFullPath(root, path));
+                cmd.Parameters.AddWithValue("$name", Path.GetFileName(path));
+                cmd.Parameters.AddWithValue("$modified", File.GetLastWriteTimeUtc(path).Ticks);
+                cmd.Parameters.AddWithValue("$created", File.GetCreationTimeUtc(path).Ticks);
+                cmd.Parameters.AddWithValue("$first", first);
+                cmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+        var added = Path.Combine(sandbox.Images, "new.jpg");
+        WriteJpeg(added);
+        var result = scanner.ScanDirectory(root, root.LocalPath, true,
+            catalogOwnedProgress: true);
+        if (result.ImageFilesSeen != 1001 || result.SourceProcessingCount != 1 ||
+            result.Unchanged != 1000 || result.Updated != 1 || result.Failed != 0)
+            throw new Exception("Unchanged directory entries reached source processing: " + result);
     }
 
     private static void UnifiedDirectoryRefresh()

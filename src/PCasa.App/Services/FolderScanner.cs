@@ -37,6 +37,9 @@ public sealed record ScanResult(
 {
     // Re-index only when content, removal, or catalog annotations changed.
     public bool CatalogChanged => Updated > 0 || Removed > 0 || MetadataUpdated > 0;
+    // Number of files actually admitted to source processing, distinct from
+    // directory entries compared using already supplied metadata.
+    public int SourceProcessingCount { get; init; }
 }
 
 public sealed class FolderScanner
@@ -50,6 +53,8 @@ public sealed class FolderScanner
     {
         internal IEnumerator<string>? Enumerator;
         internal string? CurrentFile;
+        internal FileInfo? CurrentEntry;
+        internal int SourceProcessingCount;
         internal bool EnumerationComplete;
         internal long? SourceGeneration;
         internal long? ScanEpoch;
@@ -76,6 +81,8 @@ public sealed class FolderScanner
             Enumerator?.Dispose();
             Enumerator = null;
             CurrentFile = null;
+            CurrentEntry = null;
+            SourceProcessingCount = 0;
             EnumerationComplete = false;
             SourceGeneration = null;
             ScanEpoch = null;
@@ -452,6 +459,13 @@ public sealed class FolderScanner
         }
         if (durableRefresh && resume?.Enumerator is null && regularCheckpoint!.Cursors.Count > 0)
             preferredDirectories = regularCheckpoint.Cursors.Keys.Concat(preferredDirectories ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        // The iterator supplies its already-populated FileInfo. A resume
+        // state owns it across cooperative yields, not an old stack frame.
+        FileInfo? currentEntry = null;
+        var detectDifferences = catalogOwnedProgress && !catalogImport && specificFile is null;
+        string? detectionDirectory = null;
+        Dictionary<string, CatalogInventoryCheck.FileStamp>? directoryStamps = null;
+        var sourceProcessingCount = resume?.SourceProcessingCount ?? 0;
         var enumerator = resume?.Enumerator ??
             (catalogImport
                 ? EnumerateFirstImportFiles(folder, generation, scanRoot, recursive,
@@ -470,7 +484,13 @@ public sealed class FolderScanner
                             ? DirectoryCompleted
                             : directory => resume.DirectoryCompletionHandler?.Invoke(directory)
                         : null,
-                    preferredDirectories, reportCompletedDirectories: durableRefresh)
+                    preferredDirectories,
+                    onFileInfo: entry =>
+                    {
+                        if (resume is not null) resume.CurrentEntry = entry;
+                        else currentEntry = entry;
+                    },
+                    reportCompletedDirectories: durableRefresh)
                 : new[] { specificFile }).GetEnumerator();
         if (resume is not null) resume.Enumerator = enumerator;
         var enumerationComplete = resume?.EnumerationComplete ?? false;
@@ -536,6 +556,35 @@ public sealed class FolderScanner
                 CatalogImageData? decodeIdentity = null;
                 bool firstFolderFile = false;
 
+                // The source processor receives ONLY actual differences.
+                // Existing entries are acknowledged from the listing itself;
+                // no new FileInfo, source lock, EXIF or thumbnail validation.
+                var listedEntry = resume?.CurrentEntry ?? currentEntry;
+                if (detectDifferences && listedEntry is not null &&
+                    string.Equals(listedEntry.FullName, localPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    var directory = listedEntry.DirectoryName ?? scanRoot;
+                    if (!string.Equals(detectionDirectory, directory, StringComparison.OrdinalIgnoreCase))
+                    {
+                        directoryStamps = CatalogInventoryCheck.ReadDirectory(
+                            _catalog.Database, folder.Id, directory, cancellationToken);
+                        detectionDirectory = directory;
+                    }
+                    if (directoryStamps!.TryGetValue(localPath, out var stamp) &&
+                        !CatalogInventoryCheck.IsChanged(folder, stamp, listedEntry))
+                    {
+                        observedPaths?.Add(localPath);
+                        unchanged++;
+                        if (readingNew != false)
+                        {
+                            readingNew = false;
+                            ReportProgress(localPath, force: true, previewCommitted: false);
+                        }
+                        goto FileProcessed;
+                    }
+                }
+                sourceProcessingCount++;
+                if (resume is not null) resume.SourceProcessingCount = sourceProcessingCount;
                 try
                 {
                     // Metadata edits and original-image decoding share one
@@ -838,6 +887,7 @@ public sealed class FolderScanner
                     }
                 }
 
+                FileProcessed:
                 // Advance only after the image's processing has completed or
                 // its failure has been recorded. A scheduler yield while
                 // waiting for a file lock must not double-count this file.
@@ -1051,7 +1101,13 @@ public sealed class FolderScanner
             cancellationToken.ThrowIfCancellationRequested();
             _folderRepository.FinishRegularScan(durableScanKey, generation, scanEpoch);
         }
-        return new ScanResult(imageFilesSeen, updated, unchanged, failed, removed, metadataUpdated);
+        PCasaDiagnostics.WriteMessage("Scan.DifferenceSummary",
+            $"Root={scanRoot}; Checked={imageFilesSeen}; SourceProcessing={sourceProcessingCount}; " +
+            $"Unchanged={unchanged}; Added={added}; Changed={changed}; Removed={removed}");
+        return new ScanResult(imageFilesSeen, updated, unchanged, failed, removed, metadataUpdated)
+        {
+            SourceProcessingCount = sourceProcessingCount
+        };
 
         void ReportProgress(string? currentFile, bool force = false,
             long? discoveredFolderId = null, string? discoveredFolderPath = null,
@@ -1130,22 +1186,10 @@ public sealed class FolderScanner
                 _folderRepository.IsFirstPassDirectoryComplete(folder.Id, generation, directory);
             if (!excluded && !wasComplete)
             {
-                var knownPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                using (var connection = _catalog.Database.OpenConnection())
-                using (var cmd = connection.CreateCommand())
-                {
-                    cmd.CommandText = """
-                        SELECT i.local_path FROM images i
-                        JOIN photo_folders f ON f.id=i.photo_folder_id
-                        WHERE i.folder_id=$id AND f.local_path=$path COLLATE NOCASE;
-                        """;
-                    cmd.Parameters.AddWithValue("$id", folder.Id);
-                    cmd.Parameters.AddWithValue("$path", directory);
-                    using var reader = cmd.ExecuteReader();
-                    while (reader.Read()) knownPaths.Add(reader.GetString(0));
-                }
+                var knownPaths = CatalogInventoryCheck.ReadDirectory(_catalog.Database,
+                    folder.Id, directory, CancellationToken.None);
                 foreach (var file in Directory.EnumerateFiles(directory, "*", options))
-                    yield return knownPaths.Contains(file) ? string.Empty : file;
+                    yield return knownPaths.ContainsKey(file) ? string.Empty : file;
             }
             var children = new List<string>();
             if (recursive)
