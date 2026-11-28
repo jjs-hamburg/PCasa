@@ -175,9 +175,7 @@ public partial class MainWindow
                 // geometric crop from ONE recipe. A crop must not stretch
                 // the complete original across the cropped edit frame.
                 var aligned = await Task.Run(() => live.RenderAlignedOriginal(pending));
-                var accepted = live.Render();
-                var edited = await Task.Run(() =>
-                    PhotoEditSession.Render(accepted, [pending]));
+                var edited = await Task.Run(() => live.RenderDraft(pending));
                 return (aligned, edited, live.Original);
             }
             if (live.HasChanges)
@@ -280,8 +278,7 @@ public partial class MainWindow
         _editCompareOriginal = session.RenderAlignedOriginal(GetPendingLiveEditStep());
         _editCompareUncroppedOriginal = session.Original;
         var pending = GetPendingLiveEditStep();
-        _editCompareEdited = pending is null ? session.Render() :
-            PhotoEditSession.Render(session.Render(), [pending]);
+        _editCompareEdited = session.RenderDraft(pending);
         EditCompareSideOriginal.Source = _editCompareUncroppedOriginal;
         EditCompareSideEdited.Source = _editCompareEdited;
         EditCompareSwipeOriginal.Source = _editCompareOriginal;
@@ -656,8 +653,15 @@ public partial class MainWindow
             if (wasComparing && _photoEditSession is { } live && live.ImageId == _viewerImageInfo?.Id)
             {
                 var pending = GetPendingLiveEditStep();
-                SetViewerBitmap(pending is null ? live.Render() :
-                    PhotoEditSession.Render(live.Render(), [pending]));
+                if (_cropActive && _cropInput is not null)
+                    SetViewerBitmap(_cropInput);
+                else if (_straightenActive)
+                {
+                    _straightenPreviewQuarterTurns = int.MinValue;
+                    RenderStraightenPreview();
+                }
+                else
+                    SetViewerBitmap(live.RenderDraft(pending));
             }
             ApplyViewerImageLayout();
         }

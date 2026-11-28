@@ -30,6 +30,7 @@ public partial class MainWindow
     private double _cropRatio; // 0 = free
     private string _cropRatioMode = "Original";
     private bool _cropToolsReady;
+    private BitmapSource? _cropInput;
     private BitmapSource? _cropPreviewOriginal;
     private Rect? _cropPreviewRectBefore;
     private (double ImageWidth, double ImageHeight, double CanvasWidth,
@@ -210,23 +211,15 @@ public partial class MainWindow
         };
         CropPreviewButton.PreviewMouseLeftButtonDown += (_, e) =>
         {
-            if (_cropActive && PhotoViewerImage.Source is BitmapSource source &&
-                _cropPreviewOriginal is null)
+            if (_cropActive && _cropInput is { } source &&
+                _cropPreviewOriginal is null && GetActiveEditStep() is { } draft)
             {
-                var area = FitToImageAspect(_cropRect);
-                var x = Math.Clamp((int)Math.Floor(area.X * source.PixelWidth), 0, source.PixelWidth - 1);
-                var y = Math.Clamp((int)Math.Floor(area.Y * source.PixelHeight), 0, source.PixelHeight - 1);
-                var width = Math.Clamp((int)Math.Ceiling(area.Width * source.PixelWidth),
-                    1, source.PixelWidth - x);
-                var height = Math.Clamp((int)Math.Ceiling(area.Height * source.PixelHeight),
-                    1, source.PixelHeight - y);
                 _cropPreviewOriginal = source;
                 _cropPreviewRectBefore = _cropRect;
                 _cropPreviewLayout = (PhotoViewerImage.Width, PhotoViewerImage.Height,
                     PhotoViewerCanvas.Width, PhotoViewerCanvas.Height,
                     PhotoViewerScroller.HorizontalOffset, PhotoViewerScroller.VerticalOffset);
-                var cropped = new CroppedBitmap(source, new Int32Rect(x, y, width, height));
-                cropped.Freeze();
+                var cropped = PhotoEditSession.Render(source, [draft]);
                 var (viewportWidth, viewportHeight) = ViewerViewportSize();
                 var scale = Math.Min(viewportWidth / cropped.PixelWidth,
                     viewportHeight / cropped.PixelHeight);
@@ -238,12 +231,14 @@ public partial class MainWindow
                 PhotoViewerScroller.ScrollToHorizontalOffset(0);
                 PhotoViewerScroller.ScrollToVerticalOffset(0);
                 ViewerCropOverlay.Visibility = Visibility.Hidden;
+                CropPreviewButton.CaptureMouse();
             }
             e.Handled = true;
         };
         CropPreviewButton.PreviewMouseLeftButtonUp += (_, e) =>
         {
             EndCropPreview();
+            CropPreviewButton.ReleaseMouseCapture();
             e.Handled = true;
         };
         CropPreviewButton.LostMouseCapture += (_, _) => EndCropPreview();
@@ -268,7 +263,12 @@ public partial class MainWindow
         ViewerToolCancelButton.Click += (_, _) => DecideLiveEditTool(apply: false);
         CropSaveButton.Click += (_, _) => SaveEdits();
         CropSaveCopyButton.Click += (_, _) => SaveEdits(asCopy: true);
-        CropCancelButton.Click += (_, _) => CancelEditSession();
+        CropCancelButton.Click += (_, _) =>
+        {
+            var external = _externalEditReview is not null || _externalBatchReview is not null;
+            CancelEditSession();
+            if (!external) ClosePhotoViewer();
+        };
         InitializeStraightenTools();
         InitializeAutoImageTools();
         InitializeAdvancedToneTools();
@@ -288,14 +288,8 @@ public partial class MainWindow
         if (!EnsureEditSession()) return;
         if (!_cropActive) DiscardLiveEditTool();
         if (_photoEditSession is null) return;
-        // Work on the currently accepted, unsaved image, not an old source.
-        if (_photoEditSession.HasChanges)
-        {
-            SetViewerBitmap(_photoEditSession.Render());
-            ApplyViewerImageLayout();
-        }
-        if (PhotoViewerImage.Source is not BitmapSource bitmap || bitmap.PixelWidth == 0)
-            return;
+        // Pin the accepted input. Comparison/hold/zoom may replace the
+        // display source, but never the coordinate system of this draft.
         if (_cropActive)
         {
             ViewerToolsOverview.Visibility = Visibility.Collapsed;
@@ -305,9 +299,13 @@ public partial class MainWindow
             DrawCropFrame();
             return;
         }
+        ResetEditComparison();
+        _cropInput = _photoEditSession.Render();
+        SetViewerBitmap(_cropInput);
+        ApplyViewerImageLayout();
         _cropActive = true;
         _cropRatioMode = "Original";
-        _cropRatio = bitmap.PixelWidth / (double)bitmap.PixelHeight;
+        _cropRatio = _cropInput.PixelWidth / (double)_cropInput.PixelHeight;
         _cropRect = FitToImageAspect(new Rect(.08, .08, .84, .84));
         _cropHistory.Clear();
         _cropHistory.Add(new CropStep(_cropRect, _cropRatio, _cropRatioMode));
@@ -349,6 +347,7 @@ public partial class MainWindow
     private void EndCrop()
     {
         EndCropPreview();
+        _cropInput = null;
         _cropActive = false;
         _cropDragging = false;
         ViewerCropOverlay.ReleaseMouseCapture();
@@ -382,18 +381,7 @@ public partial class MainWindow
             return true;
         }
         var hasAccepted = _photoEditSession?.HasChanges == true;
-        var editedMask = _cropActive && _cropHistory.Count > 0 &&
-            (_cropRect != _cropHistory[0].Bounds ||
-             _cropRatio != _cropHistory[0].AspectRatio ||
-             _cropRatioMode != _cropHistory[0].Mode);
-        var pendingAngle = _straightenActive &&
-            (Math.Abs(_straightenAngle) > .00001 || _straightenQuarterTurns != 0);
-        var pendingBrightness = _brightnessActive &&
-            Math.Abs(_brightnessAmount) > .00001;
-        var pendingAdvanced = _advancedToneActive &&
-            Math.Abs(_advancedToneAmount) > .00001;
-        if (hasAccepted || editedMask || pendingAngle || pendingBrightness ||
-            pendingAdvanced || _pendingAutomaticEdit is not null)
+        if (hasAccepted || GetPendingLiveEditStep() is not null)
         {
             var response = PcasaDialog.Show(this,
                 UiLanguage.T("Ungespeicherte Bildbearbeitungen verwerfen?"),
@@ -410,7 +398,7 @@ public partial class MainWindow
         if (!_cropActive || sender is not Button { Tag: string name }) return;
         _cropRatioMode = name;
         if (name == "Frei") _cropRatio = 0;
-        else if (name == "Original" && PhotoViewerImage.Source is BitmapSource bmp)
+        else if (name == "Original" && _cropInput is BitmapSource bmp)
             _cropRatio = bmp.PixelWidth / (double)bmp.PixelHeight;
         else
         {
@@ -427,7 +415,8 @@ public partial class MainWindow
     private void FlipCropOrientation(bool horizontal)
     {
         if (!_cropActive) return;
-        var ratio = _cropRatio > 0 ? _cropRatio : _cropRect.Width / _cropRect.Height;
+        var ratio = _cropRatio > 0 ? _cropRatio : _cropRect.Width / _cropRect.Height *
+            (_cropInput?.PixelWidth / (double)(_cropInput?.PixelHeight ?? 1) ?? 1);
         if (horizontal && ratio < 1 || !horizontal && ratio > 1) ratio = 1 / ratio;
         _cropRatio = ratio;
         _cropRatioMode = "Fixed";
@@ -481,7 +470,7 @@ public partial class MainWindow
 
     private Rect FitToImageAspect(Rect rect)
     {
-        if (_cropRatio <= 0 || PhotoViewerImage.Source is not BitmapSource bitmap)
+        if (_cropRatio <= 0 || _cropInput is not BitmapSource bitmap)
             return FitCrop(rect, 0);
         var pixelAspect = bitmap.PixelWidth / (double)bitmap.PixelHeight;
         var ratioNormalized = _cropRatio / pixelAspect;
@@ -571,7 +560,7 @@ public partial class MainWindow
         var b = bottom ? Math.Clamp(original.Bottom + dy, original.Top + .02, 1)
             : original.Bottom;
 
-        if (_cropRatio <= 0 || PhotoViewerImage.Source is not BitmapSource source)
+        if (_cropRatio <= 0 || _cropInput is not BitmapSource source)
             return new Rect(l, t, r - l, b - t);
 
         double normalizedRatio = _cropRatio *

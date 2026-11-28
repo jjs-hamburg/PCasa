@@ -422,6 +422,12 @@
              dark foreground made labels illegible after changing themes.
              Reuse the existing PCasa button template everywhere. -->
         <Style TargetType="Button" BasedOn="{StaticResource PcasaStatusButtonStyle}" />
+        <Style x:Key="PcasaActionButtonStyle" TargetType="Button"
+               BasedOn="{StaticResource PcasaStatusButtonStyle}">
+            <Setter Property="Height" Value="27"/>
+            <Setter Property="Padding" Value="3,1"/>
+            <Setter Property="FontSize" Value="11"/>
+        </Style>
 
         <Style TargetType="ToggleButton">
             <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />

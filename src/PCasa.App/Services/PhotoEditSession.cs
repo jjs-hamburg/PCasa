@@ -52,15 +52,15 @@ public sealed class PhotoEditSession
     public IReadOnlyList<PhotoEditStep> AppliedSteps =>
         _steps.Take(_cursor).ToArray();
 
+    public bool CanApply(PhotoEditStep step)
+        => step.Kind is not ("auto-fix" or "auto-contrast" or
+            "auto-color" or "auto-sharpen") ||
+            !_steps.Take(_cursor).Any(s => s.Kind == step.Kind && s.Mask == step.Mask);
+
     public void Apply(PhotoEditStep step)
     {
-        // Auto operations are calculated once per source/mask, not layered
-        // cumulatively on every click. Undo permits re-applying from scratch.
-        if (step.Kind is "auto-fix" or "auto-contrast" or
-            "auto-color" or "auto-sharpen")
-            if (_steps.Take(_cursor).Any(s =>
-                s.Kind == step.Kind && s.Mask == step.Mask))
-                return;
+        // The identical admission rule governs draft preview and commit.
+        if (!CanApply(step)) return;
         if (_cursor < _steps.Count)
         {
             foreach (var discarded in _steps.Skip(_cursor))
@@ -74,8 +74,23 @@ public sealed class PhotoEditSession
     public void Undo() { if (CanUndo) _cursor--; }
     public void Redo() { if (CanRedo) _cursor++; }
     public string? LatestExternalPath => AppliedSteps.LastOrDefault(s => s.Kind == "external")?.ExternalPath;
-    public BitmapSource Render() => Render(_original, AppliedSteps,
-        previewSize: Math.Max(2400, Math.Max(_original.PixelWidth, _original.PixelHeight)));
+    public BitmapSource Render() => RenderDraft(null);
+
+    // Drafts and committed history are rendered by the same recipe pipeline.
+    // The draft never mutates history and cannot be applied twice.
+    public BitmapSource RenderDraft(PhotoEditStep? draft)
+        => Render(_original, draft is not null && CanApply(draft)
+            ? AppliedSteps.Append(draft) : AppliedSteps,
+            previewSize: Math.Max(2400, Math.Max(_original.PixelWidth, _original.PixelHeight)));
+
+    public BitmapSource CommitDraft(PhotoEditStep? draft)
+    {
+        // Validate/render before mutating the history, then publish the exact
+        // pixels from that recipe. A failed draft leaves the cursor untouched.
+        var rendered = RenderDraft(draft);
+        if (draft is not null) Apply(draft);
+        return rendered;
+    }
 
     /// <summary>
     /// For the swipe comparator, show ONLY the original area that maps to
