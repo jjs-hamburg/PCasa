@@ -2858,6 +2858,26 @@ internal static class Program
                 throw new Exception(
                     "Photo-less folder navigation cannot find its first local gallery section.");
 
+            // Re-measuring at an unchanged width must keep the same row
+            // geometry, even when WPF offers another available height.
+            var layoutFlags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var measureGallery = typeof(BrowseGallerySurface).GetMethod(
+                "MeasureOverride", layoutFlags)!;
+            var sections = (System.Collections.IList)typeof(BrowseGallerySurface)
+                .GetField("_sections", layoutFlags)!.GetValue(surface)!;
+            var layoutWidth = Math.Max(1, surface.ActualWidth);
+            measureGallery.Invoke(surface, [new Size(layoutWidth, 600)]);
+            var originalSection = sections[0];
+            measureGallery.Invoke(surface, [new Size(layoutWidth, 900)]);
+            if (!ReferenceEquals(originalSection, sections[0]))
+                throw new Exception("Unchanged gallery width rebuilt all row geometry.");
+            measureGallery.Invoke(surface, [new Size(layoutWidth + 20, 900)]);
+            if (ReferenceEquals(originalSection, sections[0]))
+                throw new Exception("Changed gallery width did not rebuild row geometry.");
+            measureGallery.Invoke(surface, [new Size(layoutWidth, 600)]);
+            Console.WriteLine("PASS: Gallery reuses exact geometry at unchanged width.");
+            
             // Alpha.57: the REAL folder-click helper must navigate an entire
             // folder excluded by the GPS property filter. The selected photo
             // directory must be a visible header even if its filter matches

@@ -336,7 +336,12 @@ public sealed class BrowseGallerySurface : FrameworkElement
     {
         _lastViewportTop = _viewportTop;
         _viewportTop = Math.Max(0, verticalOffset);
-        _viewportHeight = Math.Max(1, viewportHeight);
+        var height = Math.Max(1, viewportHeight);
+        // Only the empty-filter navigation section depends on viewport height.
+        // Normal photo geometry is independent of scroll/viewport changes.
+        if (_emptyNavigationFolderId.HasValue && Math.Abs(height - _viewportHeight) >= 0.5)
+            InvalidateLayout();
+        _viewportHeight = height;
 
         if (_viewportTop > _lastViewportTop + 0.5)
         {
@@ -516,11 +521,9 @@ public sealed class BrowseGallerySurface : FrameworkElement
         var bottom = top + Math.Max(1, viewportHeight);
         const double tolerance = 2;
 
-        foreach (var section in _sections)
+        foreach (var section in SectionsIntersecting(top, bottom))
         {
             if (photoFolderId is long target && section.Folder.Id != target)
-                continue;
-            if (section.Top > bottom || section.Bottom < top)
                 continue;
             // Only first and last IMAGE rows count, not arbitrary interior
             // images or the absolute start/end of the ScrollViewer.
@@ -569,11 +572,9 @@ public sealed class BrowseGallerySurface : FrameworkElement
         SectionLayout? intersecting = null;
         SectionLayout? atTop = null;
         SectionLayout? preferred = null;
-        foreach (var section in _sections)
+        foreach (var section in SectionsIntersecting(top, bottom))
         {
             if (newHiddenFolderIds.Contains(section.Folder.Id))
-                continue;
-            if (section.Bottom < top || section.Top > bottom)
                 continue;
             intersecting ??= section;
             if (section.Top <= top && top < section.Bottom)
@@ -665,7 +666,11 @@ public sealed class BrowseGallerySurface : FrameworkElement
         (long ImageId, double RelativeY)? anchor = null;
         if (_sections.Count > 0 && Math.Abs(width - _layoutWidth) >= 0.5)
             anchor = CaptureImageAnchorInCurrentLayout(_viewportTop);
-        BuildLayout(width);
+        // WPF may measure again for scroll extent, sidebar and selection
+        // changes even when none of the row geometry inputs have changed.
+        // Never rewalk the whole catalog on those repeated measures.
+        if (_layoutWidth <= 0 || Math.Abs(width - _layoutWidth) >= 0.5)
+            BuildLayout(width);
         if (anchor is { } imageAnchor)
             LayoutReflowed?.Invoke(this, imageAnchor);
         return new Size(width, Math.Max(1, _totalHeight));
@@ -688,18 +693,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
         var viewportBottom = _viewportTop + _viewportHeight + (_thumbnailHeight + _rowGap);
         var pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
 
-        foreach (var section in _sections)
+        foreach (var section in SectionsIntersecting(viewportTop, viewportBottom))
         {
-            if (section.Bottom < viewportTop)
-            {
-                continue;
-            }
-
-            if (section.Top > viewportBottom)
-            {
-                break;
-            }
-
             DrawSectionHeader(drawingContext, section, pixelsPerDip);
             DrawSectionImages(drawingContext, section, viewportTop, viewportBottom);
         }
@@ -1214,10 +1209,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
         var top = Math.Max(0, viewportTop);
         var bottom = top + Math.Max(1, viewportHeight);
 
-        foreach (var section in _sections)
+        foreach (var section in SectionsIntersecting(top, bottom))
         {
-            if (section.Bottom < top) continue;
-            if (section.Top > bottom) break;
             if (section.ImageCount <= 0) continue;
 
             var firstRow = Math.Clamp(
@@ -1242,6 +1235,23 @@ public sealed class BrowseGallerySurface : FrameworkElement
                         nearest.StartImageIndex + nearest.ColumnCount - 1)));
         }
         return ranges;
+    }
+
+    // All section bottoms are monotonically increasing. Jump straight to
+    // the first intersecting section, then visit only the visible interval.
+    // Preserve inclusive boundaries used by rendering and page warming.
+    private IEnumerable<SectionLayout> SectionsIntersecting(double top, double bottom)
+    {
+        var low = 0;
+        var high = _sections.Count;
+        while (low < high)
+        {
+            var middle = low + (high - low) / 2;
+            if (_sections[middle].Bottom < top) low = middle + 1;
+            else high = middle;
+        }
+        for (var i = low; i < _sections.Count && _sections[i].Top <= bottom; i++)
+            yield return _sections[i];
     }
 
     private static int RowAt(SectionLayout section, double offset)
@@ -1289,7 +1299,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private void EnsureLayout()
     {
         var width = Math.Max(1, ActualWidth);
-        if (_sections.Count == 0 || Math.Abs(_layoutWidth - width) >= 0.5)
+        if (_layoutWidth <= 0 || Math.Abs(_layoutWidth - width) >= 0.5)
         {
             BuildLayout(width);
         }

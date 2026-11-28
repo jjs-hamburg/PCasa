@@ -4608,6 +4608,11 @@ internal static class Program
         var (db, root, scanner) = sandbox.Prepare();
         scanner.Scan(root);
         var cache = new BrowseCacheRepository(db);
+        var catalog = new ImageCatalogRepository(db);
+        var summaries = catalog.GetPhotoFolders();
+        if (summaries.Count != 2 || summaries.Sum(folder => folder.ImageCount) != 2 ||
+            summaries.Any(folder => catalog.GetPhotoFolderSummary(folder.Id) != folder))
+            throw new Exception("Grouped folder counts differ from individual folder summaries.");
         var ordered = cache.GetGalleryIndex(96).OrderBy(image => image.ImageId);
         var unordered = cache.GetGalleryIndex(96, orderByPath: false).OrderBy(image => image.ImageId);
         if (ordered.Count() != 2 || !ordered.SequenceEqual(unordered))

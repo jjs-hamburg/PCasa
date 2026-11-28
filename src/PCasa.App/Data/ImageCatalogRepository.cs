@@ -309,16 +309,14 @@ public sealed class ImageCatalogRepository
                 pf.local_path,
                 pf.canonical_path,
                 pf.display_name,
-                COUNT(i.id) AS image_count
-            FROM photo_folders pf
-            LEFT JOIN images i ON i.photo_folder_id = pf.id
-            GROUP BY
-                pf.id,
-                pf.monitored_folder_id,
-                pf.local_path,
-                pf.canonical_path,
-                pf.display_name
-            HAVING image_count > 0
+                counts.image_count
+            FROM (
+                SELECT photo_folder_id, COUNT(*) AS image_count
+                FROM images
+                WHERE photo_folder_id IS NOT NULL
+                GROUP BY photo_folder_id
+            ) counts
+            JOIN photo_folders pf ON pf.id = counts.photo_folder_id
             ORDER BY pf.canonical_path COLLATE NOCASE;
             """;
 
