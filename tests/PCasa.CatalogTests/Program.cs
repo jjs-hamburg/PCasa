@@ -4503,11 +4503,34 @@ internal static class Program
         }
         var added = Path.Combine(sandbox.Images, "new.jpg");
         WriteJpeg(added);
-        var result = scanner.ScanDirectory(root, root.LocalPath, true,
+        var progressPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var progress = new InlineProgress<ScanProgress>(p =>
+        {
+            if (p.CurrentFile is { } path) progressPaths.Add(path);
+        });
+        var result = scanner.ScanDirectory(root, root.LocalPath, true, progress,
             catalogOwnedProgress: true);
+        if (!progressPaths.SetEquals(new[] { added }))
+            throw new Exception("Known names leaked into image processing progress.");
         if (result.ImageFilesSeen != 1001 || result.SourceProcessingCount != 1 ||
             result.Unchanged != 1000 || result.Updated != 1 || result.Failed != 0)
             throw new Exception("Unchanged directory entries reached source processing: " + result);
+
+        progressPaths.Clear();
+        var unchanged = scanner.ScanDirectory(root, root.LocalPath, true, progress,
+            catalogOwnedProgress: true, durableScanKey: "difference:no-change");
+        if (unchanged.SourceProcessingCount != 0 || unchanged.Updated != 0 ||
+            unchanged.Unchanged != 1001 || progressPaths.Count != 0)
+            throw new Exception("Empty difference invoked image processing or filename progress.");
+
+        // Only the deleted name is removed; unchanged files do not enter the
+        // source processor even during reconciliation.
+        File.Delete(first);
+        var deleted = scanner.ScanDirectory(root, root.LocalPath, true, progress,
+            catalogOwnedProgress: true, durableScanKey: "difference:deleted");
+        if (deleted.Removed != 1 || deleted.SourceProcessingCount != 0 ||
+            progressPaths.Count != 0 || new ImageCatalogRepository(db).CountAll() != 1000)
+            throw new Exception("A-B deletion did not reconcile exactly the missing path.");
     }
 
     private static void UnifiedDirectoryRefresh()

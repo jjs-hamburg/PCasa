@@ -47,6 +47,64 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
         => old.Size != entry.Length || old.Modified != entry.LastWriteTimeUtc.Ticks ||
             CreationChanged(root, old, entry);
 
+    internal sealed record Difference(string Path, bool IsNew, bool ForceExifRefresh);
+
+    // The only output of this iterator is a genuine difference. A known
+    // unchanged entry never enters the source processor, never emits a
+    // filename progress event, and never becomes a per-file scheduler step.
+    // The remaining local names at a successful directory boundary are A-B.
+    // B-A and changed A intersect B are emitted immediately, not buffered
+    // until the end of the directory or root.
+    internal static IEnumerable<Difference> EnumerateDifferences(
+        LocalDatabase database, MonitoredFolder root, string scanRoot, bool recursive,
+        IReadOnlyCollection<string> exclusions, IReadOnlyCollection<string> inclusions,
+        Func<CancellationToken> getToken, Action<string> onUnchanged,
+        Action<string, IReadOnlySet<string>> onDirectoryComplete,
+        IReadOnlySet<string>? completedDirectories = null,
+        IReadOnlyList<string>? preferredDirectories = null)
+    {
+        FileInfo? entry = null;
+        string? activeDirectory = null;
+        Dictionary<string, FileStamp>? known = null;
+        void FinishDirectory(string directory)
+        {
+            getToken().ThrowIfCancellationRequested();
+            var skipped = completedDirectories?.Contains(directory) == true ||
+                FolderExclusionRules.IsExcluded(directory, exclusions, inclusions);
+            var remaining = skipped
+                ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                : new HashSet<string>((string.Equals(activeDirectory, directory,
+                    StringComparison.OrdinalIgnoreCase) ? known! :
+                    ReadDirectory(database, root.Id, directory, getToken())).Keys,
+                    StringComparer.OrdinalIgnoreCase);
+            activeDirectory = null;
+            known = null;
+            onDirectoryComplete(directory, remaining);
+        }
+        foreach (var path in FolderScanner.EnumerateIncludedFiles(scanRoot, recursive,
+            exclusions, inclusions, CancellationToken.None,
+            completedDirectories: completedDirectories, preferredDirectories: preferredDirectories,
+            onDirectoryComplete: FinishDirectory, onFileInfo: file => entry = file,
+            reportCompletedDirectories: true))
+        {
+            getToken().ThrowIfCancellationRequested();
+            if (path.Length == 0 || !CatalogMediaFormats.IsSupported(path)) continue;
+            var file = entry ?? throw new InvalidOperationException("Missing directory entry.");
+            var directory = file.DirectoryName ?? scanRoot;
+            if (!string.Equals(activeDirectory, directory, StringComparison.OrdinalIgnoreCase))
+            {
+                known = ReadDirectory(database, root.Id, directory, getToken());
+                activeDirectory = directory;
+            }
+            if (!known!.Remove(path, out var old))
+                yield return new Difference(path, true, false);
+            else if (IsChanged(root, old, file))
+                yield return new Difference(path, false, CreationChanged(root, old, file));
+            else
+                onUnchanged(directory);
+        }
+    }
+
     public CatalogInventoryCheckResult Check(MonitoredFolder root,
         IReadOnlyCollection<string> exclusions,
         IReadOnlyCollection<string> inclusions,
@@ -61,51 +119,26 @@ public sealed class CatalogInventoryCheck(LocalDatabase database)
         var added = new List<BackgroundFolderChange>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var count = 0;
-        FileInfo? entry = null;
-        string? activeDirectory = null;
-        Dictionary<string, FileStamp>? known = null;
         var missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        void FinishDirectory(string directory)
+        void Count(string directory)
         {
-            visited.Add(FolderExclusionRules.Normalize(directory));
-            if (FolderExclusionRules.IsExcluded(directory, exclusions, inclusions)) return;
-            var remaining = string.Equals(activeDirectory, directory, StringComparison.OrdinalIgnoreCase)
-                ? known! : ReadDirectory(database, root.Id, directory, token);
-            foreach (var path in remaining.Keys) missing.Add(path);
-            activeDirectory = null;
-            known = null;
+            if (++count % 128 == 0) progress?.Invoke(count, directory);
         }
-        // Detection and indexing share exactly the same included-directory
-        // traversal. P4 consumes only directory-entry metadata and queues
-        // changes; it never opens an image, repairs a cache or decodes EXIF.
-        foreach (var path in FolderScanner.EnumerateIncludedFiles(scanRoot,
-            recursive: true, exclusions, inclusions, token,
-            onDirectoryComplete: FinishDirectory,
-            onFileInfo: file => entry = file))
+        foreach (var difference in EnumerateDifferences(database, root, scanRoot, true,
+            exclusions, inclusions, () => token, Count,
+            (directory, remaining) =>
+            {
+                visited.Add(FolderExclusionRules.Normalize(directory));
+                missing.UnionWith(remaining);
+            }))
         {
-            token.ThrowIfCancellationRequested();
-            if (path.Length == 0 || !CatalogMediaFormats.IsSupported(path)) continue;
-            var file = entry ?? throw new InvalidOperationException("Missing directory entry.");
-            count++;
-            var directory = file.DirectoryName ?? scanRoot;
-            if (!string.Equals(activeDirectory, directory, StringComparison.OrdinalIgnoreCase))
-            {
-                known = ReadDirectory(database, root.Id, directory, token);
-                activeDirectory = directory;
-            }
-            var found = known!.Remove(path, out var old);
-            var creationChanged = found && CreationChanged(root, old!, file);
-            if (!found || IsChanged(root, old!, file))
-            {
-                var change = new BackgroundFolderChange(root.Id, path,
-                    BackgroundFolderChangeKind.ScanFile, false,
-                    ForceExifRefresh: creationChanged);
-                if (found) changes.Add(change);
-                else if (importNewImmediately is not null)
-                    importNewImmediately(change);
-                else added.Add(change);
-            }
-            if (count % 128 == 0) progress?.Invoke(count, file.DirectoryName ?? scanRoot);
+            Count(Path.GetDirectoryName(difference.Path) ?? scanRoot);
+            var change = new BackgroundFolderChange(root.Id, difference.Path,
+                BackgroundFolderChangeKind.ScanFile, false,
+                ForceExifRefresh: difference.ForceExifRefresh);
+            if (!difference.IsNew) changes.Add(change);
+            else if (importNewImmediately is not null) importNewImmediately(change);
+            else added.Add(change);
         }
 
         // An inaccessible or interrupted traversal never reaches this point.

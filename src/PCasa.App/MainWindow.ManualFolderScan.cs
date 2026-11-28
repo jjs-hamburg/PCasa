@@ -167,7 +167,7 @@ public partial class MainWindow
                 RefreshFolderStatusVisuals();
             }
             StatusText.Text =
-                $"Ordner aktualisieren: {scan.ImageFilesSeen:N0} geprüft · " +
+                $"Ordner aktualisieren: {scan.Updated:N0} eingelesen · " +
                 $"{scan.Added:N0} neu · {scan.Changed:N0} geändert · " +
                 $"{scan.CacheRepaired:N0} Cache · {scan.Failed:N0} Fehler";
         });
@@ -518,7 +518,7 @@ public partial class MainWindow
         public void Report(ScanProgress value)
         {
             scheduler.ReportProgress(key, firstImport ? "Bilder einlesen" : "Ordner aktualisieren",
-                firstImport ? value.CatalogIndexed ?? value.ImageFilesSeen : value.ImageFilesSeen,
+                firstImport ? value.CatalogIndexed ?? value.ImageFilesSeen : value.Updated + value.Failed,
                 0, value.CurrentFile);
             display?.Report(value);
         }

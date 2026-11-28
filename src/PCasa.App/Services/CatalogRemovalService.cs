@@ -273,12 +273,28 @@ public sealed class CatalogRemovalService
             expectedScanEpoch: expectedScanEpoch);
     }
 
+    // A-B is already known. Insert only missing names, not every surviving
+    // image, and retain the same transactional source/epoch guard.
+    public int RemoveConfirmedMissing(long folderId, string directory,
+        IReadOnlySet<string> missingPaths, CancellationToken cancellationToken,
+        string sourceCanonicalPath, long expectedGeneration, long expectedScanEpoch)
+    {
+        if (missingPaths.Count == 0) return 0;
+        var normalized = CatalogPathPolicy.NormalizeSeparators(Path.GetFullPath(directory));
+        var prefix = Path.TrimEndingDirectorySeparator(normalized) + Path.DirectorySeparatorChar;
+        return Remove(folderId, normalized, prefix, removeRoot: false, null,
+            missingPaths, recursive: false, cancellationToken: cancellationToken,
+            deferCleanup: true, sourceCanonicalPath: sourceCanonicalPath,
+            expectedGeneration: expectedGeneration, expectedScanEpoch: expectedScanEpoch,
+            pathsAreMissing: true);
+    }
+
     private int Remove(long folderId, string path, string prefix, bool removeRoot,
         IProgress<string>? progress, IReadOnlySet<string>? currentPaths = null,
         bool recursive = true, CancellationToken cancellationToken = default,
         bool deferCleanup = false, string? requireExcludedPath = null,
         string? sourceCanonicalPath = null, long? expectedGeneration = null,
-        long? expectedScanEpoch = null)
+        long? expectedScanEpoch = null, bool pathsAreMissing = false)
     {
         // A complete scan may have observed hundreds of thousands of paths.
         // Filling this connection-local TEMP table is preparation, not a
@@ -373,7 +389,9 @@ public sealed class CatalogRemovalService
                           substr(local_path, 1, length($prefix)) = $prefix COLLATE NOCASE)";
                 if (currentPaths is not null)
                 {
-                    predicate += " AND NOT EXISTS (SELECT 1 FROM scan_seen_paths s WHERE s.path = images.local_path)";
+                    predicate += pathsAreMissing
+                        ? " AND EXISTS (SELECT 1 FROM scan_seen_paths s WHERE s.path = images.local_path)"
+                        : " AND NOT EXISTS (SELECT 1 FROM scan_seen_paths s WHERE s.path = images.local_path)";
                     // A non-recursive enumeration did not inspect child folders.
                     // Restrict its reconciliation to files directly in scanRoot.
                     if (!recursive)

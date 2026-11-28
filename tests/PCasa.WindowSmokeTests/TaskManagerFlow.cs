@@ -772,6 +772,22 @@ internal static class TaskManagerFlow
                 if (((TextBlock)progressWindow.FindName("CountText")).Text !=
                         UiLanguage.Format("{0:N0} eingelesen", 14976))
                     throw new Exception("Running scan did not advance from the confirmed restart cursor.");
+
+                // Refresh counts describe only the image-processing delta.
+                // A recovered inventory receipt may contain 14,975 compared
+                // names, but must not masquerade as 14,975 imported photos.
+                progressWindow.UpdateManualOperationWithContext(
+                    waitingScan with {
+                        State = SchedulerJobState.Running,
+                        Phase = "Ordner aktualisieren",
+                        CurrentPath = null,
+                        Processed = 0
+                    }, "Ordner aktualisieren", preservedScanRoot, 14975);
+                if (((TextBlock)progressWindow.FindName("CountText")).Text !=
+                        UiLanguage.Format("{0:N0} eingelesen", 0) ||
+                    ((System.Windows.Controls.Image)progressWindow.FindName(
+                        "CurrentThumbnail")).Source is not null)
+                    throw new Exception("Directory comparisons leaked into the imported-image count.");
             }
             finally
             {
