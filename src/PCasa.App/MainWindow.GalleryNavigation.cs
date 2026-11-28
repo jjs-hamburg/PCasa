@@ -289,7 +289,7 @@ public partial class MainWindow
         var selectedTreeItem = original.SelectedTreePath is string path
             ? FindFolderTreeItemByPath(FoldersTree, path) : null;
         if (selectedTreeItem is null && _activePhotoFolderId is long photoFolderId)
-            _folderTreeItems.TryGetValue(photoFolderId, out selectedTreeItem);
+            selectedTreeItem = GetCatalogTreeFolder(photoFolderId);
         if (selectedTreeItem is not null)
         {
             _syncingFolderSelection = true;

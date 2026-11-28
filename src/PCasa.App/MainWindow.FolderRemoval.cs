@@ -173,7 +173,16 @@ public partial class MainWindow
 
         // The tree is not rebuilt from the still-uncommitted repository:
         // remove the existing visual node immediately instead.
+        // Resolve the affected branch before removing it; deferred siblings
+        // remain untouched. Clear both logical and visual identity maps.
+        FindFolderTreeItemByPath(FoldersTree, path);
         RemoveVisualFolderNode(FoldersTree, path);
+        foreach (var id in _deferredFolderIds.Where(pair => FolderExclusionRules.IsAtOrBelow(pair.Value, path)).Select(pair => pair.Key).ToArray())
+            _deferredFolderIds.Remove(id);
+        foreach (var id in _folderTreeItems.Where(pair => pair.Value.Tag is FolderTreeTag tag && FolderExclusionRules.IsAtOrBelow(tag.FullPath, path)).Select(pair => pair.Key).ToArray())
+            _folderTreeItems.Remove(id);
+        foreach (var branch in _deferredFolderChildren.Keys.Where(item => item.Tag is FolderTreeTag tag && FolderExclusionRules.IsAtOrBelow(tag.FullPath, path)).ToArray())
+            _deferredFolderChildren.Remove(branch);
     }
 
     private static bool RemoveVisualFolderNode(ItemsControl parent, string path)

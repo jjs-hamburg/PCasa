@@ -7,6 +7,7 @@ namespace PCasa.App.Data;
 public sealed class BrowseCacheRepository
 {
     private readonly LocalDatabase _database;
+    private static long _locationSnapshot;
 
     public BrowseCacheRepository(LocalDatabase database)
     {
@@ -96,8 +97,81 @@ public sealed class BrowseCacheRepository
 
     // The gallery shows ALL committed images. A missing packed tier uses the
     // existing local thumbnail until the ordinary cache builder completes.
-    public IReadOnlyList<BrowseThumbnailIndexEntry> GetGalleryIndex(int tier)
-        => ReadIndex(tier, imageId: null, includeMissing: true);
+    public IReadOnlyList<BrowseThumbnailIndexEntry> GetGalleryIndex(
+        int tier, bool orderByPath = true,
+        CancellationToken cancellationToken = default, Func<bool>? isCurrent = null)
+        => ReadIndex(tier, imageId: null, includeMissing: true, orderByPath: orderByPath,
+            cancellationToken: cancellationToken, isCurrent: isCurrent);
+
+    // Exact ordering, filter metadata and geometry, but no packed byte
+    // locations or legacy path strings for photographs outside the viewport.
+    // Each snapshot has its own identity: a same-stamp thumbnail rebuild
+    // must not reuse pixels from an earlier, unresolved catalog snapshot.
+    public IReadOnlyList<BrowseThumbnailIndexEntry> GetGalleryProjection(
+        int tier, CancellationToken cancellationToken = default,
+        Func<bool>? isCurrent = null)
+        => ReadIndex(tier, imageId: null, includeMissing: true, orderByPath: false,
+            cancellationToken: cancellationToken, isCurrent: isCurrent,
+            deferLocations: true);
+
+    // One local indexed lookup per page/tier, not per photograph. Match the
+    // source stamp and dimensions of the immutable gallery row before using
+    // any current cache data. No original or network path is opened here.
+    public IReadOnlyDictionary<long, BrowseThumbnailIndexEntry> ResolveThumbnailLocations(
+        IReadOnlyList<BrowseThumbnailIndexEntry> entries,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<long, BrowseThumbnailIndexEntry>();
+        foreach (var entry in entries)
+            if (entry.DeferredLocationSnapshot == 0) result[entry.ImageId] = entry;
+        var deferred = entries.Where(entry => entry.DeferredLocationSnapshot != 0)
+            .GroupBy(entry => entry.Tier).ToArray();
+        if (deferred.Length == 0) return result;
+        using var connection = _database.OpenConnection();
+        foreach (var group in deferred)
+        foreach (var batch in group.Chunk(200))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var requested = batch.ToDictionary(entry => entry.ImageId);
+            using var command = connection.CreateCommand();
+            var parameters = batch.Select((_, i) => "$id" + i).ToArray();
+            for (var i = 0; i < batch.Length; i++)
+                command.Parameters.AddWithValue(parameters[i], batch[i].ImageId);
+            command.Parameters.AddWithValue("$tier", group.Key);
+            command.CommandText = """
+                SELECT i.id,i.modified_utc_ticks,i.file_size,
+                       COALESCE(te.pack_file,''),COALESCE(te.byte_offset,0),
+                       COALESCE(te.byte_length,0),COALESCE(te.pixel_width,i.width),
+                       COALESCE(te.pixel_height,i.height),
+                       CASE WHEN te.image_id IS NULL AND
+                         (LOWER(i.extension) <> '.psd' OR i.import_error IS NOT NULL)
+                         THEN i.thumbnail_path ELSE NULL END
+                FROM images i LEFT JOIN thumbnail_entries te
+                  ON te.image_id=i.id AND te.tier=$tier
+                  AND te.source_modified_utc_ticks=i.modified_utc_ticks
+                WHERE i.photo_folder_id IS NOT NULL AND i.id IN (
+                """ + string.Join(",", parameters) + ");";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var entry = requested[reader.GetInt64(0)];
+                if (entry.ModifiedUtcTicks != reader.GetInt64(1) ||
+                    entry.FileSize != reader.GetInt64(2) ||
+                    entry.PixelWidth != reader.GetInt32(6) ||
+                    entry.PixelHeight != reader.GetInt32(7)) continue;
+                result[entry.ImageId] = entry with
+                {
+                    PackFile = reader.GetString(3),
+                    ByteOffset = reader.GetInt64(4),
+                    ByteLength = reader.GetInt32(5),
+                    LegacyThumbnailPath = reader.IsDBNull(8) ? null : reader.GetString(8),
+                    DeferredLocationSnapshot = 0
+                };
+            }
+        }
+        return result;
+    }
 
     // A clicked folder that was indexed AFTER the last gallery publication
     // must not await another 500k-image materialization. Read only this
@@ -116,8 +190,18 @@ public sealed class BrowseCacheRepository
 
     private IReadOnlyList<BrowseThumbnailIndexEntry> ReadIndex(
         int tier, long? imageId, bool includeMissing,
-        long? photoFolderId = null)
+        long? photoFolderId = null, bool orderByPath = true,
+        CancellationToken cancellationToken = default, Func<bool>? isCurrent = null,
+        bool deferLocations = false)
     {
+        var locationSnapshot = deferLocations ? Interlocked.Increment(ref _locationSnapshot) : 0;
+        void CheckCurrent()
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (isCurrent is not null && !isCurrent())
+                throw new OperationCanceledException(cancellationToken);
+        }
+        CheckCurrent();
         using var connection = _database.OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText =
@@ -153,8 +237,12 @@ public sealed class BrowseCacheRepository
                      THEN i.thumbnail_path ELSE NULL END,
                 CASE WHEN i.import_error IS NOT NULL THEN 1 ELSE 0 END
             FROM images i
-            INNER JOIN photo_folders pf ON pf.id = i.photo_folder_id
-            """ + (includeMissing ? " LEFT JOIN " : " INNER JOIN ") + """
+            """ + (!orderByPath && imageId is null && photoFolderId is null
+                // Walk the images table in row-ID order, rather than following
+                // the filename index and jumping between image/EXIF/cache pages.
+                ? " NOT INDEXED CROSS JOIN photo_folders pf ON pf.id = i.photo_folder_id "
+                : " INNER JOIN photo_folders pf ON pf.id = i.photo_folder_id ")
+                + (includeMissing ? " LEFT JOIN " : " INNER JOIN ") + """
                  thumbnail_entries te ON te.image_id = i.id
                 AND te.tier = $tier
                 AND te.source_modified_utc_ticks = i.modified_utc_ticks
@@ -166,12 +254,20 @@ public sealed class BrowseCacheRepository
             WHERE i.photo_folder_id IS NOT NULL
             """ + (imageId is long ? " AND i.id = $imageId " : " ")
                 + (photoFolderId is long
-                    ? " AND i.photo_folder_id = $photoFolderId " : " ") + """
+                    ? " AND i.photo_folder_id = $photoFolderId " : " ")
+                + (orderByPath ? """
             ORDER BY
                 pf.canonical_path COLLATE NOCASE,
                 i.file_name COLLATE NOCASE,
-                i.canonical_path COLLATE NOCASE;
-            """;
+                i.canonical_path COLLATE NOCASE
+            """ : "") + ";";
+        if (deferLocations)
+            command.CommandText = command.CommandText
+                .Replace("COALESCE(te.pack_file, '')", "''", StringComparison.Ordinal)
+                .Replace("COALESCE(te.byte_offset, 0)", "0", StringComparison.Ordinal)
+                .Replace("COALESCE(te.byte_length, 0)", "0", StringComparison.Ordinal)
+                .Replace("THEN i.thumbnail_path ELSE NULL END", "THEN NULL ELSE NULL END",
+                    StringComparison.Ordinal);
         command.Parameters.AddWithValue("$tier", tier);
         if (imageId is long requestedId)
             command.Parameters.AddWithValue("$imageId", requestedId);
@@ -182,6 +278,12 @@ public sealed class BrowseCacheRepository
         var result = new List<BrowseThumbnailIndexEntry>();
         while (reader.Read())
         {
+            // Stop obsolete full projections while reading, not only after
+            // allocating and sorting every remaining catalog row.
+            if ((result.Count & 255) == 0) CheckCurrent();
+            var hasCaptureDate = !reader.IsDBNull(15);
+            var captureTicks = hasCaptureDate
+                ? GalleryFolderOrdering.ParseCaptureDateTicks(reader.GetString(15)) : null;
             result.Add(new BrowseThumbnailIndexEntry(
                 reader.GetInt64(0),
                 reader.GetInt64(1),
@@ -198,16 +300,16 @@ public sealed class BrowseCacheRepository
                 reader.GetInt64(12),
                 reader.GetInt64(13),
                 reader.IsDBNull(14) ? null : reader.GetInt64(14),
-                reader.IsDBNull(15)
-                    ? null : GalleryFolderOrdering.ParseCaptureDateTicks(reader.GetString(15)),
+                captureTicks,
                 reader.GetInt32(16),
                 reader.GetInt32(17),
                 reader.IsDBNull(18) ? null : reader.GetString(18),
                 HasImportError: reader.GetInt32(19) != 0,
-                HasInvalidCaptureDate: !reader.IsDBNull(15) &&
-                    GalleryFolderOrdering.ParseCaptureDateTicks(reader.GetString(15)) is null));
+                HasInvalidCaptureDate: hasCaptureDate && captureTicks is null,
+                DeferredLocationSnapshot: locationSnapshot));
         }
 
+        CheckCurrent();
         return result;
     }
 

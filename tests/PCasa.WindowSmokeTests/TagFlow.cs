@@ -431,11 +431,34 @@ internal static class TagFlow
                 string.Equals(ReadPath(item), sourceRoot,
                     StringComparison.OrdinalIgnoreCase))
                 ?? throw new Exception("Monitored root is missing from tree.");
-            var albumBItem = Walk(tree).FirstOrDefault(item =>
-                string.Equals(ReadPath(item), albumB,
-                    StringComparison.OrdinalIgnoreCase))
-                ?? throw new Exception("Album B missing from tree.");
+            // A collapsed catalog branch intentionally does not have WPF
+            // rows for every descendant. The logical gallery order must
+            // already contain both albums before opening that branch.
+            var folderOrderMethod = typeof(MainWindow).GetMethod(
+                "CaptureGalleryFolderOrder",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            IReadOnlyDictionary<long, int> CaptureOrder()
+                => (IReadOnlyDictionary<long, int>)folderOrderMethod.Invoke(window, null)!;
+            var orderBeforeExpansion = CaptureOrder();
+            if (!orderBeforeExpansion.TryGetValue(a.Id, out var aPosition) ||
+                !orderBeforeExpansion.TryGetValue(b.Id, out var bPosition) ||
+                aPosition >= bPosition)
+                throw new Exception("Logical gallery order lost a collapsed album.");
             FolderTreeNavigation.ExpandAncestors(monitoredRootItem);
+            monitoredRootItem.IsExpanded = true;
+            Until(window, () => Walk(tree).Any(item =>
+                string.Equals(ReadPath(item), albumB, StringComparison.OrdinalIgnoreCase)),
+                "Expanding the monitored root did not materialize Album B.");
+            var albumBItem = Walk(tree).First(item =>
+                string.Equals(ReadPath(item), albumB, StringComparison.OrdinalIgnoreCase));
+            var orderAfterExpansion = CaptureOrder();
+            if (orderBeforeExpansion.Count != orderAfterExpansion.Count ||
+                orderBeforeExpansion.Any(pair =>
+                    !orderAfterExpansion.TryGetValue(pair.Key, out var position) ||
+                    position != pair.Value))
+                throw new Exception("Materializing folder rows changed the logical gallery order.");
+            Console.WriteLine("PASS: Deferred folder rows materialize on expansion without changing gallery order.");
             monitoredRootItem.IsSelected = true;
             Until(window, () => ReferenceEquals(tree.SelectedItem, monitoredRootItem),
                 "Parent folder could not be selected.");

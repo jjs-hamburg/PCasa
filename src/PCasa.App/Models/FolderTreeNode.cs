@@ -25,16 +25,12 @@ internal sealed class FolderTreeNode
 internal sealed class FolderTreeTag : INotifyPropertyChanged
 {
     private BitmapSource? _thumbnailSource;
+    private bool _thumbnailRequested;
 
     public FolderTreeTag(string fullPath, long? photoFolderId)
     {
         FullPath = fullPath;
         PhotoFolderId = photoFolderId;
-
-        if (photoFolderId is long id)
-        {
-            _ = LoadThumbnailAsync(id);
-        }
     }
 
     public string FullPath { get; }
@@ -105,6 +101,15 @@ internal sealed class FolderTreeTag : INotifyPropertyChanged
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+
+    // Construction of the logical folder tree must not start database reads.
+    // Only a visible row's thumbnail presenter may request its preview.
+    internal void RequestThumbnail()
+    {
+        if (_thumbnailRequested || PhotoFolderId is not long id) return;
+        _thumbnailRequested = true;
+        _ = LoadThumbnailAsync(id);
+    }
 
     private async Task LoadThumbnailAsync(long photoFolderId)
     {

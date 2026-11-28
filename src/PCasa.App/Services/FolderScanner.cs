@@ -363,7 +363,7 @@ public sealed class FolderScanner
                 $"Root={scanRoot}; Job={durableScanKey ?? "initial"}; " +
                 $"Epoch={scanEpoch}; Checked={imageFilesSeen}; " +
                 $"CompletedDirectories={completedDirectories!.Count}; " +
-                $"FileCursors={fileCursors.Count}; " +
+                $"FileCursors={fileCursors!.Count}; " +
                 $"LastDirectory={last.Key ?? "-"}; LastFile={last.Value ?? "-"}");
         }
         // A partial directory seen-set after restart must never prune images
@@ -683,7 +683,7 @@ public sealed class FolderScanner
                         currentThumbnailPath = existing!.ThumbnailPath;
                         unchanged++;
                     }
-                    else if (currentIndex)
+                    else if (currentIndex && existing is not null)
                     {
                         if (existing.PhotoFolderId != photoFolderId ||
                             !string.Equals(existing.LocalPath, localPath, StringComparison.OrdinalIgnoreCase))
@@ -738,19 +738,28 @@ public sealed class FolderScanner
                         using var sourceBytes = VideoFormats.IsVideo(localPath) ? null :
                             new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read,
                                 128 * 1024, FileOptions.SequentialScan);
-                        byte[]? fingerprint = sourceBytes is null ? null :
+                        // Stage only network still images with a self-contained
+                        // JPEG payload. Keep RAW/PSD/video decoder semantics unchanged.
+                        // The source handle stays open with FileShare.Read through commit.
+                        using var staged = folder.IsNetwork && sourceBytes is not null &&
+                            (extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                             extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+                            ? ScanSourceSnapshot.Create(sourceBytes, localPath, fileLength, cancellationToken)
+                            : null;
+                        var mediaPath = staged?.Path ?? localPath;
+                        byte[]? fingerprint = staged?.Fingerprint ?? (sourceBytes is null ? null :
                             System.Security.Cryptography.SHA256.HashDataAsync(sourceBytes, cancellationToken)
-                                .AsTask().GetAwaiter().GetResult();
+                                .AsTask().GetAwaiter().GetResult());
                         hashMs = (imageClock?.ElapsedMilliseconds ?? 0) - imageStage;
                         imageStage += hashMs;
-                        var renderPath = _thumbnailCache.ResolveSource(localPath, cancellationToken);
+                        var renderPath = _thumbnailCache.ResolveSource(mediaPath, cancellationToken);
                         var thumbnail = _thumbnailCache.CreateOrUpdate(
                             renderPath,
                             fingerprint is null ? canonicalPath :
                                 canonicalPath + "|sha256:" + Convert.ToHexString(fingerprint),
                             fileLength,
                             modifiedUtcTicks,
-                            originalSourcePath: localPath,
+                            originalSourcePath: mediaPath,
                             cancellationToken: cancellationToken);
 
                         cancellationToken.ThrowIfCancellationRequested();
@@ -774,15 +783,17 @@ public sealed class FolderScanner
                         var preparedLarge = largeTiers.Length > 0
                             ? packStore.PrepareTiers(
                                 renderPath, new BrowseThumbnailProfile(largeTiers),
-                                cancellationToken, originalSourcePath: localPath)
+                                cancellationToken, originalSourcePath: mediaPath)
                             : Array.Empty<ImportThumbnailTier>();
                         // Only source decode failures qualify as permanent
                         // import errors; do not mislabel database/write faults.
                         tierMs = (imageClock?.ElapsedMilliseconds ?? 0) - imageStage;
                         imageStage += tierMs;
                         decodeIdentity = null;
-                        var keywords = _thumbnailCache.ReadKeywords(localPath);
-                        var exif = exifReader.Read(localPath, cancellationToken);
+                        var keywords = _thumbnailCache.ReadKeywords(mediaPath);
+                        var exif = exifReader.Read(mediaPath, cancellationToken);
+                        if (staged is not null)
+                            exif = ImageExifReader.RebindSnapshotSource(exif, mediaPath, localPath);
                         cancellationToken.ThrowIfCancellationRequested();
 
                         metadataMs = (imageClock?.ElapsedMilliseconds ?? 0) - imageStage;
@@ -1205,12 +1216,7 @@ public sealed class FolderScanner
                 throw new OperationCanceledException("Import frontier superseded.");
         }
         if (saved is null) Persist();
-        var options = new EnumerationOptions
-        {
-            RecurseSubdirectories = false, IgnoreInaccessible = false,
-            ReturnSpecialDirectories = false,
-            AttributesToSkip = FileAttributes.System | FileAttributes.ReparsePoint
-        };
+        var options = InventoryEnumerationOptions();
         while (pending.First is { } node)
         {
             yield return string.Empty;
@@ -1224,21 +1230,24 @@ public sealed class FolderScanner
             }
             var wasComplete = completed.Contains(directory) ||
                 _folderRepository.IsFirstPassDirectoryComplete(folder.Id, generation, directory);
-            if (!excluded && !wasComplete)
-            {
-                var knownPaths = CatalogInventoryCheck.ReadDirectory(_catalog.Database,
-                    folder.Id, directory, CancellationToken.None);
-                foreach (var file in Directory.EnumerateFiles(directory, "*", options))
-                    yield return knownPaths.ContainsKey(file) ? string.Empty : file;
-            }
+            var readFiles = !excluded && !wasComplete;
+            var knownPaths = readFiles ? CatalogInventoryCheck.ReadDirectory(_catalog.Database,
+                folder.Id, directory, CancellationToken.None) : null;
             var children = new List<string>();
-            if (recursive)
-                foreach (var child in Directory.EnumerateDirectories(directory, "*", options))
+            if (readFiles || recursive)
+                foreach (var entry in EnumerateDirectoryEntries(directory, options))
                 {
-                    if (!FolderExclusionRules.IsExcluded(child, exclusions, inclusions) ||
-                        FolderExclusionRules.MayContainIncludedDescendant(child, inclusions))
-                        children.Add(child);
-                    yield return string.Empty;
+                    if (entry is FileInfo file && readFiles)
+                        yield return knownPaths!.ContainsKey(file.FullName) ? string.Empty : file.FullName;
+                    else if (entry is DirectoryInfo child && recursive)
+                    {
+                        if (!FolderExclusionRules.IsExcluded(child.FullName, exclusions, inclusions) ||
+                            FolderExclusionRules.MayContainIncludedDescendant(child.FullName, inclusions))
+                            children.Add(child.FullName);
+                        yield return string.Empty;
+                    }
+                    else
+                        yield return string.Empty;
                 }
             // A crash before saving the new frontier can only repeat listing,
             // never lose a discovered descendant or a committed image.
@@ -1274,15 +1283,7 @@ public sealed class FolderScanner
         var preferred = new HashSet<string>(preferredDirectories ?? [],
             StringComparer.OrdinalIgnoreCase);
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var options = new EnumerationOptions
-        {
-            RecurseSubdirectories = false,
-            // Never silently omit inaccessible directories: an incomplete scan
-            // must not authorize deletion of the supposedly missing images.
-            IgnoreInaccessible = false,
-            ReturnSpecialDirectories = false,
-            AttributesToSkip = FileAttributes.System | FileAttributes.ReparsePoint
-        };
+        var options = InventoryEnumerationOptions();
 
         while (pending.Count > 0)
         {
@@ -1305,116 +1306,113 @@ public sealed class FolderScanner
                 continue;
 
             var previouslyCompleted = completedDirectories?.Contains(directory) == true;
-            if (!directoryExcluded && previouslyCompleted && alreadyIndexedPaths is not null && !catalogImport)
+            var completedNewOnly = !directoryExcluded && previouslyCompleted &&
+                alreadyIndexedPaths is not null && !catalogImport;
+            var readFiles = !directoryExcluded && (!previouslyCompleted || completedNewOnly);
+            // Legacy sorted filename cursors need deterministic file order.
+            // All other scans stream FileInfo immediately. Child directories
+            // come from the SAME native enumeration, never a second query.
+            var sortedFiles = readFiles && !completedNewOnly && fileCursors is not null
+                ? new List<FileInfo>() : null;
+            var children = new List<string>();
+            if (readFiles || recursive)
             {
-                // Completion means the expensive first import finished here;
-                // not that future new files should be invisible to P0.
-                // Compare directory entries to the LOCAL catalog snapshot.
-                // No existing file is opened, decoded or counted as checked.
-                string[] files;
-                try { files = Directory.GetFiles(directory, "*", options); }
+                foreach (var entry in EnumerateDirectoryEntries(directory, options))
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (entry is DirectoryInfo child)
+                    {
+                        if (recursive) children.Add(child.FullName);
+                        yield return string.Empty;
+                    }
+                    else if (entry is FileInfo file)
+                    {
+                        if (!readFiles) { yield return string.Empty; continue; }
+                        if (sortedFiles is not null)
+                        {
+                            sortedFiles.Add(file);
+                            yield return string.Empty;
+                            continue;
+                        }
+                        if (completedNewOnly && alreadyIndexedPaths!.Contains(file.FullName))
+                        {
+                            yield return string.Empty;
+                            continue;
+                        }
+                        onFileInfo?.Invoke(file);
+                        yield return file.FullName;
+                    }
+                }
+            }
+            if (sortedFiles is not null)
+            {
+                sortedFiles.Sort((left, right) =>
+                    StringComparer.OrdinalIgnoreCase.Compare(left.FullName, right.FullName));
+                var last = fileCursors!.TryGetValue(directory, out var cursor) ? cursor : null;
+                foreach (var file in sortedFiles)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (catalogImport && alreadyIndexedPaths?.Contains(file.FullName) == true)
+                    { yield return string.Empty; continue; }
+                    if (!catalogImport && last is not null &&
+                        StringComparer.OrdinalIgnoreCase.Compare(file.Name, last) <= 0)
+                    { yield return string.Empty; continue; }
+                    onFileInfo?.Invoke(file);
+                    yield return file.FullName;
+                }
+            }
+            // No missing-file reconciliation or durable receipt until the
+            // single enumeration and all emitted image processing succeeded.
+            token.ThrowIfCancellationRequested();
+            if (!previouslyCompleted || reportCompletedDirectories)
+                onDirectoryComplete?.Invoke(directory);
+            for (var i = children.Count - 1; i >= 0; i--)
+            {
+                var child = children[i];
+                if (!FolderExclusionRules.IsExcluded(child, exclusions, inclusions) ||
+                    FolderExclusionRules.MayContainIncludedDescendant(child, inclusions))
+                    pending.Push(child);
+            }
+        }
+    }
+
+    private static EnumerationOptions InventoryEnumerationOptions() => new()
+    {
+        RecurseSubdirectories = false,
+        IgnoreInaccessible = false,
+        ReturnSpecialDirectories = false,
+        AttributesToSkip = FileAttributes.System | FileAttributes.ReparsePoint,
+        BufferSize = 64 * 1024
+    };
+
+    private static IEnumerable<FileSystemInfo> EnumerateDirectoryEntries(
+        string directory, EnumerationOptions options)
+    {
+        IEnumerator<FileSystemInfo> iterator;
+        try
+        {
+            iterator = new DirectoryInfo(directory)
+                .EnumerateFileSystemInfos("*", options).GetEnumerator();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"Verzeichnis konnte nicht gelesen werden: {directory}", ex);
+        }
+        using (iterator)
+        {
+            while (true)
+            {
+                FileSystemInfo entry;
+                try
+                {
+                    if (!iterator.MoveNext()) break;
+                    entry = iterator.Current;
+                }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
                 }
-                foreach (var file in files)
-                {
-                    token.ThrowIfCancellationRequested();
-                    yield return alreadyIndexedPaths.Contains(file) ? string.Empty : file;
-                }
-            }
-            else if (!directoryExcluded && !previouslyCompleted)
-            {
-                // First-import filename cursors need deterministic sorting.
-                // Ordinary reconciliation does not: stream NAS directory entries
-                // without building and sorting an entire filename array.
-                // Both paths still visit every entry, preserve cancellation
-                // and feed the same scanner and missing-file reconciliation.
-                if (fileCursors is not null)
-                {
-                    string[] files;
-                    try
-                    {
-                        files = Directory.GetFiles(directory, "*", options);
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                    {
-                        throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
-                    }
-                    Array.Sort(files, StringComparer.OrdinalIgnoreCase);
-                    var last = fileCursors.TryGetValue(directory, out var cursor)
-                        ? cursor : null;
-                    foreach (var file in files)
-                    {
-                        token.ThrowIfCancellationRequested();
-                        // For old catalogs without a reliable frontier, membership
-                        // in the committed LOCAL index is proof of an existing
-                        // import. Never stat or decode those files. An unknown
-                        // earlier filename is not silently skipped.
-                        if (catalogImport && alreadyIndexedPaths?.Contains(file) == true) { yield return string.Empty; continue; }
-                        if (!catalogImport && last is not null &&
-                            StringComparer.OrdinalIgnoreCase.Compare(
-                                Path.GetFileName(file), last) <= 0) { yield return string.Empty; continue; }
-                        yield return file;
-                    }
-                }
-                else
-                {
-                    IEnumerator<FileInfo> fileIterator;
-                    try
-                    {
-                        fileIterator = new DirectoryInfo(directory).EnumerateFiles("*", options)
-                            .GetEnumerator();
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                    {
-                        throw new IOException($"Verzeichnis konnte nicht gelesen werden: {directory}", ex);
-                    }
-                    using (fileIterator)
-                    {
-                        while (true)
-                        {
-                            token.ThrowIfCancellationRequested();
-                            FileInfo file;
-                            try
-                            {
-                                if (!fileIterator.MoveNext()) break;
-                                file = fileIterator.Current;
-                            }
-                            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                            {
-                                throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
-                            }
-                            onFileInfo?.Invoke(file);
-                            yield return file.FullName;
-                        }
-                    }
-                }
-            }
-
-            if (!recursive)
-            {
-                if (!previouslyCompleted || reportCompletedDirectories) onDirectoryComplete?.Invoke(directory);
-                continue;
-            }
-            string[] children;
-            try
-            {
-                children = Directory.GetDirectories(directory, "*", options);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
-            }
-
-            // Checkpoint only after BOTH the files and child directory list
-            // have been enumerated successfully; inaccessible NAS paths abort.
-            if (!previouslyCompleted || reportCompletedDirectories) onDirectoryComplete?.Invoke(directory);
-            foreach (var child in children.Reverse())
-            {
-                if (!FolderExclusionRules.IsExcluded(child, exclusions, inclusions) ||
-                    FolderExclusionRules.MayContainIncludedDescendant(child, inclusions))
-                    pending.Push(child);
+                yield return entry;
             }
         }
     }

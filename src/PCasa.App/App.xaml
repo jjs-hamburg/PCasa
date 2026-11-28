@@ -591,7 +591,8 @@
                                         BorderBrush="#777B7F"
                                         BorderThickness="0.5"
                                         SnapsToDevicePixels="True">
-                                    <Image Source="{Binding RelativeSource={RelativeSource AncestorType=TreeViewItem}, Path=Tag.ThumbnailSource}"
+                                    <loc:FolderTreeThumbnailImage Folder="{Binding RelativeSource={RelativeSource AncestorType=TreeViewItem}, Path=Tag}"
+                                           Source="{Binding RelativeSource={RelativeSource AncestorType=TreeViewItem}, Path=Tag.ThumbnailSource}"
                                            Stretch="UniformToFill"
                                            RenderOptions.BitmapScalingMode="LowQuality"
                                            SnapsToDevicePixels="True" />
@@ -605,8 +606,7 @@
                                        Foreground="{DynamicResource PcasaTextBrush}"
                                        TextTrimming="CharacterEllipsis"
                                        TextWrapping="NoWrap"
-                                       ToolTip="{Binding RelativeSource={RelativeSource AncestorType=TreeViewItem}, Path=Tag.FullPath}"
-                                       ToolTipOpening="FolderNameText_ToolTipOpening" />
+                                       ToolTipService.IsEnabled="False" />
                             <TextBlock x:Name="FolderStatusIcon" Grid.Column="2"
                                        FontFamily="Segoe UI Symbol"
                                        FontSize="13" FontWeight="SemiBold"
@@ -616,7 +616,7 @@
                             <Ellipse Grid.Column="3" Width="7" Height="7"
                                      Fill="#DF4A54" HorizontalAlignment="Center"
                                      VerticalAlignment="Center"
-                                     ToolTip="{loc:Tr Key='Tag-Änderungen noch nicht in Originaldateien geschrieben'}">
+                                     ToolTipService.IsEnabled="False">
                                 <Ellipse.Style>
                                     <Style TargetType="Ellipse">
                                         <Setter Property="Visibility" Value="Collapsed"/>
@@ -633,7 +633,7 @@
                                      Stroke="#DF4A54" StrokeThickness="1.5"
                                      Fill="Transparent" HorizontalAlignment="Center"
                                      VerticalAlignment="Center"
-                                     ToolTip="{loc:Tr Key='Tag-Schreibvorgänge in Unterordnern ausstehend'}">
+                                     ToolTipService.IsEnabled="False">
                                 <Ellipse.Style>
                                     <Style TargetType="Ellipse">
                                         <Setter Property="Visibility" Value="Collapsed"/>

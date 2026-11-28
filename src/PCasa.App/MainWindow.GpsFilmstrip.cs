@@ -563,14 +563,18 @@ public partial class MainWindow
             var images = await _galleryCatalogReader.ReadAsync(
                 token =>
                 {
-                    using var reader = new PackedThumbnailReader();
+                    using var reader = new PackedThumbnailReader(_browseCacheRepository);
+                    var locations = _browseCacheRepository?.ResolveThumbnailLocations(
+                        pending.Select(item => item.Index).ToArray(), token);
                     var result = new List<(GpsFilmstripEntry Item, BitmapSource Bitmap)>();
                     foreach (var (item, index) in pending)
                     {
                         token.ThrowIfCancellationRequested();
                         try
                         {
-                            if (reader.Load(index, token) is { } bitmap)
+                            if (locations is not null && !locations.TryGetValue(index.ImageId, out var resolved))
+                                continue;
+                            if (reader.Load(locations is null ? index : locations[index.ImageId], token) is { } bitmap)
                                 result.Add((item, bitmap));
                         }
                         catch (System.IO.IOException) { /* missing local packed cache */ }

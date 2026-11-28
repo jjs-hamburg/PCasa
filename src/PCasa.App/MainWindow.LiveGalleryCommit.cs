@@ -167,7 +167,7 @@ public partial class MainWindow
         _liveCatalogImageCount = null;
         _lastCatalogImageCount = change.CatalogImageCount;
 
-        if (!_folderTreeItems.ContainsKey(change.TargetFolder.Id))
+        if (!HasCatalogTreeFolder(change.TargetFolder.Id))
             ShowScannedPhotoFolder(new ScanProgress(0, 0, 0, 0, null,
                 DiscoveredPhotoFolderId: change.TargetFolder.Id,
                 DiscoveredPhotoFolderPath: change.TargetFolder.LocalPath));

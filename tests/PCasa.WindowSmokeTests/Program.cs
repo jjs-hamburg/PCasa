@@ -75,6 +75,27 @@ internal static class Program
             app.InitializeComponent();
             window = new PCasa.App.MainWindow();
             window.Show();
+            // A catalog folder can exist for ordering/navigation without
+            // creating a local database thumbnail read for a hidden row.
+            {
+                var tagType = typeof(MainWindow).Assembly.GetType("PCasa.App.Models.FolderTreeTag")!;
+                var tag = Activator.CreateInstance(tagType, new object[] { @"C:\\test", (long?)long.MaxValue })!;
+                var requested = tagType.GetField("_thumbnailRequested", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!;
+                var preview = new FolderTreeThumbnailImage { Folder = tag, Visibility = Visibility.Collapsed };
+                var host = new Window { Content = preview, Width = 100, Height = 100, ShowInTaskbar = false };
+                try
+                {
+                    host.Show();
+                    Flush(host);
+                    if (requested.GetValue(tag) is true)
+                        throw new Exception("Hidden folder requested a thumbnail during tree construction.");
+                    preview.Visibility = Visibility.Visible;
+                    Until(host, () => requested.GetValue(tag) is true,
+                        "Visible folder did not request its thumbnail.");
+                }
+                finally { host.Close(); }
+            }
             // About has exactly one user-visible release identity: Version.
             var aboutDialogType = typeof(PCasa.App.MainWindow).Assembly
                 .GetType("PCasa.App.PcasaAboutWindow")!;
@@ -517,15 +538,15 @@ internal static class Program
                 optionsMenu.Items.OfType<MenuItem>().Any(item =>
                     item.Header?.ToString() is "Image editing" or "Bildbearbeitung"))
                 throw new Exception("Undo or editor program configuration is in the wrong menu.");
-            // Startup loads one FULL local catalog index. Its potentially
-            // costly folder sort now runs on the foreground catalog-read
+            // Startup and refresh load a full local catalog index. Their potentially
+            // costly folder sort runs on the foreground catalog-read
             // worker, but the publication must reject stale tree order or
             // a sort setting changed while SQLite was being read.
             var startupSortGuard = typeof(PCasa.App.MainWindow).GetMethod(
-                "CanReuseStartupOrdering",
+                "CanReuseReadOrdering",
                 System.Reflection.BindingFlags.Static |
                 System.Reflection.BindingFlags.NonPublic)
-                ?? throw new Exception("Startup catalog sort publication guard missing.");
+                ?? throw new Exception("Catalog sort publication guard missing.");
             var startupOrderBefore = new Dictionary<long, int>
             {
                 [30] = 0, [20] = 1
@@ -557,9 +578,9 @@ internal static class Program
                 ReuseStartup(null, startupOrderEqual,
                     GallerySortOptions.Default, GallerySortOptions.Default))
                 throw new Exception(
-                    "Startup background sort reused a stale WPF tree/sort snapshot.");
+                    "Background sort reused a stale WPF tree/sort snapshot.");
             Console.WriteLine(
-                "PASS: Startup background sort accepts only current folder order and sort choice.");
+                "PASS: Background sort accepts only current folder order and sort choice.");
 
             // Slideshow Play belongs permanently at the LEFT edge of the
             // search toolbar; horizontal search scrolling may not displace it.
@@ -1838,6 +1859,53 @@ internal static class Program
                 throw new Exception("Obsolete thumbnail spacing dialog menu remains.");
             Console.WriteLine("PASS: Icon-only footer and thumbnail spacing slider replace old menu.");
 
+            // A real packed bitmap must survive reordering without a second
+            // decode, but another byte span for the same photo must not.
+            {
+                var cacheRoot = Path.Combine(PcasaDataPaths.SharedDataRoot, "browse-cache");
+                Directory.CreateDirectory(cacheRoot);
+                var packName = "page-reuse-" + Guid.NewGuid().ToString("N") + ".pack";
+                var packPath = Path.Combine(cacheRoot, packName);
+                try
+                {
+                    var encoder = new PngBitmapEncoder();
+                    encoder.Frames.Add(BitmapFrame.Create(BitmapSource.Create(
+                        1, 1, 96, 96, PixelFormats.Bgra32, null,
+                        new byte[] { 10, 20, 30, 255 }, 4)));
+                    using var buffer = new MemoryStream();
+                    encoder.Save(buffer);
+                    var data = buffer.ToArray();
+                    File.WriteAllBytes(packPath, data.Concat(data).ToArray());
+                    using var reused = new BrowseThumbnailPageCache();
+                    void WarmAndWait()
+                    {
+                        var warm = reused.WarmRangeAsync(0, 1);
+                        // The STA test installs a DispatcherSynchronizationContext.
+                        // Pump it while waiting, with the standard finite timeout.
+                        Until(window, () => warm.IsCompleted, "Thumbnail page warm timed out.");
+                        warm.GetAwaiter().GetResult();
+                    }
+                    var firstEntry = new BrowseThumbnailIndexEntry(100, 1, 96,
+                        packName, 0, data.Length, 1, 1);
+                    var secondEntry = firstEntry with { ImageId = 200 };
+                    reused.SetIndex(new[] { firstEntry, secondEntry });
+                    WarmAndWait();
+                    if (!reused.TryGet(0, out var initialBitmap) || initialBitmap is null)
+                        throw new Exception("Packed bitmap test fixture did not load.");
+                    reused.SetIndex(new[] { secondEntry, firstEntry });
+                    WarmAndWait();
+                    if (!reused.TryGet(1, out var retainedBitmap) ||
+                        !ReferenceEquals(initialBitmap, retainedBitmap))
+                        throw new Exception("Unchanged packed span was decoded again after reordering.");
+                    reused.SetIndex(new[] { secondEntry, firstEntry with { ByteOffset = data.Length } });
+                    WarmAndWait();
+                    if (!reused.TryGet(1, out var renewedBitmap) || renewedBitmap is null ||
+                        ReferenceEquals(initialBitmap, renewedBitmap))
+                        throw new Exception("Changed packed span reused stale pixels.");
+                }
+                finally { File.Delete(packPath); }
+            }
+
             // Exercise the actual ScrollViewer and responsive gallery together.
             // The synthetic images deliberately do not refer to real source
             // files, so this test cannot modify a user's picture collection.
@@ -2837,6 +2905,26 @@ internal static class Program
                 throw new Exception(
                     "Photo-less folder navigation cannot find its first local gallery section.");
 
+            // Re-measuring at an unchanged width must keep the same row
+            // geometry, even when WPF offers another available height.
+            var layoutFlags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var measureGallery = typeof(BrowseGallerySurface).GetMethod(
+                "MeasureOverride", layoutFlags)!;
+            var sections = (System.Collections.IList)typeof(BrowseGallerySurface)
+                .GetField("_sections", layoutFlags)!.GetValue(surface)!;
+            var layoutWidth = Math.Max(1, surface.ActualWidth);
+            measureGallery.Invoke(surface, [new Size(layoutWidth, 600)]);
+            var originalSection = sections[0];
+            measureGallery.Invoke(surface, [new Size(layoutWidth, 900)]);
+            if (!ReferenceEquals(originalSection, sections[0]))
+                throw new Exception("Unchanged gallery width rebuilt all row geometry.");
+            measureGallery.Invoke(surface, [new Size(layoutWidth + 20, 900)]);
+            if (ReferenceEquals(originalSection, sections[0]))
+                throw new Exception("Changed gallery width did not rebuild row geometry.");
+            measureGallery.Invoke(surface, [new Size(layoutWidth, 600)]);
+            Console.WriteLine("PASS: Gallery reuses exact geometry at unchanged width.");
+            
             // Alpha.57: the REAL folder-click helper must navigate an entire
             // folder excluded by the GPS property filter. The selected photo
             // directory must be a visible header even if its filter matches
@@ -4393,6 +4481,62 @@ internal static class Program
                         !originalBytes.SequenceEqual(beforeBytes))
                         throw new Exception(
                             "Edit session detached the wrong original pixels.");
+                    // Exercise actual slider and button events, not a direct
+                    // UpdateEditControls invocation after changing the draft.
+                    // Both Save variants must be enabled BEFORE Apply.
+                    {
+                        var beginStraighten = viewerType.GetMethod("BeginStraighten", reflectFlags)!;
+                        var leaveStraighten = viewerType.GetMethod("LeaveStraighten", reflectFlags)!;
+                        var straightenActive = viewerType.GetField("_straightenActive", reflectFlags)!;
+                        var angleSlider = (Slider)window.FindName("StraightenAngleSlider")!;
+                        var applyDraft = (Button)window.FindName("CropApplyButton")!;
+                        var cancelDraft = (Button)window.FindName("ViewerToolCancelButton")!;
+                        var saveDraft = (Button)window.FindName("CropSaveButton")!;
+                        var copyDraft = (Button)window.FindName("CropSaveCopyButton")!;
+                        var quarterTurn = (Button)window.FindName("StraightenRightButton")!;
+                        var rotationEdit = new PhotoEditSession(999, originalPixels);
+                        editStateFixture.SetValue(window, rotationEdit);
+                        viewerImage.Source = originalPixels;
+                        bool AllEnabled() => applyDraft.IsEnabled && cancelDraft.IsEnabled &&
+                            saveDraft.IsEnabled && copyDraft.IsEnabled;
+                        bool AllDisabled() => !applyDraft.IsEnabled && !cancelDraft.IsEnabled &&
+                            !saveDraft.IsEnabled && !copyDraft.IsEnabled;
+                        try
+                        {
+                            beginStraighten.Invoke(window, null);
+                            if (!AllDisabled())
+                                throw new Exception("Unchanged straighten draft enabled write actions.");
+                            angleSlider.Value = 4.5;
+                            if (!AllEnabled() || rotationEdit.HasChanges || !compareSplit.IsEnabled)
+                                throw new Exception("Straighten slider did not unlock live decisions.");
+                            angleSlider.Value = 0;
+                            if (!AllDisabled() || compareSplit.IsEnabled)
+                                throw new Exception("Zero straighten angle left stale draft decisions.");
+                            quarterTurn.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                            if (!AllEnabled())
+                                throw new Exception("Quarter-turn did not unlock live decisions.");
+                            cancelDraft.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                            if (straightenActive.GetValue(window) is not true ||
+                                angleSlider.Value != 0 || rotationEdit.HasChanges || !AllDisabled())
+                                throw new Exception("Cancel did not reset straighten while retaining its tool.");
+                            angleSlider.Value = -3.5;
+                            applyDraft.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                            if (rotationEdit.AppliedSteps.Count != 1 ||
+                                rotationEdit.AppliedSteps[0].Degrees != -3.5 ||
+                                applyDraft.IsEnabled || cancelDraft.IsEnabled ||
+                                !saveDraft.IsEnabled || !copyDraft.IsEnabled)
+                                throw new Exception("Straighten Apply did not commit exactly one rotation and unlock Save/Copy.");
+                        }
+                        finally
+                        {
+                            if (straightenActive.GetValue(window) is true)
+                                leaveStraighten.Invoke(window, null);
+                            editStateFixture.SetValue(window, null);
+                            viewerImage.Source = originalPixels;
+                            editControls.Invoke(window, null);
+                        }
+                        Console.WriteLine("PASS: Straighten slider and quarter turns update all decision buttons; Cancel stays in tool and Apply commits once.");
+                    }
                     // A real-time adjustment is already comparable before
                     // it is accepted into Undo history or saved to disk.
                     var advancedActive = viewerType.GetField(

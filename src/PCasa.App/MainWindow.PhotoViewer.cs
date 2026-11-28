@@ -398,7 +398,7 @@ public partial class MainWindow
             var preview = await _foregroundReadService.ReadPreviewAsync(
                 readToken =>
                 {
-                    using var reader = new PackedThumbnailReader();
+                    using var reader = new PackedThumbnailReader(_browseCacheRepository);
                     return reader.Load(entry, readToken);
                 }, token);
 

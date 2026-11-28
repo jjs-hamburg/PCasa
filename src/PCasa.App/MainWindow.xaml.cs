@@ -19,6 +19,20 @@ public partial class MainWindow : Window
     private readonly FolderScanner _folderScanner;
     private readonly HashSet<long> _selectedImageIds = new();
     private readonly Dictionary<long, TreeViewItem> _folderTreeItems = new();
+    // Only collapsed branches own deferred children. The logical nodes
+    // remain authoritative for ordering even before any WPF row exists.
+    private readonly Dictionary<TreeViewItem, FolderTreeNode[]> _deferredFolderChildren = new();
+    private readonly Dictionary<long, string> _deferredFolderIds = new();
+    private HashSet<string> _deferredExpansionPaths = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object DeferredFolderSentinelTag = new();
+
+    private bool HasCatalogTreeFolder(long id)
+        => _folderTreeItems.ContainsKey(id) || _deferredFolderIds.ContainsKey(id);
+
+    private TreeViewItem? GetCatalogTreeFolder(long id)
+        => _folderTreeItems.GetValueOrDefault(id) ??
+           (_deferredFolderIds.TryGetValue(id, out var path)
+               ? FindFolderTreeItemByPath(FoldersTree, path) : null);
     private readonly FolderTreeDisplaySettings _folderTreeSettings =
         FolderTreeDisplaySettings.Load();
 
@@ -225,10 +239,106 @@ public partial class MainWindow : Window
     private bool _rebuildingFolderTree;
     private bool _expandingCompressedTree;
 
+    private sealed record FolderTreeModel(
+        MonitoredFolder[] MonitoredFolders,
+        Dictionary<string, FolderTreeNode> Roots,
+        Dictionary<string, FolderTreeNode> NodesByPath,
+        HashSet<string> DefaultExpandedPaths,
+        Dictionary<string, int> CountTotals);
+
+    private static FolderTreeModel BuildFolderTreeModel(
+        IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths,
+            IReadOnlyList<string> IncludedPaths)> configuration,
+        IReadOnlyCollection<PhotoFolderSummary> committedFolders,
+        IReadOnlyCollection<string> createdEmptyPaths,
+        Func<string, bool>? isHidden = null)
+    {
+        var hidden = isHidden ?? (_ => false);
+        // Pure catalog projection: no WPF object, SQLite call, or filesystem access.
+        var rootsWithExclusions = configuration
+            .Where(root => !hidden(root.Folder.LocalPath) &&
+                !FolderExclusionRules.IsExcluded(
+                    root.Folder.LocalPath, root.ExcludedPaths, root.IncludedPaths))
+            .ToArray();
+        var monitoredFolders = rootsWithExclusions
+            .Select(root => root.Folder).ToArray();
+        var ownersById = rootsWithExclusions.ToDictionary(root => root.Folder.Id);
+        var roots = new Dictionary<string, FolderTreeNode>(StringComparer.OrdinalIgnoreCase);
+        var nodesByPath = new Dictionary<string, FolderTreeNode>(StringComparer.OrdinalIgnoreCase);
+        var defaultExpandedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var folder in monitoredFolders)
+        {
+            AddFolderTreePath(
+                roots,
+                nodesByPath,
+                folder.LocalPath,
+                folder.CanonicalPath,
+                photoFolderId: null,
+                imageCount: 0);
+
+            foreach (var part in GetFolderPathHierarchy(folder.LocalPath))
+            {
+                defaultExpandedPaths.Add(part.FullPath);
+            }
+        }
+
+        var countTotals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var folder in committedFolders)
+        {
+            var hierarchy = GetFolderPathHierarchy(folder.LocalPath);
+            foreach (var part in hierarchy)
+                countTotals[part.FullPath] = countTotals.GetValueOrDefault(part.FullPath) + folder.ImageCount;
+            if (!ownersById.TryGetValue(folder.MonitoredFolderId, out var owner) || hidden(folder.LocalPath))
+                continue;
+            if (
+                FolderExclusionRules.IsExcluded(
+                    folder.LocalPath, owner.ExcludedPaths, owner.IncludedPaths))
+                continue;
+            AddFolderTreePath(
+                roots, nodesByPath, folder.LocalPath, folder.CanonicalPath,
+                folder.Id, folder.ImageCount,
+                path => !FolderExclusionRules.IsExcluded(
+                    path, owner.ExcludedPaths, owner.IncludedPaths), hierarchy);
+        }
+
+        // Targets created through the context menu stay in the folder tree
+        // while empty. Scan work still owns their eventual photo catalog.
+        foreach (var empty in createdEmptyPaths
+            .Where(path => !hidden(path)))
+        {
+            var owner = rootsWithExclusions
+                .Where(root => FolderExclusionRules.IsAtOrBelow(
+                    empty, root.Folder.LocalPath))
+                .OrderByDescending(root => root.Folder.LocalPath.Length)
+                .FirstOrDefault();
+            if (owner.Folder is null ||
+                FolderExclusionRules.IsExcluded(
+                    empty, owner.ExcludedPaths, owner.IncludedPaths))
+                continue;
+            AddFolderTreePath(roots, nodesByPath, empty, empty, null, 0,
+                path => !FolderExclusionRules.IsExcluded(
+                    path, owner.ExcludedPaths, owner.IncludedPaths));
+        }
+
+        foreach (var root in roots.Values)
+        {
+            CalculateFolderTreeTotal(root);
+        }
+
+        return new FolderTreeModel(monitoredFolders, roots, nodesByPath,
+            defaultExpandedPaths, countTotals);
+    }
+
     private void RefreshFolderTree(bool preserveGalleryAnchor = true)
+        => RefreshFolderTreeCore(preserveGalleryAnchor, null);
+
+    private void RefreshFolderTreeCore(bool preserveGalleryAnchor, FolderTreeModel? preparedModel)
     {
         if (_rebuildingFolderTree) return;
         _rebuildingFolderTree = true;
+        var startupTreeClock = !_folderTreeInitialized
+            ? System.Diagnostics.Stopwatch.StartNew() : null;
         UpdateFolderImageTotal();
         // Catalog-driven refreshes may happen while the tree is hidden.
         // Keep its independent scroll position, including if a path mode
@@ -260,37 +370,8 @@ public partial class MainWindow : Window
 
         FoldersTree.Items.Clear();
         _folderTreeItems.Clear();
-
-        // Rebuild the UI exclusively from the last committed scheduler
-        // snapshot. The user can collapse/expand or resize this tree without
-        // waiting on SQLite writes or unreachable NAS paths.
-        var rootsWithExclusions = _dropTargetProjection
-            .Where(root => !IsPendingFolderRemovalHidden(root.Folder.LocalPath) &&
-                !FolderExclusionRules.IsExcluded(
-                    root.Folder.LocalPath, root.ExcludedPaths, root.IncludedPaths))
-            .ToArray();
-        var monitoredFolders = rootsWithExclusions
-            .Select(root => root.Folder).ToArray();
-        var monitoredFolderIds = monitoredFolders.Select(folder => folder.Id).ToHashSet();
-        var roots = new Dictionary<string, FolderTreeNode>(StringComparer.OrdinalIgnoreCase);
-        var nodesByPath = new Dictionary<string, FolderTreeNode>(StringComparer.OrdinalIgnoreCase);
-        var defaultExpandedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var folder in monitoredFolders)
-        {
-            AddFolderTreePath(
-                roots,
-                nodesByPath,
-                folder.LocalPath,
-                folder.CanonicalPath,
-                photoFolderId: null,
-                imageCount: 0);
-
-            foreach (var part in GetFolderPathHierarchy(folder.LocalPath))
-            {
-                defaultExpandedPaths.Add(part.FullPath);
-            }
-        }
+        _deferredFolderChildren.Clear();
+        _deferredFolderIds.Clear();
 
         var committedFolders = _photoFolders.ToDictionary(folder => folder.Id);
         foreach (var (id, latest) in _liveFolderCountSummaries)
@@ -298,46 +379,12 @@ public partial class MainWindow : Window
             if (latest is null) committedFolders.Remove(id);
             else committedFolders[id] = latest;
         }
-        foreach (var folder in committedFolders.Values.Where(
-                     folder => monitoredFolderIds.Contains(folder.MonitoredFolderId) &&
-                         !IsPendingFolderRemovalHidden(folder.LocalPath)))
-        {
-            var owner = rootsWithExclusions.FirstOrDefault(root =>
-                root.Folder.Id == folder.MonitoredFolderId);
-            if (owner.Folder is null ||
-                FolderExclusionRules.IsExcluded(
-                    folder.LocalPath, owner.ExcludedPaths, owner.IncludedPaths))
-                continue;
-            AddFolderTreePath(
-                roots, nodesByPath, folder.LocalPath, folder.CanonicalPath,
-                folder.Id, folder.ImageCount,
-                path => !FolderExclusionRules.IsExcluded(
-                    path, owner.ExcludedPaths, owner.IncludedPaths));
-        }
-
-        // Targets created through the context menu stay in the folder tree
-        // while empty. Scan work still owns their eventual photo catalog.
-        foreach (var empty in _createdEmptyFolderPaths
-            .Where(path => !IsPendingFolderRemovalHidden(path)))
-        {
-            var owner = rootsWithExclusions
-                .Where(root => FolderExclusionRules.IsAtOrBelow(
-                    empty, root.Folder.LocalPath))
-                .OrderByDescending(root => root.Folder.LocalPath.Length)
-                .FirstOrDefault();
-            if (owner.Folder is null ||
-                FolderExclusionRules.IsExcluded(
-                    empty, owner.ExcludedPaths, owner.IncludedPaths))
-                continue;
-            AddFolderTreePath(roots, nodesByPath, empty, empty, null, 0,
-                path => !FolderExclusionRules.IsExcluded(
-                    path, owner.ExcludedPaths, owner.IncludedPaths));
-        }
-
-        foreach (var root in roots.Values)
-        {
-            CalculateFolderTreeTotal(root);
-        }
+        var model = preparedModel ?? BuildFolderTreeModel(_dropTargetProjection,
+            committedFolders.Values, _createdEmptyFolderPaths, IsPendingFolderRemovalHidden);
+        var monitoredFolders = model.MonitoredFolders;
+        var roots = model.Roots;
+        var nodesByPath = model.NodesByPath;
+        var defaultExpandedPaths = model.DefaultExpandedPaths;
 
         var pathsToExpand = useDefaultExpansion && !_appearance.FolderExpansionsSaved
             ? defaultExpandedPaths
@@ -355,6 +402,7 @@ public partial class MainWindow : Window
                 StringComparer.OrdinalIgnoreCase);
         }
 
+        _deferredExpansionPaths = new HashSet<string>(pathsToExpand, StringComparer.OrdinalIgnoreCase);
         FolderTreeToggleButton.Tag = _folderTreeSettings.Compressed ? null : "Active";
         FolderTreeToggleButton.ToolTip = _folderTreeSettings.Compressed
             ? "Expand: vollständige Pfade anzeigen"
@@ -363,6 +411,8 @@ public partial class MainWindow : Window
             ? "Vollständige Pfade zeigen"
             : "Pfadstufen bis zur überwachten Wurzel zusammenfassen";
 
+        if (startupTreeClock is not null)
+            LogStartupStage($"folder-tree-model: {startupTreeClock.ElapsedMilliseconds} ms");
         foreach (var root in roots.Values.OrderBy(
                      node => node.DisplayName,
                      StringComparer.CurrentCultureIgnoreCase))
@@ -430,6 +480,8 @@ public partial class MainWindow : Window
         }
 
 
+        if (startupTreeClock is not null)
+            LogStartupStage($"folder-tree-items: {startupTreeClock.ElapsedMilliseconds} ms cumulative");
         // Flat rows have a different visual owner: rebuilding them never
         // clears, selects or scrolls the real catalog tree.
         UpdateFlatCollapsedPathsFromTree();
@@ -443,7 +495,7 @@ public partial class MainWindow : Window
         var selectedItem = selectedPath is string path
             ? FindFolderTreeItemByPath(FoldersTree, path) : null;
         if (selectedItem is null && _activePhotoFolderId is long activeId)
-            _folderTreeItems.TryGetValue(activeId, out selectedItem);
+            selectedItem = GetCatalogTreeFolder(activeId);
         if (selectedItem is null)
             selectedItem = FirstPhotoFolderTreeItem(FoldersTree)
                 ?? FoldersTree.Items.OfType<TreeViewItem>().FirstOrDefault();
@@ -460,7 +512,7 @@ public partial class MainWindow : Window
         // Rebuild counter identities only when the *tree* is rebuilt.
         // The live scan path below patches affected ancestors instead of
         // re-walking every NAS folder for each 200-ms count notification.
-        RefreshVisibleFolderCounts();
+        RefreshVisibleFolderCountsCore(model.CountTotals);
         if (treeOffset is double savedOffset && FindTreeScrollViewer(FoldersTree) is { } scroll)
         {
             // Apply the previous physical viewport to the NEW measured tree.
@@ -495,25 +547,35 @@ public partial class MainWindow : Window
                 $"({(_liveCatalogImageCount ?? _lastCatalogImageCount):N0})";
     }
 
-    private void RefreshVisibleFolderCounts()
+    private void RefreshVisibleFolderCounts() => RefreshVisibleFolderCountsCore(null);
+
+    private void RefreshVisibleFolderCountsCore(IReadOnlyDictionary<string, int>? preparedTotals)
     {
         UpdateFolderImageTotal();
         if (_appearance.FlatFolderView)
             RefreshFlatFolderCounts();
         _folderCountTotals.Clear();
-        var folderCounts = _photoFolders.ToDictionary(folder => folder.Id);
-        foreach (var (id, latest) in _liveFolderCountSummaries)
+        if (preparedTotals is not null)
         {
-            if (latest is null) folderCounts.Remove(id);
-            else folderCounts[id] = latest;
+            foreach (var (path, count) in preparedTotals)
+                _folderCountTotals[path] = count;
         }
-
-        foreach (var folder in folderCounts.Values)
-            foreach (var part in GetFolderPathHierarchy(folder.LocalPath))
+        else
+        {
+            var folderCounts = _photoFolders.ToDictionary(folder => folder.Id);
+            foreach (var (id, latest) in _liveFolderCountSummaries)
             {
-                _folderCountTotals.TryGetValue(part.FullPath, out var count);
-                _folderCountTotals[part.FullPath] = count + folder.ImageCount;
+                if (latest is null) folderCounts.Remove(id);
+                else folderCounts[id] = latest;
             }
+    
+            foreach (var folder in folderCounts.Values)
+                foreach (var part in GetFolderPathHierarchy(folder.LocalPath))
+                {
+                    _folderCountTotals.TryGetValue(part.FullPath, out var count);
+                    _folderCountTotals[part.FullPath] = count + folder.ImageCount;
+                }
+        }
 
         _folderCountItems.Clear();
         _folderCountLabels.Clear();
@@ -560,7 +622,7 @@ public partial class MainWindow : Window
                 Accumulate(latest, latest.ImageCount);
 
             _liveFolderCountSummaries[id] = latest;
-            if (latest is not null && !_folderTreeItems.ContainsKey(id))
+            if (latest is not null && !HasCatalogTreeFolder(id))
                 ShowScannedPhotoFolder(new ScanProgress(0, 0, 0, 0, null,
                     DiscoveredPhotoFolderId: id,
                     DiscoveredPhotoFolderPath: latest.LocalPath));
@@ -569,7 +631,7 @@ public partial class MainWindow : Window
         _liveCatalogImageCount = imageCount;
         _liveFolderCountSerial++;
         if (changes.Any(change => change.Value is not null &&
-            !_folderTreeItems.ContainsKey(change.Key)))
+            !HasCatalogTreeFolder(change.Key)))
         {
             RefreshFolderTree(preserveGalleryAnchor: true);
             return;
@@ -591,7 +653,8 @@ public partial class MainWindow : Window
         {
             if (!_folderCountItems.TryGetValue(path, out var item))
             {
-                item = FindFolderTreeItemByPath(FoldersTree, path);
+                // Count updates never instantiate a collapsed subtree.
+                item = FindMaterializedFolderTreeItem(FoldersTree, path);
                 if (item is null) continue;
                 _folderCountItems[path] = item;
             }
@@ -620,11 +683,17 @@ public partial class MainWindow : Window
         }
     }
 
-    private static TreeViewItem? FirstPhotoFolderTreeItem(ItemsControl parent)
+    private TreeViewItem? FirstPhotoFolderTreeItem(ItemsControl parent)
     {
         foreach (var item in parent.Items.OfType<TreeViewItem>())
         {
             if (item.Tag is FolderTreeTag { PhotoFolderId: not null }) return item;
+            if (_deferredFolderChildren.TryGetValue(item, out var deferred))
+            {
+                var first = EnumerateLogicalNodes(deferred).FirstOrDefault(node => node.PhotoFolderId.HasValue);
+                if (first is not null) return FindFolderTreeItemByPath(item, first.FullPath);
+                continue;
+            }
             if (FirstPhotoFolderTreeItem(item) is { } nested) return nested;
         }
         return null;
@@ -670,11 +739,12 @@ public partial class MainWindow : Window
         string canonicalPath,
         long? photoFolderId,
         int imageCount,
-        Func<string, bool>? includeAncestor = null)
+        Func<string, bool>? includeAncestor = null,
+        IReadOnlyList<(string DisplayName, string FullPath)>? hierarchy = null)
     {
         FolderTreeNode? parent = null;
         var skipped = new List<string>();
-        foreach (var part in GetFolderPathHierarchy(localPath))
+        foreach (var part in hierarchy ?? GetFolderPathHierarchy(localPath))
         {
             if (includeAncestor is not null && !includeAncestor(part.FullPath))
             {
@@ -784,9 +854,9 @@ public partial class MainWindow : Window
         IReadOnlySet<string> expandedPaths,
         bool includeChildren = true)
     {
-        var header = node.TotalImageCount > 0
-            ? $"{node.DisplayName} ({node.TotalImageCount:N0})"
-            : node.DisplayName;
+        var count = !_rebuildingFolderTree && _folderCountTotals.TryGetValue(node.FullPath, out var liveCount)
+            ? liveCount : node.TotalImageCount;
+        var header = count > 0 ? $"{node.DisplayName} ({count:N0})" : node.DisplayName;
 
         var item = new TreeViewItem
         {
@@ -803,19 +873,91 @@ public partial class MainWindow : Window
         if (node.PhotoFolderId is long photoFolderId)
         {
             _folderTreeItems[photoFolderId] = item;
+            _deferredFolderIds.Remove(photoFolderId);
         }
 
         if (includeChildren)
         {
-            foreach (var child in node.Children.OrderBy(
-                         child => child.DisplayName,
-                         StringComparer.CurrentCultureIgnoreCase))
+            var children = OrderedLogicalChildren(node).ToArray();
+            if (item.IsExpanded)
+                foreach (var child in children)
+                    item.Items.Add(CreateFolderTreeItem(child, expandedPaths));
+            else if (children.Length > 0)
             {
-                item.Items.Add(CreateFolderTreeItem(child, expandedPaths));
+                _deferredFolderChildren[item] = children;
+                foreach (var child in EnumerateLogicalNodes(children))
+                    if (child.PhotoFolderId is long id)
+                        _deferredFolderIds[id] = child.FullPath;
+                item.Items.Add(new TreeViewItem
+                {
+                    Tag = DeferredFolderSentinelTag,
+                    Visibility = Visibility.Collapsed, IsEnabled = false
+                });
             }
         }
-
+        // A local handler runs before the tree's routed expansion event,
+        // including during programmatic/Explorer/bulk expansion.
+        item.Expanded += (_, args) =>
+        {
+            if (ReferenceEquals(args.OriginalSource, item)) MaterializeFolderChildren(item);
+        };
         return item;
+    }
+
+    private static IEnumerable<FolderTreeNode> OrderedLogicalChildren(FolderTreeNode node)
+        => node.Children.OrderBy(child => child.DisplayName, StringComparer.CurrentCultureIgnoreCase);
+
+    private static IEnumerable<FolderTreeNode> EnumerateLogicalNodes(IEnumerable<FolderTreeNode> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            yield return node;
+            foreach (var child in EnumerateLogicalNodes(OrderedLogicalChildren(node)))
+                yield return child;
+        }
+    }
+
+    private void MaterializeFolderChildren(TreeViewItem item)
+    {
+        if (!_deferredFolderChildren.Remove(item, out var children)) return;
+        foreach (var sentinel in item.Items.OfType<TreeViewItem>()
+            .Where(child => ReferenceEquals(child.Tag, DeferredFolderSentinelTag)).ToArray())
+            item.Items.Remove(sentinel);
+        foreach (var child in children)
+        {
+            var row = CreateFolderTreeItem(child, _deferredExpansionPaths);
+            item.Items.Add(row);
+            SetFolderTreeAvailability(row,
+                item.Tag is FolderTreeTag parent && IsPathKnownOffline(parent.FullPath));
+            RegisterMaterializedFolderCounts(row);
+            if (_allFolderProjectionRootPath is not null &&
+                row.Tag is FolderTreeTag tag && IsWithinExplorerScope(tag.FullPath))
+                AddExplorerExpanders(row);
+        }
+    }
+
+    private void RegisterMaterializedFolderCounts(TreeViewItem item)
+    {
+        if (item.Tag is not FolderTreeTag tag) return;
+        var label = GetFolderPathHierarchy(tag.FullPath)[^1].DisplayName;
+        _folderCountItems[tag.FullPath] = item;
+        _folderCountLabels[tag.FullPath] = label;
+        if (!_rebuildingFolderTree && _folderCountTotals.TryGetValue(tag.FullPath, out var count))
+            item.Header = count > 0 ? $"{label} ({count:N0})" : label;
+        foreach (var child in item.Items.OfType<TreeViewItem>())
+            RegisterMaterializedFolderCounts(child);
+    }
+
+    private static TreeViewItem? FindMaterializedFolderTreeItem(ItemsControl parent, string path)
+    {
+        foreach (var item in parent.Items.OfType<TreeViewItem>())
+        {
+            if (item.Tag is not FolderTreeTag tag) continue;
+            if (string.Equals(tag.FullPath, path, StringComparison.OrdinalIgnoreCase)) return item;
+            if (FolderExclusionRules.IsAtOrBelow(path, tag.FullPath) &&
+                FindMaterializedFolderTreeItem(item, path) is { } descendant) return descendant;
+        }
+        return null;
     }
 
     private HashSet<string> CaptureRenderedFolderPaths()
@@ -829,6 +971,8 @@ public partial class MainWindow : Window
             {
                 if (child.Tag is FolderTreeTag tag)
                     result.Add(tag.FullPath);
+                if (_deferredFolderChildren.TryGetValue(child, out var deferred))
+                    foreach (var node in EnumerateLogicalNodes(deferred)) result.Add(node.FullPath);
                 Visit(child);
             }
         }
@@ -845,7 +989,7 @@ public partial class MainWindow : Window
         return result;
     }
 
-    private static void CaptureExpandedFolderPaths(
+    private void CaptureExpandedFolderPaths(
         TreeViewItem item,
         ISet<string> result)
     {
@@ -854,21 +998,27 @@ public partial class MainWindow : Window
             result.Add(tag.FullPath);
         }
 
+        if (_deferredFolderChildren.TryGetValue(item, out var deferred))
+            foreach (var node in EnumerateLogicalNodes(deferred))
+                if (_deferredExpansionPaths.Contains(node.FullPath)) result.Add(node.FullPath);
         foreach (var child in item.Items.OfType<TreeViewItem>())
         {
             CaptureExpandedFolderPaths(child, result);
         }
     }
 
-    private static TreeViewItem? FindFolderTreeItemByPath(
-        ItemsControl parent, string path)
+    private TreeViewItem? FindFolderTreeItemByPath(ItemsControl parent, string path)
     {
+        if (parent is TreeViewItem branch && _deferredFolderChildren.TryGetValue(branch, out var deferred) &&
+            deferred.Any(node => FolderExclusionRules.IsAtOrBelow(path, node.FullPath)))
+            MaterializeFolderChildren(branch);
         foreach (var item in parent.Items.OfType<TreeViewItem>())
         {
-            if (item.Tag is FolderTreeTag tag &&
-                string.Equals(tag.FullPath, path, StringComparison.OrdinalIgnoreCase))
+            if (item.Tag is not FolderTreeTag tag) continue;
+            if (string.Equals(tag.FullPath, path, StringComparison.OrdinalIgnoreCase))
                 return item;
-            if (FindFolderTreeItemByPath(item, path) is { } descendant)
+            if (FolderExclusionRules.IsAtOrBelow(path, tag.FullPath) &&
+                FindFolderTreeItemByPath(item, path) is { } descendant)
                 return descendant;
         }
         return null;
@@ -885,12 +1035,16 @@ public partial class MainWindow : Window
         return positions;
     }
 
-    private static void CaptureGalleryFolderOrder(TreeViewItem item,
+    private void CaptureGalleryFolderOrder(TreeViewItem item,
         IDictionary<long, int> positions)
     {
         if (item.Tag is FolderTreeTag { PhotoFolderId: long id } &&
             !positions.ContainsKey(id))
             positions.Add(id, positions.Count);
+        if (_deferredFolderChildren.TryGetValue(item, out var deferred))
+            foreach (var node in EnumerateLogicalNodes(deferred))
+                if (node.PhotoFolderId is long logicalId && !positions.ContainsKey(logicalId))
+                    positions.Add(logicalId, positions.Count);
         foreach (var child in item.Items.OfType<TreeViewItem>())
             CaptureGalleryFolderOrder(child, positions);
     }
@@ -907,7 +1061,7 @@ public partial class MainWindow : Window
         // No duplicate "Galerie / Sortierung" header occupies image space.
 
         if (_appearance.FlatFolderView || !updateTreeSelection ||
-            !_folderTreeItems.TryGetValue(photoFolderId, out var treeItem))
+            GetCatalogTreeFolder(photoFolderId) is not { } treeItem)
         {
             return;
         }

@@ -23,7 +23,8 @@ public static class ThumbnailRefreshProjection
             ByteLength = rebuilt.ByteLength,
             PixelWidth = rebuilt.PixelWidth,
             PixelHeight = rebuilt.PixelHeight,
-            LegacyThumbnailPath = rebuilt.LegacyThumbnailPath
+            LegacyThumbnailPath = rebuilt.LegacyThumbnailPath,
+            DeferredLocationSnapshot = rebuilt.DeferredLocationSnapshot
         };
     }
 

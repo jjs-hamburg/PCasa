@@ -79,8 +79,10 @@ public partial class MainWindow
             var item = new TreeViewItem
             {
                 Header = name, Tag = CreateFolderTreeTag(destination, null),
-                ToolTip = destination, AllowDrop = true
+                AllowDrop = true
             };
+            ToolTipService.SetIsEnabled(item, false);
+            MaterializeFolderChildren(selected);
             selected.Items.Add(item);
             selected.IsExpanded = true;
         }

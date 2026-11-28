@@ -9,6 +9,19 @@ namespace PCasa.App.Services;
 /// A replay after native write but before catalog commit reconciles verified EXIF.</summary>
 public sealed class FilenameCaptureDateWriter(LocalDatabase database, UndoOptions? undoOptions = null)
 {
+    public static bool Supports(string path) => Path.GetExtension(path).ToLowerInvariant() is
+        ".jpg" or ".jpeg" or ".tif" or ".tiff" or ".png" or ".mp4";
+
+    public static bool IsMp4(string path) => Path.GetExtension(path).Equals(".mp4", StringComparison.OrdinalIgnoreCase);
+
+    private static string? ExplicitVideoCaptureDate(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var obj = doc.RootElement;
+        return obj.TryGetProperty("XMP-exif:DateTimeOriginal", out var tag) &&
+            tag.ValueKind == JsonValueKind.String ? tag.GetString() : null;
+    }
+
     public static bool HasCaptureDate(string json)
     {
         try
@@ -40,7 +53,7 @@ public sealed class FilenameCaptureDateWriter(LocalDatabase database, UndoOption
             if (!row.Read()) return;
             path = row.GetString(0); indexedSize = row.GetInt64(1); indexedTicks = row.GetInt64(2);
         }
-        if (Path.GetExtension(path).ToLowerInvariant() is not (".jpg" or ".jpeg" or ".tif" or ".tiff" or ".png"))
+        if (!Supports(path))
             throw new NotSupportedException("EXIF-Datumsbearbeitung für diese Datei nicht unterstützt.");
         // Never write a date derived from a formerly named, now renamed file.
         if (PhotoDateFromFilename.Recognize(Path.GetFileName(path))?.AsExifDateTime != target)
@@ -53,9 +66,11 @@ public sealed class FilenameCaptureDateWriter(LocalDatabase database, UndoOption
         using var readerLease = MetadataWriteScope.RentReader();
         var reader = readerLease.Value;
         var source = reader.Read(path, token);
+        var video = IsMp4(path);
         var current = ExifDateMetadata.FieldsFromJson(source.Json);
-        var applied = ExifDateMetadata.SameProtectedTag("EXIF:DateTimeOriginal", target, current.DateTimeOriginal);
-        if (missingOnly && !applied && HasCaptureDate(source.Json)) return;
+        var applied = ExifDateMetadata.SameProtectedTag("EXIF:DateTimeOriginal", target,
+            video ? ExplicitVideoCaptureDate(source.Json) : current.DateTimeOriginal);
+        if (missingOnly && !applied && (video ? !string.IsNullOrWhiteSpace(source.DateTimeOriginal) : HasCaptureDate(source.Json))) return;
         if (originalModified.Ticks != indexedTicks || (before.Length != indexedSize && !applied))
             throw new IOException("Datei wurde außerhalb von PCasa verändert: " + path);
         using var receipt = OriginalFileMutationReceipts.Begin(path);
@@ -65,7 +80,8 @@ public sealed class FilenameCaptureDateWriter(LocalDatabase database, UndoOption
             token.ThrowIfCancellationRequested();
             using var writerLease = MetadataWriteScope.RentWriter();
             var writer = writerLease.Value;
-            writer.WriteExactExifDates(path, new Dictionary<string, string?>
+            if (video) writer.WriteMp4CaptureDate(path, target, token);
+            else writer.WriteExactExifDates(path, new Dictionary<string, string?>
             {
                 ["EXIF:DateTimeOriginal"] = target
             }, token);
@@ -78,7 +94,9 @@ public sealed class FilenameCaptureDateWriter(LocalDatabase database, UndoOption
         var after = new FileInfo(path);
         var verified = stagedExif ?? reader.Read(path, CancellationToken.None);
         var dates = ExifDateMetadata.FieldsFromJson(verified.Json);
-        if (!ExifDateMetadata.SameProtectedTag("EXIF:DateTimeOriginal", target, dates.DateTimeOriginal) ||
+        if (!ExifDateMetadata.SameProtectedTag("EXIF:DateTimeOriginal", target,
+                video ? ExplicitVideoCaptureDate(verified.Json) : dates.DateTimeOriginal) ||
+            (video && !ExifDateMetadata.SameProtectedTag("EXIF:DateTimeOriginal", target, verified.DateTimeOriginal)) ||
             dates.CreateDate != current.CreateDate || dates.ModifyDate != current.ModifyDate ||
             after.LastWriteTimeUtc.Ticks != indexedTicks)
             throw new IOException("Gespeichertes Aufnahmedatum konnte nicht bestätigt werden: " + path);

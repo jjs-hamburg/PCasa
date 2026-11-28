@@ -371,6 +371,25 @@ public static class ExifToolKeywordWriter
             }
         }
 
+        // Only this narrowly scoped video mutation is supported. Preserve
+        // the literal filename clock time without inferring a UTC offset.
+        public void WriteMp4CaptureDate(string path, string date, CancellationToken token = default)
+        {
+            if (!Path.GetExtension(path).Equals(".mp4", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException("MP4 capture date requires an MP4 file.");
+            if (!DateTime.TryParseExact(date, "yyyy:MM:dd HH:mm:ss",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var parsed))
+                throw new ArgumentException("Invalid capture date.", nameof(date));
+            var normalized = parsed.ToString("yyyy:MM:dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+            lock (_operationGate)
+            {
+                Interlocked.Increment(ref _activeWrites);
+                try { ExecuteMetadataEdit(path, ["-XMP-exif:DateTimeOriginal=" + normalized], token); }
+                finally { Interlocked.Decrement(ref _activeWrites); }
+            }
+        }
+
         // Shared native write lifecycle: a scheduler yield can interrupt
         // BEFORE the request, never during ExifTool's temporary-file swap.
         // All native metadata edits use this single transport policy. Non-JPEG

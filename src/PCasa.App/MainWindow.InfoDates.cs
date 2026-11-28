@@ -55,7 +55,10 @@ public partial class MainWindow
         InfoDateModified.IsReadOnly = !value;
         InfoDatesActions.Visibility = value
             ? Visibility.Visible : Visibility.Collapsed;
-        InfoDateFromName.Visibility = value
+        var videoFromName = !value && _infoDatesPath is { } videoPath &&
+            FilenameCaptureDateWriter.IsMp4(videoPath) && _infoDatesImageId is long videoId &&
+            _selectedImageIds.Count == 1 && _selectedImageIds.Contains(videoId);
+        InfoDateFromName.Visibility = value || videoFromName
             ? Visibility.Visible : Visibility.Collapsed;
         InfoDatesEdit.Visibility = !value && _infoDatesPath is { } path &&
             _infoDatesImageId is long id && _selectedImageIds.Count == 1 &&
@@ -75,6 +78,13 @@ public partial class MainWindow
 
     private void InfoDateFromFilename_Click(object sender, RoutedEventArgs e)
     {
+        if (!_infoDatesEditing && _infoDatesPath is { } videoPath &&
+            FilenameCaptureDateWriter.IsMp4(videoPath) && _infoDatesImageId is long videoId &&
+            _selectedImageIds.Count == 1 && _selectedImageIds.Contains(videoId))
+        {
+            _ = EditCaptureDatesFromNamesAsync([videoId]);
+            return;
+        }
         if (!_infoDatesEditing || _infoDatesFilename is null) return;
         var found = PhotoDateFromFilename.Recognize(_infoDatesFilename);
         if (found is null)

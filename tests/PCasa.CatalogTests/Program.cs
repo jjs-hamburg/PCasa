@@ -83,6 +83,7 @@ internal static class Program
         Run("Legacy V1 recovery migrates without losing P0 or pending image tags", LegacyTagRecoveryMigrationPreservesIntents, failures);
         Run("Recovered P0 packages resume newest-first including manual NAS scans", RecoveredManualScanPrecedesOlderTags, failures);
         Run("Durable packages reject non-reconstructable dynamic steps", DurablePackageRejectsDynamicSteps, failures);
+        Run("Startup recovery does not duplicate a live accepted package", StartupRecoverySkipsLivePackage, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
         Run("Scheduler coalesces duplicate pending work", SchedulerCoalescesPendingWork, failures);
         Run("Scheduler cancels queued work on shutdown", SchedulerShutdownCancelsQueuedWork, failures);
@@ -178,6 +179,8 @@ internal static class Program
         Run("New discoveries import before inventory completion; same-stamp replacement rebuilds content", ImmediateInventoryAndFingerprint, failures);
         Run("Unified refresh streams changed and new files at root and child scope", UnifiedDirectoryRefresh, failures);
         Run("Large unchanged directory never enters source processing", LargeUnchangedDirectoryDifference, failures);
+        Run("Combined directory inventory streams files and child directories", CombinedDirectoryInventory, failures);
+        Run("Network image snapshot hashes once and retains original EXIF identity", ScanSourceSnapshotRegression, failures);
         Run("Streaming refresh persists completed directory receipts", DurableStreamingRefresh, failures);
         Run("Per-folder gallery sorting preserves tree order for all six sort fields", PerFolderSortAllFields, failures);
         Run("Gallery sorting reads EXIF capture date, file dates, size and original dimensions from one index", GallerySortUsesCatalogMetadata, failures);
@@ -489,6 +492,59 @@ internal static class Program
         catch (InvalidOperationException) { rejected = true; }
         if (!rejected || package.TotalSteps != 1)
             throw new Exception("Durable package accepted unjournaled dynamic steps.");
+    }
+
+    private static void StartupRecoverySkipsLivePackage()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var (database, _, _) = sandbox.Prepare();
+            var journal = new DurablePackageJournal(database);
+            const string oldKey = "test:startup-recovered";
+            const string liveKey = "test:startup-live";
+            const string type = "test-startup-v1";
+            journal.Put(oldKey, type, "{}", SchedulerPriority.Background,
+                SchedulerWorkKind.Catalog);
+            await using var scheduler = new PCasaScheduler();
+            scheduler.EnableDurablePackages(database);
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var duplicateFactoryCalls = 0;
+            scheduler.RegisterDurablePackageType(type, (key, _) =>
+            {
+                if (key == liveKey) Interlocked.Increment(ref duplicateFactoryCalls);
+                var restored = new SchedulerTaskPackage(key);
+                restored.AddStep(_ =>
+                {
+                    recovered.TrySetResult();
+                    return Task.CompletedTask;
+                });
+                return restored;
+            });
+            var live = new SchedulerTaskPackage(liveKey);
+            live.AddStep(async token =>
+            {
+                started.TrySetResult();
+                await release.Task.WaitAsync(token);
+            });
+            var completion = scheduler.EnqueueDurablePackageAsync(live, type,
+                "{}", SchedulerPriority.ManualAction);
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                if (scheduler.RecoverDurablePackages().Count != 0 || duplicateFactoryCalls != 0)
+                    throw new Exception("Startup recovery reconstructed a package accepted in this process.");
+            }
+            finally { release.TrySetResult(); }
+            await completion.WaitAsync(TimeSpan.FromSeconds(10));
+            await recovered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            if (scheduler.Snapshot().Count(x => x.Key == liveKey) != 1 ||
+                !journal.RecentCompleted().Any(x => x.Key == liveKey))
+                throw new Exception("Live package did not keep its single completed identity.");
+        }
+        Check().GetAwaiter().GetResult();
     }
 
     private static void DurableTransferRetryPreservesPriority()
@@ -4230,6 +4286,8 @@ internal static class Program
         if (cache.GetIndex(tier).Count != 0)
             throw new Exception("Test setup did not remove the gallery thumbnail.");
         var gallery = cache.GetGalleryIndex(tier);
+        if (!gallery.SequenceEqual(cache.GetGalleryIndex(tier, orderByPath: false)))
+            throw new Exception("Unordered gallery projection changed image metadata.");
         if (gallery.Count != 1 ||
             gallery[0].ImageId <= 0 ||
             gallery[0].ByteLength != 0 ||
@@ -4462,6 +4520,132 @@ internal static class Program
         if (result.ImageFilesSeen != 3 || result.Updated != 1 ||
             result.Removed != 1 || result.Failed != 0 || new ImageCatalogRepository(db).CountAll() != 3)
             throw new Exception("Recovered streaming refresh replayed a completed directory or lost a change: " + result);
+    }
+
+    private static void ScanSourceSnapshotRegression()
+    {
+        using var sandbox = new Sandbox();
+        var source = Path.Combine(sandbox.Images, "original.jpg");
+        WriteJpeg(source);
+        var expected = File.ReadAllBytes(source);
+        string snapshot;
+        using (var input = File.OpenRead(source))
+        using (var staged = ScanSourceSnapshot.Create(input, source, expected.Length, CancellationToken.None))
+        {
+            snapshot = staged.Path;
+            if (!File.ReadAllBytes(snapshot).SequenceEqual(expected) ||
+                !staged.Fingerprint.SequenceEqual(SHA256.HashData(expected)))
+                throw new Exception("Snapshot and original fingerprint differ.");
+            var json = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+            {
+                ["SourceFile"] = snapshot,
+                ["GPS:GPSLatitude"] = 12.5,
+                ["GPS:GPSLongitude"] = -23.5
+            });
+            var data = ImageExifReader.Parse(json);
+            var rebound = ImageExifReader.RebindSnapshotSource(data, snapshot, source);
+            if (!ImageExifReader.SourceFileMatches(rebound.Json, source, requireSource: true) ||
+                rebound.GpsLatitude != data.GpsLatitude || rebound.GpsLongitude != data.GpsLongitude)
+                throw new Exception("Snapshot EXIF changed metadata or retained a temporary identity.");
+            try
+            {
+                ImageExifReader.RebindSnapshotSource(data, source, source);
+                throw new Exception("Foreign EXIF source was accepted.");
+            }
+            catch (InvalidDataException) { }
+        }
+        if (File.Exists(snapshot) || !File.ReadAllBytes(source).SequenceEqual(expected))
+            throw new Exception("Snapshot was retained or original was modified.");
+    }
+
+    private static void CombinedDirectoryInventory()
+    {
+        using var sandbox = new Sandbox();
+        var nested = Directory.CreateDirectory(Path.Combine(sandbox.Images, "child")).FullName;
+        var first = Path.Combine(sandbox.Images, "first.jpg");
+        var second = Path.Combine(nested, "second.jpg");
+        WriteJpeg(first);
+        WriteJpeg(second);
+        var completed = new List<string>();
+        var files = new List<string>();
+        var stamps = new List<FileInfo>();
+        foreach (var path in FolderScanner.EnumerateIncludedFiles(sandbox.Images, true,
+            Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None,
+            onDirectoryComplete: completed.Add, onFileInfo: stamps.Add))
+        {
+            if (path.Length == 0) continue;
+            files.Add(path);
+            if (completed.Contains(Path.GetDirectoryName(path)!))
+                throw new Exception("Directory checkpoint preceded image processing.");
+        }
+        if (!files.SequenceEqual(new[] { first, second }, StringComparer.OrdinalIgnoreCase) ||
+            !completed.SequenceEqual(new[] { sandbox.Images, nested }, StringComparer.OrdinalIgnoreCase) ||
+            stamps.Count != 2 || stamps.Any(stamp => stamp.Length <= 0))
+            throw new Exception("Combined inventory lost an entry or its enumeration metadata.");
+        var shallow = FolderScanner.EnumerateIncludedFiles(sandbox.Images, false,
+            Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None)
+            .Where(path => path.Length != 0).ToArray();
+        if (!shallow.SequenceEqual(new[] { first }, StringComparer.OrdinalIgnoreCase))
+            throw new Exception("Shallow inventory traversed a child directory.");
+        var excluded = FolderScanner.EnumerateIncludedFiles(sandbox.Images, true,
+            new[] { nested }, Array.Empty<string>(), CancellationToken.None)
+            .Where(path => path.Length != 0).ToArray();
+        if (!excluded.SequenceEqual(new[] { first }, StringComparer.OrdinalIgnoreCase))
+            throw new Exception("Combined inventory entered an excluded subtree.");
+        using var cancellation = new CancellationTokenSource();
+        completed.Clear();
+        try
+        {
+            foreach (var path in FolderScanner.EnumerateIncludedFiles(sandbox.Images, true,
+                Array.Empty<string>(), Array.Empty<string>(), cancellation.Token,
+                onDirectoryComplete: completed.Add))
+                if (path.Length != 0) cancellation.Cancel();
+            throw new Exception("Cancellation was ignored.");
+        }
+        catch (OperationCanceledException) { }
+        if (completed.Count != 0)
+            throw new Exception("Interrupted directory was marked complete.");
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        var cache = new BrowseCacheRepository(db);
+        var catalog = new ImageCatalogRepository(db);
+        var summaries = catalog.GetPhotoFolders();
+        if (summaries.Count != 2 || summaries.Sum(folder => folder.ImageCount) != 2 ||
+            summaries.Any(folder => catalog.GetPhotoFolderSummary(folder.Id) != folder))
+            throw new Exception("Grouped folder counts differ from individual folder summaries.");
+        var ordered = cache.GetGalleryIndex(96).OrderBy(image => image.ImageId);
+        var unordered = cache.GetGalleryIndex(96, orderByPath: false).OrderBy(image => image.ImageId);
+        if (ordered.Count() != 2 || !ordered.SequenceEqual(unordered))
+            throw new Exception("Sequential gallery read changed the catalog projection.");
+        var projection = cache.GetGalleryProjection(96);
+        if (projection.Count != 2 || projection.Any(entry => entry.DeferredLocationSnapshot == 0 ||
+            entry.PackFile.Length != 0 || entry.ByteLength != 0 || entry.LegacyThumbnailPath is not null))
+            throw new Exception("Gallery projection eagerly read thumbnail locations.");
+        var resolved = cache.ResolveThumbnailLocations(projection);
+        if (!resolved.Values.OrderBy(entry => entry.ImageId).SequenceEqual(ordered))
+            throw new Exception("Page location resolution changed the exact gallery projection.");
+        if (cache.ResolveThumbnailLocations(new[] { projection[0] with
+            { ModifiedUtcTicks = projection[0].ModifiedUtcTicks + 1 } }).Count != 0)
+            throw new Exception("A stale source stamp resolved another thumbnail revision.");
+        // A superseded request must never return even a partial index.
+        var checks = 0;
+        try
+        {
+            cache.GetGalleryIndex(96, orderByPath: false,
+                isCurrent: () => ++checks < 2);
+            throw new Exception("Superseded full gallery read was not canceled.");
+        }
+        catch (OperationCanceledException) { }
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        try
+        {
+            cache.GetGalleryIndex(96, cancellationToken: canceled.Token);
+            throw new Exception("Canceled gallery read entered SQLite.");
+        }
+        catch (OperationCanceledException) { }
+        if (!cache.GetGalleryIndex(96).OrderBy(image => image.ImageId).SequenceEqual(ordered))
+            throw new Exception("Canceled gallery read changed the durable catalog.");
     }
 
     private static void LargeUnchangedDirectoryDifference()
@@ -7571,6 +7755,51 @@ internal static class Program
             throw new Exception("Explicit overwrite did not use the date and clock time in the filename.");
         if (Directory.Exists(undoDirectory) && Directory.EnumerateFileSystemEntries(undoDirectory).Any())
             throw new Exception("Metadata-only capture date created an Undo snapshot.");
+        if (!FilenameCaptureDateWriter.Supports("20260720_161031.mp4") ||
+            FilenameCaptureDateWriter.Supports("20260720_161031.mkv"))
+            throw new Exception("MP4 date-write admission is not format-specific.");
+        var video = Path.Combine(sandbox.Images, "20260720_161031.mp4");
+        // Real one-frame 16x16 MPEG-4 video generated for this test.
+        File.WriteAllBytes(video, Convert.FromBase64String(
+            "AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAA0Btb292AAAAbG12aGQAAAAAAAAAAAAAAAAAAAPoAAAD6AABAAABAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAACa3RyYWsAAABcdGtoZAAAAAMAAAAAAAAAAAAAAAEAAAAAAAAD6AAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAEAAAABAAAAAAACRlZHRzAAAAHGVsc3QAAAAAAAAAAQAAA+gAAAAAAAEAAAAAAeNtZGlhAAAAIG1kaGQAAAAAAAAAAAAAAAAAAEAAAABAAFXEAAAAAAAtaGRscgAAAAAAAAAAdmlkZQAAAAAAAAAAAAAAAFZpZGVvSGFuZGxlcgAAAAGObWluZgAAABR2bWhkAAAAAQAAAAAAAAAAAAAAJGRpbmYAAAAcZHJlZgAAAAAAAAABAAAADHVybCAAAAABAAABTnN0YmwAAADqc3RzZAAAAAAAAAABAAAA2m1wNHYAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAEAAQAEgAAABIAAAAAAAAAAETTGF2YzYxLjE5LjEwMSBtcGVnNAAAAAAAAAAAAAAAAAAY//8AAABgZXNkcwAAAAADgICATwABAASAgIBBIBEAAAAAAw1AAAAAoAWAgIAvAAABsAEAAAG1iRMAAAEAAAABIADEjYgADQCEAhRjAAABskxhdmM2MS4xOS4xMDEGgICAAQIAAAAQcGFzcAAAAAEAAAABAAAAFGJ0cnQAAAAAAAMNQAAAAKAAAAAYc3R0cwAAAAAAAAABAAAAAQAAQAAAAAAcc3RzYwAAAAAAAAABAAAAAQAAAAEAAAABAAAAFHN0c3oAAAAAAAAAFAAAAAEAAAAUc3RjbwAAAAAAAAABAAADbAAAAGF1ZHRhAAAAWW1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALGlsc3QAAAAkqXRvbwAAABxkYXRhAAAAAQAAAABMYXZmNjEuNy4xMDMAAAAIZnJlZQAAABxtZGF0AAABswAQBwAAAbYWBRhQbYLIHg8="));
+        byte[] MediaPayload(string file)
+        {
+            var data = File.ReadAllBytes(file);
+            for (var offset = 0; offset + 8 <= data.Length;)
+            {
+                var size = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(
+                    data.AsSpan(offset, 4));
+                if (size < 8 || size > data.Length - offset) break;
+                if (data.AsSpan(offset + 4, 4).SequenceEqual("mdat"u8))
+                    return data.AsSpan(offset + 8, size - 8).ToArray();
+                offset += size;
+            }
+            throw new Exception("MP4 media payload missing.");
+        }
+        RunExifTool("-overwrite_original", "-QuickTime:CreateDate=2026:07:20 14:10:33", video);
+        var media = MediaPayload(video);
+        var videoStamp = File.GetLastWriteTimeUtc(video);
+        scanner.Scan(root);
+        var videoBefore = Read(video);
+        var videoBytes = SHA256.HashData(File.ReadAllBytes(video));
+        worker.Apply(videoBefore.Id, "2026:07:20 16:10:31", true, CancellationToken.None);
+        if (!videoBytes.SequenceEqual(SHA256.HashData(File.ReadAllBytes(video))))
+            throw new Exception("Missing-only date edit modified MP4 with existing capture date.");
+        worker.Apply(videoBefore.Id, "2026:07:20 16:10:31", false, CancellationToken.None);
+        using var videoReader = new ImageExifReader();
+        var videoAfter = Read(video);
+        if (videoAfter.Date != "2026:07:20 16:10:31" ||
+            videoReader.Read(video).DateTimeOriginal != "2026:07:20 16:10:31" ||
+            videoAfter.Thumb != videoBefore.Thumb ||
+            videoAfter.Size != new FileInfo(video).Length ||
+            File.GetLastWriteTimeUtc(video) != videoStamp ||
+            !media.SequenceEqual(MediaPayload(video)) ||
+            RunExifTool("-s3", "-QuickTime:CreateDate", video).Trim() != "2026:07:20 14:10:33")
+            throw new Exception("MP4 capture date did not round trip exactly or changed media/other dates.");
+        var committedVideoBytes = SHA256.HashData(File.ReadAllBytes(video));
+        worker.Apply(videoBefore.Id, "2026:07:20 16:10:31", false, CancellationToken.None);
+        if (!committedVideoBytes.SequenceEqual(SHA256.HashData(File.ReadAllBytes(video))))
+            throw new Exception("MP4 date replay rewrote an already committed video.");
         if (PhotoDateFromFilename.Recognize("IMG-20240525-WA0001.jpg")?.Time is not null)
             throw new Exception("Date-only filename acquired an invented time.");
     }

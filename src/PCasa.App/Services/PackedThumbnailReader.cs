@@ -1,3 +1,4 @@
+using PCasa.App.Data;
 using System.IO;
 using System.Windows.Media.Imaging;
 using PCasa.App.Models;
@@ -8,6 +9,10 @@ public sealed class PackedThumbnailReader : IDisposable
 {
     private readonly PackedThumbnailBytes _packed = new();
     private bool _disposed;
+    private readonly BrowseCacheRepository? _locations;
+
+    public PackedThumbnailReader(BrowseCacheRepository? locations = null)
+        => _locations = locations;
 
     public BitmapSource? Load(
         BrowseThumbnailIndexEntry entry,
@@ -15,6 +20,14 @@ public sealed class PackedThumbnailReader : IDisposable
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
+        if (entry.DeferredLocationSnapshot != 0)
+        {
+            if (_locations is null)
+                throw new InvalidOperationException("Deferred preview has no location repository.");
+            if (!_locations.ResolveThumbnailLocations(new[] { entry }, cancellationToken)
+                    .TryGetValue(entry.ImageId, out var resolved)) return null;
+            entry = resolved;
+        }
 
         // The gallery catalog includes every committed photo, even if its
         // packed browse tier is still awaiting background conversion.

@@ -94,7 +94,7 @@ public partial class MainWindow
             using var cmd = db.CreateCommand();
             var args = chunk.Select((_, i) => "$id" + i).ToArray();
             cmd.CommandText = """
-                SELECT i.id,i.file_name,x.exif_json FROM images i
+                SELECT i.id,i.file_name,x.exif_json,x.date_time_original FROM images i
                 LEFT JOIN image_exif x ON x.image_id=i.id
                   AND x.source_modified_utc_ticks=i.modified_utc_ticks
                   AND x.source_file_size=i.file_size
@@ -106,11 +106,13 @@ public partial class MainWindow
             {
                 found++;
                 var name = rows.GetString(1);
-                if (!CanManuallyEditExifDates(name)) { unsupported++; continue; }
+                if (!FilenameCaptureDateWriter.Supports(name)) { unsupported++; continue; }
                 var recognized = PhotoDateFromFilename.Recognize(name);
                 if (recognized is null) { noDate++; continue; }
                 if (recognized.Time is null) { dateOnly++; continue; }
-                var hasCapture = !rows.IsDBNull(2) && FilenameCaptureDateWriter.HasCaptureDate(rows.GetString(2));
+                var hasCapture = FilenameCaptureDateWriter.IsMp4(name)
+                    ? !rows.IsDBNull(3) && !string.IsNullOrWhiteSpace(rows.GetString(3))
+                    : !rows.IsDBNull(2) && FilenameCaptureDateWriter.HasCaptureDate(rows.GetString(2));
                 candidates.Add(new CaptureDateCandidate(rows.GetInt64(0), recognized.AsExifDateTime, hasCapture));
             }
         }
@@ -174,7 +176,11 @@ public partial class MainWindow
             {
                 EndVisibleManualOperation(key);
                 _taskManagerWindow?.RequestRefresh();
-                try { await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false); }
+                try
+                {
+                    await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
+                    await UpdateSidebarContentAsync();
+                }
                 catch (OperationCanceledException) { }
                 catch (Exception ex) { PCasaDiagnostics.Write("CaptureDate.Refresh", ex); }
             }

@@ -261,6 +261,7 @@ public partial class MainWindow
         if (_explorerSession is null ||
             item.Tag is not FolderTreeTag folder ||
             !IsWithinExplorerScope(folder.FullPath)) return;
+        MaterializeFolderChildren(item);
         var path = folder.FullPath;
         if (_explorerLoadedPaths.Contains(path) || !_explorerPending.Add(path))
             return;

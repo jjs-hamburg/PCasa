@@ -270,8 +270,9 @@ public partial class MainWindow
             var matchingIds = desired.Select(image => image.ImageId).ToHashSet();
             desired = scope.Where(image => !matchingIds.Contains(image.ImageId)).ToArray();
         }
-        if (_displayedBrowseIndex.Count != desired.Count ||
-            !_displayedBrowseIndex.SequenceEqual(desired))
+        if (!ReferenceEquals(_displayedBrowseIndex, desired) &&
+            (_displayedBrowseIndex.Count != desired.Count ||
+             !_displayedBrowseIndex.SequenceEqual(desired)))
         {
             _displayedBrowseIndex = desired;
             _browsePageCache.SetIndex(desired);
