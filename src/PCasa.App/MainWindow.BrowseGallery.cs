@@ -121,7 +121,7 @@ public partial class MainWindow
         _browseCacheBuilder = new BrowseCacheBuilder(
             _browseCacheRepository,
             _browseProfileRepository);
-        _browsePageCache = new BrowseThumbnailPageCache();
+        _browsePageCache = new BrowseThumbnailPageCache(locations: _browseCacheRepository);
         BrowseSurface.ImageClicked += BrowseSurface_ImageClicked;
         BrowseSurface.EmptyAreaClicked += BrowseSurface_EmptyAreaClicked;
         BrowseSurface.ImageOpened += BrowseSurface_ImageOpened;
@@ -853,7 +853,7 @@ public partial class MainWindow
                         var watch = System.Diagnostics.Stopwatch.StartNew();
                         // The canonical gallery comparer below owns all ordering.
                         // Avoid the redundant SQL sort of every catalog row.
-                        index = _browseCacheRepository.GetGalleryIndex(tier, orderByPath: false,
+                        index = _browseCacheRepository.GetGalleryProjection(tier,
                             cancellationToken: token,
                             isCurrent: () => _browseRefreshRequests.IsCurrent(refresh));
                         indexSqlMs = watch.ElapsedMilliseconds;

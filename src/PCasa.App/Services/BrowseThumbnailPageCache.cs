@@ -1,3 +1,4 @@
+using PCasa.App.Data;
 using System.Windows.Media.Imaging;
 using PCasa.App.Models;
 
@@ -16,7 +17,13 @@ public sealed class BrowseThumbnailPageCache : IDisposable
 
     private readonly object _sync = new();
     private readonly PCasaScheduler? _scheduler;
-    public BrowseThumbnailPageCache(PCasaScheduler? scheduler = null) => _scheduler = scheduler;
+    private readonly BrowseCacheRepository? _locations;
+    public BrowseThumbnailPageCache(PCasaScheduler? scheduler = null,
+        BrowseCacheRepository? locations = null)
+    {
+        _scheduler = scheduler;
+        _locations = locations;
+    }
     private readonly PackedThumbnailReader _reader = new();
     private readonly SemaphoreSlim _pageLoadGate =
         new(PageLoadConcurrency, PageLoadConcurrency);
@@ -27,12 +34,12 @@ public sealed class BrowseThumbnailPageCache : IDisposable
     private readonly record struct ThumbnailContentKey(
         long ImageId, int Tier, string PackFile, long ByteOffset,
         int ByteLength, int PixelWidth, int PixelHeight,
-        long ModifiedUtcTicks, string? LegacyThumbnailPath)
+        long ModifiedUtcTicks, string? LegacyThumbnailPath, long DeferredLocationSnapshot)
     {
         public static ThumbnailContentKey From(BrowseThumbnailIndexEntry item)
             => new(item.ImageId, item.Tier, item.PackFile, item.ByteOffset,
                 item.ByteLength, item.PixelWidth, item.PixelHeight,
-                item.ModifiedUtcTicks, item.LegacyThumbnailPath);
+                item.ModifiedUtcTicks, item.LegacyThumbnailPath, item.DeferredLocationSnapshot);
     }
 
     private readonly Dictionary<ThumbnailContentKey, BitmapSource>
@@ -449,6 +456,16 @@ public sealed class BrowseThumbnailPageCache : IDisposable
                 return;
             }
 
+            var pageEntries = new BrowseThumbnailIndexEntry[count];
+            for (var offset = 0; offset < count; offset++)
+                pageEntries[offset] = index[start + offset];
+            IReadOnlyDictionary<long, BrowseThumbnailIndexEntry>? locations = null;
+            if (pageEntries.Any(entry => entry.DeferredLocationSnapshot != 0))
+            {
+                if (_locations is null)
+                    throw new InvalidOperationException("Deferred gallery page has no location repository.");
+                locations = _locations.ResolveThumbnailLocations(pageEntries, state.Token);
+            }
             var bitmaps = new BitmapSource?[count];
             long estimatedBytes = 0;
 
@@ -457,9 +474,10 @@ public sealed class BrowseThumbnailPageCache : IDisposable
                 state.Token.ThrowIfCancellationRequested();
                 try
                 {
-                    var bitmap = _reader.Load(
-                        index[start + offset],
-                        state.Token);
+                    var entry = pageEntries[offset];
+                    if (locations is not null && !locations.TryGetValue(entry.ImageId, out entry))
+                        continue;
+                    var bitmap = _reader.Load(entry, state.Token);
                     bitmaps[offset] = bitmap;
                     if (bitmap is not null)
                     {
@@ -519,6 +537,19 @@ public sealed class BrowseThumbnailPageCache : IDisposable
                 if (_pages.TryGetValue(state.PageNumber, out var current) &&
                     ReferenceEquals(current, state) &&
                     state.Bitmaps is null)
+                {
+                    _pages.Remove(state.PageNumber);
+                    state.Cancellation.Dispose();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Gallery.PageLocationRead", ex);
+            lock (_sync)
+            {
+                if (_pages.TryGetValue(state.PageNumber, out var current) &&
+                    ReferenceEquals(current, state) && state.Bitmaps is null)
                 {
                     _pages.Remove(state.PageNumber);
                     state.Cancellation.Dispose();

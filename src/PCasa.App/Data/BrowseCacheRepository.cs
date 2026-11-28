@@ -7,6 +7,7 @@ namespace PCasa.App.Data;
 public sealed class BrowseCacheRepository
 {
     private readonly LocalDatabase _database;
+    private static long _locationSnapshot;
 
     public BrowseCacheRepository(LocalDatabase database)
     {
@@ -102,6 +103,76 @@ public sealed class BrowseCacheRepository
         => ReadIndex(tier, imageId: null, includeMissing: true, orderByPath: orderByPath,
             cancellationToken: cancellationToken, isCurrent: isCurrent);
 
+    // Exact ordering, filter metadata and geometry, but no packed byte
+    // locations or legacy path strings for photographs outside the viewport.
+    // Each snapshot has its own identity: a same-stamp thumbnail rebuild
+    // must not reuse pixels from an earlier, unresolved catalog snapshot.
+    public IReadOnlyList<BrowseThumbnailIndexEntry> GetGalleryProjection(
+        int tier, CancellationToken cancellationToken = default,
+        Func<bool>? isCurrent = null)
+        => ReadIndex(tier, imageId: null, includeMissing: true, orderByPath: false,
+            cancellationToken: cancellationToken, isCurrent: isCurrent,
+            deferLocations: true);
+
+    // One local indexed lookup per page/tier, not per photograph. Match the
+    // source stamp and dimensions of the immutable gallery row before using
+    // any current cache data. No original or network path is opened here.
+    public IReadOnlyDictionary<long, BrowseThumbnailIndexEntry> ResolveThumbnailLocations(
+        IReadOnlyList<BrowseThumbnailIndexEntry> entries,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<long, BrowseThumbnailIndexEntry>();
+        foreach (var entry in entries)
+            if (entry.DeferredLocationSnapshot == 0) result[entry.ImageId] = entry;
+        var deferred = entries.Where(entry => entry.DeferredLocationSnapshot != 0)
+            .GroupBy(entry => entry.Tier).ToArray();
+        if (deferred.Length == 0) return result;
+        using var connection = _database.OpenConnection();
+        foreach (var group in deferred)
+        foreach (var batch in group.Chunk(200))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var requested = batch.ToDictionary(entry => entry.ImageId);
+            using var command = connection.CreateCommand();
+            var parameters = batch.Select((_, i) => "$id" + i).ToArray();
+            for (var i = 0; i < batch.Length; i++)
+                command.Parameters.AddWithValue(parameters[i], batch[i].ImageId);
+            command.Parameters.AddWithValue("$tier", group.Key);
+            command.CommandText = """
+                SELECT i.id,i.modified_utc_ticks,i.file_size,
+                       COALESCE(te.pack_file,''),COALESCE(te.byte_offset,0),
+                       COALESCE(te.byte_length,0),COALESCE(te.pixel_width,i.width),
+                       COALESCE(te.pixel_height,i.height),
+                       CASE WHEN te.image_id IS NULL AND
+                         (LOWER(i.extension) <> '.psd' OR i.import_error IS NOT NULL)
+                         THEN i.thumbnail_path ELSE NULL END
+                FROM images i LEFT JOIN thumbnail_entries te
+                  ON te.image_id=i.id AND te.tier=$tier
+                  AND te.source_modified_utc_ticks=i.modified_utc_ticks
+                WHERE i.photo_folder_id IS NOT NULL AND i.id IN (
+                """ + string.Join(",", parameters) + ");";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var entry = requested[reader.GetInt64(0)];
+                if (entry.ModifiedUtcTicks != reader.GetInt64(1) ||
+                    entry.FileSize != reader.GetInt64(2) ||
+                    entry.PixelWidth != reader.GetInt32(6) ||
+                    entry.PixelHeight != reader.GetInt32(7)) continue;
+                result[entry.ImageId] = entry with
+                {
+                    PackFile = reader.GetString(3),
+                    ByteOffset = reader.GetInt64(4),
+                    ByteLength = reader.GetInt32(5),
+                    LegacyThumbnailPath = reader.IsDBNull(8) ? null : reader.GetString(8),
+                    DeferredLocationSnapshot = 0
+                };
+            }
+        }
+        return result;
+    }
+
     // A clicked folder that was indexed AFTER the last gallery publication
     // must not await another 500k-image materialization. Read only this
     // folder's locally committed images using idx_images_photo_folder_name.
@@ -120,8 +191,10 @@ public sealed class BrowseCacheRepository
     private IReadOnlyList<BrowseThumbnailIndexEntry> ReadIndex(
         int tier, long? imageId, bool includeMissing,
         long? photoFolderId = null, bool orderByPath = true,
-        CancellationToken cancellationToken = default, Func<bool>? isCurrent = null)
+        CancellationToken cancellationToken = default, Func<bool>? isCurrent = null,
+        bool deferLocations = false)
     {
+        var locationSnapshot = deferLocations ? Interlocked.Increment(ref _locationSnapshot) : 0;
         void CheckCurrent()
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -188,6 +261,13 @@ public sealed class BrowseCacheRepository
                 i.file_name COLLATE NOCASE,
                 i.canonical_path COLLATE NOCASE
             """ : "") + ";";
+        if (deferLocations)
+            command.CommandText = command.CommandText
+                .Replace("COALESCE(te.pack_file, '')", "''", StringComparison.Ordinal)
+                .Replace("COALESCE(te.byte_offset, 0)", "0", StringComparison.Ordinal)
+                .Replace("COALESCE(te.byte_length, 0)", "0", StringComparison.Ordinal)
+                .Replace("THEN i.thumbnail_path ELSE NULL END", "THEN NULL ELSE NULL END",
+                    StringComparison.Ordinal);
         command.Parameters.AddWithValue("$tier", tier);
         if (imageId is long requestedId)
             command.Parameters.AddWithValue("$imageId", requestedId);
@@ -225,7 +305,8 @@ public sealed class BrowseCacheRepository
                 reader.GetInt32(17),
                 reader.IsDBNull(18) ? null : reader.GetString(18),
                 HasImportError: reader.GetInt32(19) != 0,
-                HasInvalidCaptureDate: hasCaptureDate && captureTicks is null));
+                HasInvalidCaptureDate: hasCaptureDate && captureTicks is null,
+                DeferredLocationSnapshot: locationSnapshot));
         }
 
         CheckCurrent();

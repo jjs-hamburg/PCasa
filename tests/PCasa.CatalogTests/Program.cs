@@ -4617,6 +4617,16 @@ internal static class Program
         var unordered = cache.GetGalleryIndex(96, orderByPath: false).OrderBy(image => image.ImageId);
         if (ordered.Count() != 2 || !ordered.SequenceEqual(unordered))
             throw new Exception("Sequential gallery read changed the catalog projection.");
+        var projection = cache.GetGalleryProjection(96);
+        if (projection.Count != 2 || projection.Any(entry => entry.DeferredLocationSnapshot == 0 ||
+            entry.PackFile.Length != 0 || entry.ByteLength != 0 || entry.LegacyThumbnailPath is not null))
+            throw new Exception("Gallery projection eagerly read thumbnail locations.");
+        var resolved = cache.ResolveThumbnailLocations(projection);
+        if (!resolved.Values.OrderBy(entry => entry.ImageId).SequenceEqual(ordered))
+            throw new Exception("Page location resolution changed the exact gallery projection.");
+        if (cache.ResolveThumbnailLocations(new[] { projection[0] with
+            { ModifiedUtcTicks = projection[0].ModifiedUtcTicks + 1 } }).Count != 0)
+            throw new Exception("A stale source stamp resolved another thumbnail revision.");
         // A superseded request must never return even a partial index.
         var checks = 0;
         try
