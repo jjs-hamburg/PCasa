@@ -836,7 +836,9 @@ public partial class MainWindow
                     {
                         token.ThrowIfCancellationRequested();
                         var watch = System.Diagnostics.Stopwatch.StartNew();
-                        index = _browseCacheRepository.GetGalleryIndex(tier);
+                        // The canonical gallery comparer below owns all ordering.
+                        // Avoid the redundant SQL sort of every catalog row.
+                        index = _browseCacheRepository.GetGalleryIndex(tier, orderByPath: false);
                         indexSqlMs = watch.ElapsedMilliseconds;
                         // The initial sort previously ran synchronously on
                         // WPF immediately before displaying the first image.

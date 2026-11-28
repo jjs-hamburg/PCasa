@@ -96,8 +96,9 @@ public sealed class BrowseCacheRepository
 
     // The gallery shows ALL committed images. A missing packed tier uses the
     // existing local thumbnail until the ordinary cache builder completes.
-    public IReadOnlyList<BrowseThumbnailIndexEntry> GetGalleryIndex(int tier)
-        => ReadIndex(tier, imageId: null, includeMissing: true);
+    public IReadOnlyList<BrowseThumbnailIndexEntry> GetGalleryIndex(
+        int tier, bool orderByPath = true)
+        => ReadIndex(tier, imageId: null, includeMissing: true, orderByPath: orderByPath);
 
     // A clicked folder that was indexed AFTER the last gallery publication
     // must not await another 500k-image materialization. Read only this
@@ -116,7 +117,7 @@ public sealed class BrowseCacheRepository
 
     private IReadOnlyList<BrowseThumbnailIndexEntry> ReadIndex(
         int tier, long? imageId, bool includeMissing,
-        long? photoFolderId = null)
+        long? photoFolderId = null, bool orderByPath = true)
     {
         using var connection = _database.OpenConnection();
         using var command = connection.CreateCommand();
@@ -166,12 +167,13 @@ public sealed class BrowseCacheRepository
             WHERE i.photo_folder_id IS NOT NULL
             """ + (imageId is long ? " AND i.id = $imageId " : " ")
                 + (photoFolderId is long
-                    ? " AND i.photo_folder_id = $photoFolderId " : " ") + """
+                    ? " AND i.photo_folder_id = $photoFolderId " : " ")
+                + (orderByPath ? """
             ORDER BY
                 pf.canonical_path COLLATE NOCASE,
                 i.file_name COLLATE NOCASE,
-                i.canonical_path COLLATE NOCASE;
-            """;
+                i.canonical_path COLLATE NOCASE
+            """ : "") + ";";
         command.Parameters.AddWithValue("$tier", tier);
         if (imageId is long requestedId)
             command.Parameters.AddWithValue("$imageId", requestedId);
@@ -182,6 +184,9 @@ public sealed class BrowseCacheRepository
         var result = new List<BrowseThumbnailIndexEntry>();
         while (reader.Read())
         {
+            var hasCaptureDate = !reader.IsDBNull(15);
+            var captureTicks = hasCaptureDate
+                ? GalleryFolderOrdering.ParseCaptureDateTicks(reader.GetString(15)) : null;
             result.Add(new BrowseThumbnailIndexEntry(
                 reader.GetInt64(0),
                 reader.GetInt64(1),
@@ -198,14 +203,12 @@ public sealed class BrowseCacheRepository
                 reader.GetInt64(12),
                 reader.GetInt64(13),
                 reader.IsDBNull(14) ? null : reader.GetInt64(14),
-                reader.IsDBNull(15)
-                    ? null : GalleryFolderOrdering.ParseCaptureDateTicks(reader.GetString(15)),
+                captureTicks,
                 reader.GetInt32(16),
                 reader.GetInt32(17),
                 reader.IsDBNull(18) ? null : reader.GetString(18),
                 HasImportError: reader.GetInt32(19) != 0,
-                HasInvalidCaptureDate: !reader.IsDBNull(15) &&
-                    GalleryFolderOrdering.ParseCaptureDateTicks(reader.GetString(15)) is null));
+                HasInvalidCaptureDate: hasCaptureDate && captureTicks is null));
         }
 
         return result;

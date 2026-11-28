@@ -178,6 +178,7 @@ internal static class Program
         Run("New discoveries import before inventory completion; same-stamp replacement rebuilds content", ImmediateInventoryAndFingerprint, failures);
         Run("Unified refresh streams changed and new files at root and child scope", UnifiedDirectoryRefresh, failures);
         Run("Large unchanged directory never enters source processing", LargeUnchangedDirectoryDifference, failures);
+        Run("Combined directory inventory streams files and child directories", CombinedDirectoryInventory, failures);
         Run("Streaming refresh persists completed directory receipts", DurableStreamingRefresh, failures);
         Run("Per-folder gallery sorting preserves tree order for all six sort fields", PerFolderSortAllFields, failures);
         Run("Gallery sorting reads EXIF capture date, file dates, size and original dimensions from one index", GallerySortUsesCatalogMetadata, failures);
@@ -4230,6 +4231,8 @@ internal static class Program
         if (cache.GetIndex(tier).Count != 0)
             throw new Exception("Test setup did not remove the gallery thumbnail.");
         var gallery = cache.GetGalleryIndex(tier);
+        if (!gallery.SequenceEqual(cache.GetGalleryIndex(tier, orderByPath: false)))
+            throw new Exception("Unordered gallery projection changed image metadata.");
         if (gallery.Count != 1 ||
             gallery[0].ImageId <= 0 ||
             gallery[0].ByteLength != 0 ||
@@ -4462,6 +4465,37 @@ internal static class Program
         if (result.ImageFilesSeen != 3 || result.Updated != 1 ||
             result.Removed != 1 || result.Failed != 0 || new ImageCatalogRepository(db).CountAll() != 3)
             throw new Exception("Recovered streaming refresh replayed a completed directory or lost a change: " + result);
+    }
+
+    private static void CombinedDirectoryInventory()
+    {
+        using var sandbox = new Sandbox();
+        var nested = Directory.CreateDirectory(Path.Combine(sandbox.Images, "child")).FullName;
+        var first = Path.Combine(sandbox.Images, "first.jpg");
+        var second = Path.Combine(nested, "second.jpg");
+        WriteJpeg(first);
+        WriteJpeg(second);
+        var completed = new List<string>();
+        var files = new List<string>();
+        var stamps = new List<FileInfo>();
+        foreach (var path in FolderScanner.EnumerateIncludedFiles(sandbox.Images, true,
+            Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None,
+            onDirectoryComplete: completed.Add, onFileInfo: stamps.Add))
+        {
+            if (path.Length == 0) continue;
+            files.Add(path);
+            if (completed.Contains(Path.GetDirectoryName(path)!))
+                throw new Exception("Directory checkpoint preceded image processing.");
+        }
+        if (!files.SequenceEqual(new[] { first, second }, StringComparer.OrdinalIgnoreCase) ||
+            !completed.SequenceEqual(new[] { sandbox.Images, nested }, StringComparer.OrdinalIgnoreCase) ||
+            stamps.Count != 2 || stamps.Any(stamp => stamp.Length <= 0))
+            throw new Exception("Combined inventory lost an entry or its enumeration metadata.");
+        var shallow = FolderScanner.EnumerateIncludedFiles(sandbox.Images, false,
+            Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None)
+            .Where(path => path.Length != 0).ToArray();
+        if (!shallow.SequenceEqual(new[] { first }, StringComparer.OrdinalIgnoreCase))
+            throw new Exception("Shallow inventory traversed a child directory.");
     }
 
     private static void LargeUnchangedDirectoryDifference()
