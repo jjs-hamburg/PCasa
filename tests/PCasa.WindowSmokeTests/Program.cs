@@ -538,15 +538,15 @@ internal static class Program
                 optionsMenu.Items.OfType<MenuItem>().Any(item =>
                     item.Header?.ToString() is "Image editing" or "Bildbearbeitung"))
                 throw new Exception("Undo or editor program configuration is in the wrong menu.");
-            // Startup loads one FULL local catalog index. Its potentially
-            // costly folder sort now runs on the foreground catalog-read
+            // Startup and refresh load a full local catalog index. Their potentially
+            // costly folder sort runs on the foreground catalog-read
             // worker, but the publication must reject stale tree order or
             // a sort setting changed while SQLite was being read.
             var startupSortGuard = typeof(PCasa.App.MainWindow).GetMethod(
-                "CanReuseStartupOrdering",
+                "CanReuseReadOrdering",
                 System.Reflection.BindingFlags.Static |
                 System.Reflection.BindingFlags.NonPublic)
-                ?? throw new Exception("Startup catalog sort publication guard missing.");
+                ?? throw new Exception("Catalog sort publication guard missing.");
             var startupOrderBefore = new Dictionary<long, int>
             {
                 [30] = 0, [20] = 1
@@ -578,9 +578,9 @@ internal static class Program
                 ReuseStartup(null, startupOrderEqual,
                     GallerySortOptions.Default, GallerySortOptions.Default))
                 throw new Exception(
-                    "Startup background sort reused a stale WPF tree/sort snapshot.");
+                    "Background sort reused a stale WPF tree/sort snapshot.");
             Console.WriteLine(
-                "PASS: Startup background sort accepts only current folder order and sort choice.");
+                "PASS: Background sort accepts only current folder order and sort choice.");
 
             // Slideshow Play belongs permanently at the LEFT edge of the
             // search toolbar; horizontal search scrolling may not displace it.
