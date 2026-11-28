@@ -439,7 +439,8 @@ public partial class MainWindow
         HashSet<long> pendingInitialRootIds = new();
         IReadOnlyList<string> verifiedInitialDirectories = Array.Empty<string>();
         imageCount = 0;
-        long initialFolderSqlMs = 0, initialConfigurationSqlMs = 0;
+        long initialFolderSqlMs = 0, initialConfigurationSqlMs = 0, initialTreeModelMs = 0;
+        FolderTreeModel? initialTreeModel = null;
         await _galleryCatalogReader.ReadAsync(
             token =>
             {
@@ -456,6 +457,13 @@ public partial class MainWindow
                 createdDirectories = _folderRepository.GetCreatedDirectories();
                 initialConfigurationSqlMs =
                     watch.ElapsedMilliseconds - initialFolderSqlMs;
+                if (initialProjectionOnly)
+                {
+                    var modelStart = watch.ElapsedMilliseconds;
+                    initialTreeModel = BuildFolderTreeModel(initialConfiguration,
+                        initialFolders, createdDirectories);
+                    initialTreeModelMs = watch.ElapsedMilliseconds - modelStart;
+                }
                 return Task.CompletedTask;
             });
         if (!_browseInitialized || _folderRemovalPending) return;
@@ -464,6 +472,7 @@ public partial class MainWindow
             LogStartupStage($"catalog-and-folder-snapshot: " +
                 $"photo-summary={initialFolderSqlMs} ms; " +
                 $"tree-config={initialConfigurationSqlMs} ms; " +
+                $"tree-model-worker={initialTreeModelMs} ms; " +
                 $"folders={initialFolders.Count:N0}; photos={imageCount:N0}");
         if (initialProjectionOnly)
             _startupFolderSnapshot = (initialFolders, imageCount);
@@ -478,7 +487,11 @@ public partial class MainWindow
         _createdEmptyFolderPaths.Clear();
         _createdEmptyFolderPaths.UnionWith(createdDirectories);
         _dragTargetValidity.Clear();
-        RefreshFolderTree(preserveGalleryAnchor: false);
+        // A newer live publication must not be overwritten by a model
+        // computed before that publication. Fall back to the current model.
+        RefreshFolderTreeCore(preserveGalleryAnchor: false,
+            preparedModel: _liveFolderCountSummaries.Count == 0 && !_folderRemovalPending
+                ? initialTreeModel : null);
         if (initialProjectionOnly)
         {
             LogStartupStage("folder-tree-ready");
