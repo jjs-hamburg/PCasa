@@ -229,6 +229,8 @@ public partial class MainWindow : Window
     {
         if (_rebuildingFolderTree) return;
         _rebuildingFolderTree = true;
+        var startupTreeClock = !_folderTreeInitialized
+            ? System.Diagnostics.Stopwatch.StartNew() : null;
         UpdateFolderImageTotal();
         // Catalog-driven refreshes may happen while the tree is hidden.
         // Keep its independent scroll position, including if a path mode
@@ -363,6 +365,8 @@ public partial class MainWindow : Window
             ? "Vollständige Pfade zeigen"
             : "Pfadstufen bis zur überwachten Wurzel zusammenfassen";
 
+        if (startupTreeClock is not null)
+            LogStartupStage($"folder-tree-model: {startupTreeClock.ElapsedMilliseconds} ms");
         foreach (var root in roots.Values.OrderBy(
                      node => node.DisplayName,
                      StringComparer.CurrentCultureIgnoreCase))
@@ -430,6 +434,8 @@ public partial class MainWindow : Window
         }
 
 
+        if (startupTreeClock is not null)
+            LogStartupStage($"folder-tree-items: {startupTreeClock.ElapsedMilliseconds} ms cumulative");
         // Flat rows have a different visual owner: rebuilding them never
         // clears, selects or scrolls the real catalog tree.
         UpdateFlatCollapsedPathsFromTree();

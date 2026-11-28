@@ -154,8 +154,12 @@ public sealed class BrowseCacheRepository
                      THEN i.thumbnail_path ELSE NULL END,
                 CASE WHEN i.import_error IS NOT NULL THEN 1 ELSE 0 END
             FROM images i
-            INNER JOIN photo_folders pf ON pf.id = i.photo_folder_id
-            """ + (includeMissing ? " LEFT JOIN " : " INNER JOIN ") + """
+            """ + (!orderByPath && imageId is null && photoFolderId is null
+                // Walk the images table in row-ID order, rather than following
+                // the filename index and jumping between image/EXIF/cache pages.
+                ? " NOT INDEXED CROSS JOIN photo_folders pf ON pf.id = i.photo_folder_id "
+                : " INNER JOIN photo_folders pf ON pf.id = i.photo_folder_id ")
+                + (includeMissing ? " LEFT JOIN " : " INNER JOIN ") + """
                  thumbnail_entries te ON te.image_id = i.id
                 AND te.tier = $tier
                 AND te.source_modified_utc_ticks = i.modified_utc_ticks

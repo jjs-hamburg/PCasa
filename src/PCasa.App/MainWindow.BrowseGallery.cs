@@ -193,6 +193,7 @@ public partial class MainWindow
         // Unresolved original-file intents remain available for explicit
         // review. Startup never creates new reconciliation file operations.
         _ = ReportPendingLegacyTransfersAsync();
+        _ = RefreshPendingTagDotsAsync();
         // Unreadable or unsupported recipes remain durable and are retried
         // centrally, but cannot permanently prevent all catalog work.
         QueuePendingInitialScans();
@@ -478,8 +479,16 @@ public partial class MainWindow
         _createdEmptyFolderPaths.UnionWith(createdDirectories);
         _dragTargetValidity.Clear();
         RefreshFolderTree(preserveGalleryAnchor: false);
-        if (initialProjectionOnly) LogStartupStage("folder-tree-ready");
-        _ = RefreshPendingTagDotsAsync();
+        if (initialProjectionOnly)
+        {
+            LogStartupStage("folder-tree-ready");
+            // Give WPF a render boundary before starting the large index read.
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
+            if (Dispatcher.HasShutdownStarted || _shutdownStarted || _folderRemovalPending) return;
+            LogStartupStage("first-folder-tree-frame");
+        }
+        else
+            _ = RefreshPendingTagDotsAsync();
         _lastCatalogImageCount = imageCount;
         UpdateFolderImageTotal();
         EmptyPanel.Visibility = imageCount == 0 ? Visibility.Visible : Visibility.Collapsed;

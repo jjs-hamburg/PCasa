@@ -1235,6 +1235,8 @@ public sealed class FolderScanner
                             children.Add(child.FullName);
                         yield return string.Empty;
                     }
+                    else
+                        yield return string.Empty;
                 }
             // A crash before saving the new frontier can only repeat listing,
             // never lose a discovered descendant or a committed image.

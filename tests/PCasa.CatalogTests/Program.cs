@@ -4496,6 +4496,31 @@ internal static class Program
             .Where(path => path.Length != 0).ToArray();
         if (!shallow.SequenceEqual(new[] { first }, StringComparer.OrdinalIgnoreCase))
             throw new Exception("Shallow inventory traversed a child directory.");
+        var excluded = FolderScanner.EnumerateIncludedFiles(sandbox.Images, true,
+            new[] { nested }, Array.Empty<string>(), CancellationToken.None)
+            .Where(path => path.Length != 0).ToArray();
+        if (!excluded.SequenceEqual(new[] { first }, StringComparer.OrdinalIgnoreCase))
+            throw new Exception("Combined inventory entered an excluded subtree.");
+        using var cancellation = new CancellationTokenSource();
+        completed.Clear();
+        try
+        {
+            foreach (var path in FolderScanner.EnumerateIncludedFiles(sandbox.Images, true,
+                Array.Empty<string>(), Array.Empty<string>(), cancellation.Token,
+                onDirectoryComplete: completed.Add))
+                if (path.Length != 0) cancellation.Cancel();
+            throw new Exception("Cancellation was ignored.");
+        }
+        catch (OperationCanceledException) { }
+        if (completed.Count != 0)
+            throw new Exception("Interrupted directory was marked complete.");
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        var cache = new BrowseCacheRepository(db);
+        var ordered = cache.GetGalleryIndex(96).OrderBy(image => image.ImageId);
+        var unordered = cache.GetGalleryIndex(96, orderByPath: false).OrderBy(image => image.ImageId);
+        if (ordered.Count() != 2 || !ordered.SequenceEqual(unordered))
+            throw new Exception("Sequential gallery read changed the catalog projection.");
     }
 
     private static void LargeUnchangedDirectoryDifference()
