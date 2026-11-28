@@ -1859,6 +1859,45 @@ internal static class Program
                 throw new Exception("Obsolete thumbnail spacing dialog menu remains.");
             Console.WriteLine("PASS: Icon-only footer and thumbnail spacing slider replace old menu.");
 
+            // A real packed bitmap must survive reordering without a second
+            // decode, but another byte span for the same photo must not.
+            {
+                var cacheRoot = Path.Combine(PcasaDataPaths.SharedDataRoot, "browse-cache");
+                Directory.CreateDirectory(cacheRoot);
+                var packName = "page-reuse-" + Guid.NewGuid().ToString("N") + ".pack";
+                var packPath = Path.Combine(cacheRoot, packName);
+                try
+                {
+                    var encoder = new PngBitmapEncoder();
+                    encoder.Frames.Add(BitmapFrame.Create(BitmapSource.Create(
+                        1, 1, 96, 96, PixelFormats.Bgra32, null,
+                        new byte[] { 10, 20, 30, 255 }, 4)));
+                    using var buffer = new MemoryStream();
+                    encoder.Save(buffer);
+                    var data = buffer.ToArray();
+                    File.WriteAllBytes(packPath, data.Concat(data).ToArray());
+                    using var reused = new BrowseThumbnailPageCache();
+                    var firstEntry = new BrowseThumbnailIndexEntry(100, 1, 96,
+                        packName, 0, data.Length, 1, 1);
+                    var secondEntry = firstEntry with { ImageId = 200 };
+                    reused.SetIndex(new[] { firstEntry, secondEntry });
+                    reused.WarmRangeAsync(0, 1).GetAwaiter().GetResult();
+                    if (!reused.TryGet(0, out var initialBitmap) || initialBitmap is null)
+                        throw new Exception("Packed bitmap test fixture did not load.");
+                    reused.SetIndex(new[] { secondEntry, firstEntry });
+                    reused.WarmRangeAsync(0, 1).GetAwaiter().GetResult();
+                    if (!reused.TryGet(1, out var retainedBitmap) ||
+                        !ReferenceEquals(initialBitmap, retainedBitmap))
+                        throw new Exception("Unchanged packed span was decoded again after reordering.");
+                    reused.SetIndex(new[] { secondEntry, firstEntry with { ByteOffset = data.Length } });
+                    reused.WarmRangeAsync(0, 1).GetAwaiter().GetResult();
+                    if (!reused.TryGet(1, out var renewedBitmap) || renewedBitmap is null ||
+                        ReferenceEquals(initialBitmap, renewedBitmap))
+                        throw new Exception("Changed packed span reused stale pixels.");
+                }
+                finally { File.Delete(packPath); }
+            }
+
             // Exercise the actual ScrollViewer and responsive gallery together.
             // The synthetic images deliberately do not refer to real source
             // files, so this test cannot modify a user's picture collection.
